@@ -1,14 +1,19 @@
 import { useState, useRef, useEffect } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
-import { OrbitControls, PerspectiveCamera, TransformControls, Line, Text } from '@react-three/drei'
+import { OrbitControls, TransformControls, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import './index.css'
 import { config } from './config'
 
-// Vistas disponibles
-const VIEW_MODES = ['3D', 'Planta', 'Alzado', 'Perfil', 'Cenital']
+const PALLET_TYPES = {
+  EUR: { name: 'Europalet', length: 1.2, width: 0.8 },
+  US: { name: 'Americano', length: 1.2, width: 1.0 },
+  CUSTOM: { name: 'Personalizado', length: 0, width: 0 }
+}
 
-function Warehouse3D({ dimensions, elements, selectedElement, onSelectElement, onUpdateElement, viewMode }) {
+const VIEW_MODES = ['3D', 'Planta', 'Alzado', 'Perfil']
+
+function Warehouse3D({ dimensions, elements, selectedElement, onSelectElement, onUpdateElement, viewMode, palletType }) {
   const { camera } = useThree()
 
   useEffect(() => {
@@ -16,47 +21,47 @@ function Warehouse3D({ dimensions, elements, selectedElement, onSelectElement, o
     
     switch(viewMode) {
       case 'Planta':
-      case 'Cenital':
-        camera.position.set(length/2, height * 2.5, width/2)
+        camera.position.set(length/2, height * 2, width/2)
         camera.lookAt(length/2, 0, width/2)
         break
       case 'Alzado':
-        camera.position.set(length/2, height/2, width * 1.8)
+        camera.position.set(length/2, height/2, width * 1.5)
         camera.lookAt(length/2, height/2, 0)
         break
       case 'Perfil':
-        camera.position.set(length * 1.8, height/2, width/2)
+        camera.position.set(length * 1.5, height/2, width/2)
         camera.lookAt(0, height/2, width/2)
         break
-      default: // 3D
-        camera.position.set(length * 1.2, height * 1.2, width * 1.2)
-        camera.lookAt(length/2, height/2, width/2)
+      default:
+        camera.position.set(length * 1.1, height * 0.9, width * 1.1)
+        camera.lookAt(length/2, height/3, width/2)
     }
   }, [viewMode, dimensions, camera])
 
   return (
     <>
-      {/* Suelo con grid */}
+      {/* Suelo */}
       <mesh 
         rotation={[-Math.PI / 2, 0, 0]} 
-        position={[dimensions.length/2, -0.01, dimensions.width/2]} 
+        position={[dimensions.length/2, 0, dimensions.width/2]}
         receiveShadow
         onClick={() => onSelectElement(null)}
       >
         <planeGeometry args={[dimensions.length, dimensions.width]} />
-        <meshStandardMaterial color="#f5f5f5" />
+        <meshStandardMaterial color="#eceff1" />
       </mesh>
 
+      {/* Grid con medidas cada 5m */}
       <gridHelper 
-        args={[Math.max(dimensions.length, dimensions.width), 40, '#999', '#ccc']} 
-        position={[dimensions.length/2, 0, dimensions.width/2]}
+        args={[Math.max(dimensions.length, dimensions.width), Math.max(dimensions.length, dimensions.width) / 5, '#90a4ae', '#cfd8dc']} 
+        position={[dimensions.length/2, 0.01, dimensions.width/2]}
       />
 
-      {/* Ejes de referencia */}
-      <axesHelper args={[5]} />
-
-      {/* Nave transparente con wireframe */}
+      {/* Nave */}
       <WarehouseShell dimensions={dimensions} />
+
+      {/* Acotaciones de la nave */}
+      <Dimensions dimensions={dimensions} />
 
       {/* Elementos */}
       {elements.map(element => (
@@ -66,14 +71,15 @@ function Warehouse3D({ dimensions, elements, selectedElement, onSelectElement, o
           isSelected={selectedElement?.id === element.id}
           onSelect={() => onSelectElement(element)}
           onUpdate={onUpdateElement}
+          palletType={palletType}
         />
       ))}
 
-      {/* Iluminación mejorada */}
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[20, 30, 20]} intensity={1} castShadow />
-      <directionalLight position={[-20, 20, -20]} intensity={0.4} />
-      <hemisphereLight intensity={0.5} groundColor="#444" />
+      {/* Iluminación */}
+      <ambientLight intensity={0.65} />
+      <directionalLight position={[30, 40, 30]} intensity={1.2} castShadow />
+      <directionalLight position={[-20, 30, -20]} intensity={0.5} />
+      <hemisphereLight intensity={0.6} groundColor="#b0bec5" />
     </>
   )
 }
@@ -81,67 +87,98 @@ function Warehouse3D({ dimensions, elements, selectedElement, onSelectElement, o
 function WarehouseShell({ dimensions }) {
   const { length, width, height } = dimensions
 
-  // Material transparente para las paredes
-  const wallMaterial = new THREE.MeshStandardMaterial({
+  // Material muy transparente
+  const wallMaterial = new THREE.MeshPhysicalMaterial({
     color: '#e3f2fd',
     transparent: true,
-    opacity: 0.15,
+    opacity: 0.08,
     side: THREE.DoubleSide,
-    depthWrite: false
+    depthWrite: false,
+    transmission: 0.9
   })
-
-  // Wireframe para los bordes
-  const edgesMaterial = new THREE.LineBasicMaterial({ color: '#1976d2', linewidth: 2 })
 
   return (
     <group>
-      {/* Paredes transparentes */}
-      {/* Pared frontal */}
+      {/* Estructura wireframe DESDE EL SUELO */}
+      <lineSegments position={[length/2, height/2, width/2]}>
+        <edgesGeometry args={[new THREE.BoxGeometry(length, height, width)]} />
+        <lineBasicMaterial color="#1976d2" linewidth={1.5} transparent opacity={0.4} />
+      </lineSegments>
+
+      {/* Paredes muy transparentes */}
       <mesh position={[length/2, height/2, 0]} material={wallMaterial}>
         <planeGeometry args={[length, height]} />
       </mesh>
-      
-      {/* Pared trasera */}
       <mesh position={[length/2, height/2, width]} material={wallMaterial} rotation={[0, Math.PI, 0]}>
         <planeGeometry args={[length, height]} />
       </mesh>
-      
-      {/* Pared izquierda */}
       <mesh position={[0, height/2, width/2]} material={wallMaterial} rotation={[0, Math.PI/2, 0]}>
         <planeGeometry args={[width, height]} />
       </mesh>
-      
-      {/* Pared derecha */}
       <mesh position={[length, height/2, width/2]} material={wallMaterial} rotation={[0, -Math.PI/2, 0]}>
         <planeGeometry args={[width, height]} />
       </mesh>
-
-      {/* Techo transparente */}
       <mesh position={[length/2, height, width/2]} material={wallMaterial} rotation={[-Math.PI/2, 0, 0]}>
         <planeGeometry args={[length, width]} />
       </mesh>
-
-      {/* Wireframe de la estructura */}
-      <lineSegments>
-        <edgesGeometry args={[new THREE.BoxGeometry(length, height, width)]} />
-        <lineBasicMaterial color="#1976d2" linewidth={2} />
-      </lineSegments>
-
-      {/* Dimensiones de la nave */}
-      <Text
-        position={[length/2, height + 1, width/2]}
-        fontSize={1.5}
-        color="#333"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {`${length}m × ${width}m × ${height}m`}
-      </Text>
     </group>
   )
 }
 
-function Element3D({ element, isSelected, onSelect, onUpdate }) {
+function Dimensions({ dimensions }) {
+  const { length, width, height } = dimensions
+
+  return (
+    <group>
+      {/* Cota largo */}
+      <Html position={[length/2, -1, -2]}>
+        <div style={{
+          background: 'white',
+          padding: '4px 8px',
+          borderRadius: '4px',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          border: '2px solid #1976d2',
+          whiteSpace: 'nowrap'
+        }}>
+          {length}m
+        </div>
+      </Html>
+
+      {/* Cota ancho */}
+      <Html position={[-2, -1, width/2]}>
+        <div style={{
+          background: 'white',
+          padding: '4px 8px',
+          borderRadius: '4px',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          border: '2px solid #1976d2',
+          whiteSpace: 'nowrap'
+        }}>
+          {width}m
+        </div>
+      </Html>
+
+      {/* Cota altura */}
+      <Html position={[-2, height/2, -2]}>
+        <div style={{
+          background: 'white',
+          padding: '4px 8px',
+          borderRadius: '4px',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          border: '2px solid #ff6b35',
+          whiteSpace: 'nowrap'
+        }}>
+          H: {height}m
+        </div>
+      </Html>
+    </group>
+  )
+}
+
+function Element3D({ element, isSelected, onSelect, onUpdate, palletType }) {
   const meshRef = useRef()
   const transformRef = useRef()
 
@@ -151,9 +188,9 @@ function Element3D({ element, isSelected, onSelect, onUpdate }) {
       onUpdate(element.id, {
         position: {
           ...element.position,
-          x: parseFloat(pos.x.toFixed(2)),
-          y: parseFloat(pos.z.toFixed(2)),
-          z: parseFloat(pos.y.toFixed(2))
+          x: Math.max(0, parseFloat(pos.x.toFixed(1))),
+          y: Math.max(0, parseFloat(pos.z.toFixed(1))),
+          z: Math.max(0, parseFloat(pos.y.toFixed(1)))
         }
       })
     }
@@ -167,6 +204,9 @@ function Element3D({ element, isSelected, onSelect, onUpdate }) {
           object={meshRef}
           mode="translate"
           onMouseUp={handleDragEnd}
+          showX={true}
+          showY={true}
+          showZ={true}
         />
       )}
       
@@ -179,30 +219,51 @@ function Element3D({ element, isSelected, onSelect, onUpdate }) {
           onSelect()
         }}
       >
-        {element.type === 'shelf' && <ShelfMesh element={element} isSelected={isSelected} />}
+        {element.type === 'shelf' && <ShelfMesh element={element} isSelected={isSelected} palletType={palletType} />}
         {element.type === 'office' && <OfficeMesh element={element} isSelected={isSelected} />}
         {element.type === 'dock' && <DockMesh element={element} isSelected={isSelected} />}
         
-        {/* Etiqueta con info */}
+        {/* Dimensiones del elemento */}
         {isSelected && (
-          <Text
-            position={[0, element.dimensions.height + 1, 0]}
-            fontSize={0.8}
-            color="#000"
-            anchorX="center"
-            anchorY="bottom"
-          >
-            {`${element.type.toUpperCase()}\n${element.dimensions.length || element.dimensions.width}m × ${element.dimensions.width || element.dimensions.depth}m`}
-          </Text>
+          <Html position={[0, element.dimensions.height + 0.5, 0]} center>
+            <div style={{
+              background: 'rgba(255,255,255,0.95)',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: '600',
+              border: '2px solid #ff6b35',
+              textAlign: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              whiteSpace: 'nowrap'
+            }}>
+              <div style={{color: '#333', marginBottom: '2px'}}>
+                {element.type.toUpperCase()}
+              </div>
+              <div style={{color: '#666', fontSize: '11px'}}>
+                {element.dimensions.length || element.dimensions.width}m × 
+                {element.dimensions.width || element.dimensions.depth}m × 
+                {element.dimensions.height}m
+              </div>
+              <div style={{color: '#ff6b35', fontSize: '11px', marginTop: '2px'}}>
+                Pos: X{element.position.x.toFixed(1)} Y{element.position.y.toFixed(1)} Z{element.position.z.toFixed(1)}
+              </div>
+            </div>
+          </Html>
         )}
       </group>
     </group>
   )
 }
 
-function ShelfMesh({ element, isSelected }) {
+function ShelfMesh({ element, isSelected, palletType }) {
   const { length, height, depth, levels } = element.dimensions
   const color = isSelected ? '#ff9800' : '#ff6b35'
+
+  // Calcular palets según tipo
+  const pallet = palletType === 'CUSTOM' && element.customPallet ? element.customPallet : PALLET_TYPES[palletType]
+  const palletsPerLevel = Math.floor((length / pallet.length) * (depth / pallet.width))
+  const totalPallets = palletsPerLevel * levels
 
   return (
     <group>
@@ -210,8 +271,8 @@ function ShelfMesh({ element, isSelected }) {
       {[0, length].map((x, i) => 
         [0, depth].map((z, j) => (
           <mesh key={`post-${i}-${j}`} position={[x, height/2, z]} castShadow>
-            <boxGeometry args={[0.12, height, 0.12]} />
-            <meshStandardMaterial color={color} metalness={0.8} roughness={0.2} />
+            <boxGeometry args={[0.1, height, 0.1]} />
+            <meshStandardMaterial color={color} metalness={0.85} roughness={0.15} />
           </mesh>
         ))
       )}
@@ -221,18 +282,34 @@ function ShelfMesh({ element, isSelected }) {
         const y = (height / levels) * level
         return (
           <mesh key={`level-${level}`} position={[length/2, y, depth/2]} castShadow>
-            <boxGeometry args={[length, 0.08, depth]} />
-            <meshStandardMaterial color={color} metalness={0.6} />
+            <boxGeometry args={[length, 0.06, depth]} />
+            <meshStandardMaterial color={color} metalness={0.7} roughness={0.3} />
           </mesh>
         )
       })}
 
-      {/* Bounding box si está seleccionado */}
       {isSelected && (
-        <lineSegments>
-          <edgesGeometry args={[new THREE.BoxGeometry(length, height, depth)]} />
-          <lineBasicMaterial color="#ffeb3b" linewidth={3} />
-        </lineSegments>
+        <>
+          <lineSegments position={[length/2, height/2, depth/2]}>
+            <edgesGeometry args={[new THREE.BoxGeometry(length, height, depth)]} />
+            <lineBasicMaterial color="#ffeb3b" linewidth={2} />
+          </lineSegments>
+
+          {/* Mostrar capacidad */}
+          <Html position={[length/2, height/2, depth/2]} center>
+            <div style={{
+              background: '#1976d2',
+              color: 'white',
+              padding: '6px 10px',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              whiteSpace: 'nowrap'
+            }}>
+              {totalPallets} palets
+            </div>
+          </Html>
+        </>
       )}
     </group>
   )
@@ -246,32 +323,49 @@ function OfficeMesh({ element, isSelected }) {
     <group>
       <mesh position={[length/2, height/2, width/2]} castShadow receiveShadow>
         <boxGeometry args={[length, height, width]} />
-        <meshStandardMaterial 
+        <meshPhysicalMaterial 
           color={color}
           transparent
-          opacity={0.6}
-          metalness={0.2}
-          roughness={0.4}
+          opacity={0.5}
+          metalness={0.1}
+          roughness={0.3}
+          transmission={0.3}
         />
       </mesh>
 
       {/* Ventanas */}
-      <mesh position={[length/2, height * 0.7, width/2 + width/2 + 0.05]}>
-        <planeGeometry args={[length * 0.8, height * 0.25]} />
-        <meshBasicMaterial color="#87ceeb" transparent opacity={0.5} />
+      <mesh position={[length/2, height * 0.65, width/2 + width/2 + 0.02]}>
+        <planeGeometry args={[length * 0.7, height * 0.3]} />
+        <meshBasicMaterial color="#81d4fa" transparent opacity={0.6} />
       </mesh>
 
       {/* Puerta */}
-      <mesh position={[length * 0.3, 1.2, width/2 + width/2 + 0.02]}>
-        <planeGeometry args={[1.2, 2.4]} />
-        <meshStandardMaterial color="#795548" />
+      <mesh position={[length * 0.2, 1.1, width/2 + width/2 + 0.01]}>
+        <planeGeometry args={[1, 2.2]} />
+        <meshStandardMaterial color="#5d4037" />
       </mesh>
 
       {isSelected && (
-        <lineSegments>
+        <lineSegments position={[length/2, height/2, width/2]}>
           <edgesGeometry args={[new THREE.BoxGeometry(length, height, width)]} />
-          <lineBasicMaterial color="#ffeb3b" linewidth={3} />
+          <lineBasicMaterial color="#ffeb3b" linewidth={2} />
         </lineSegments>
+      )}
+
+      {/* Área en m² */}
+      {isSelected && (
+        <Html position={[length/2, height + 0.3, width/2]} center>
+          <div style={{
+            background: '#1e88e5',
+            color: 'white',
+            padding: '4px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 'bold'
+          }}>
+            {(length * width).toFixed(1)} m²
+          </div>
+        </Html>
       )}
     </group>
   )
@@ -283,28 +377,25 @@ function DockMesh({ element, isSelected }) {
 
   return (
     <group>
-      {/* Plataforma */}
       <mesh position={[0, height/2, 0]} castShadow>
         <boxGeometry args={[width, height, depth]} />
-        <meshStandardMaterial color={color} roughness={0.7} />
+        <meshStandardMaterial color={color} roughness={0.8} metalness={0.3} />
       </mesh>
 
-      {/* Rampa */}
-      <mesh position={[0, height * 0.3, depth/2 + 1]} rotation={[-Math.PI / 8, 0, 0]} castShadow>
-        <boxGeometry args={[width, 0.2, 2]} />
+      <mesh position={[0, height * 0.25, depth/2 + 0.8]} rotation={[-Math.PI / 9, 0, 0]} castShadow>
+        <boxGeometry args={[width, 0.15, 1.8]} />
         <meshStandardMaterial color="#424242" />
       </mesh>
 
-      {/* Señal */}
-      <mesh position={[width/2 - 0.3, height + 0.5, 0]}>
-        <boxGeometry args={[0.6, 0.6, 0.1]} />
-        <meshStandardMaterial color="#ffc107" emissive="#ff6f00" emissiveIntensity={0.5} />
+      <mesh position={[width/2 - 0.25, height + 0.4, 0]}>
+        <boxGeometry args={[0.5, 0.5, 0.08]} />
+        <meshStandardMaterial color="#ffc107" emissive="#ff6f00" emissiveIntensity={0.4} />
       </mesh>
 
       {isSelected && (
-        <lineSegments>
+        <lineSegments position={[0, height/2, 0]}>
           <edgesGeometry args={[new THREE.BoxGeometry(width, height, depth)]} />
-          <lineBasicMaterial color="#ffeb3b" linewidth={3} />
+          <lineBasicMaterial color="#ffeb3b" linewidth={2} />
         </lineSegments>
       )}
     </group>
@@ -320,6 +411,8 @@ export default function App() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [newElementType, setNewElementType] = useState(null)
   const [formData, setFormData] = useState({})
+  const [palletType, setPalletType] = useState('EUR')
+  const [customPallet, setCustomPallet] = useState({ length: '', width: '' })
 
   const addElementStart = (type) => {
     setNewElementType(type)
@@ -330,7 +423,7 @@ export default function App() {
   const getEmptyFormByType = (type) => {
     switch(type) {
       case 'shelf':
-        return { length: '', depth: '', height: '', levels: '', x: '', y: '', z: '', rotation: '0' }
+        return { length: '', depth: '', height: '', levels: '', x: '', y: '', z: '', rotation: '' }
       case 'office':
         return { length: '', width: '', height: '', x: '', y: '', z: '' }
       case 'dock':
@@ -356,8 +449,7 @@ export default function App() {
     
     setElements([...elements, newElement])
     setShowAddForm(false)
-    setNewElementType(null)
-    setFormData({})
+    setViewMode('Planta') // Cambiar a vista planta para ver el elemento
   }
 
   const getDimensionsFromForm = (type, data) => {
@@ -406,10 +498,14 @@ export default function App() {
     let totalPallets = 0
     let occupiedArea = 0
 
+    const pallet = palletType === 'CUSTOM' ? 
+      { length: parseFloat(customPallet.length) || 1.2, width: parseFloat(customPallet.width) || 0.8 } :
+      PALLET_TYPES[palletType]
+
     elements.forEach(el => {
       if (el.type === 'shelf') {
         const { length, depth, levels } = el.dimensions
-        const palletsPerLevel = Math.floor((length / 1.2) * (depth / 0.8))
+        const palletsPerLevel = Math.floor((length / pallet.length) * (depth / pallet.width))
         totalPallets += palletsPerLevel * levels
         occupiedArea += length * depth
       } else if (el.type === 'office') {
@@ -428,7 +524,8 @@ export default function App() {
       occupied_area: occupiedArea.toFixed(2),
       circulation_area: circulationArea.toFixed(2),
       efficiency_percentage: efficiency,
-      warnings: circulationArea < totalArea * 0.30 ? ['Área de circulación < 30%'] : []
+      pallet_type: `${pallet.length}m × ${pallet.width}m`,
+      warnings: circulationArea < totalArea * 0.30 ? ['⚠️ Área de circulación < 30%'] : []
     })
   }
 
@@ -436,45 +533,53 @@ export default function App() {
     if (elements.length > 0) {
       calculateCapacity()
     }
-  }, [elements, dimensions])
+  }, [elements, dimensions, palletType, customPallet])
 
   return (
     <div className="app">
       <header className="header">
-        <h1>🏭 UNITNAVE Designer Pro</h1>
-        <p>Diseñador profesional de naves industriales</p>
+        <div className="logo-container">
+          <svg viewBox="0 0 450 100" xmlns="http://www.w3.org/2000/svg" style={{height: '50px', width: 'auto'}}>
+            <text x="40" y="50" 
+                  fontFamily="'Montserrat', 'Arial Black', sans-serif" 
+                  fontSize="52" 
+                  fontWeight="800" 
+                  fill="#2c3e50"
+                  letterSpacing="-1">
+              unit<tspan fill="#ff6b35">nave</tspan>
+            </text>
+            <rect x="40" y="57" width="240" height="2" fill="#ff6b35" opacity="0.4"/>
+            <text x="40" y="75" 
+                  fontFamily="Arial, sans-serif" 
+                  fontSize="13" 
+                  fontWeight="600"
+                  fill="#7f8c8d"
+                  letterSpacing="1.5">
+              Diseñador de Naves Industriales
+            </text>
+          </svg>
+        </div>
       </header>
 
       <div className="main-layout">
-        {/* Sidebar Izquierdo */}
-        <aside className="sidebar-left">
-          <section className="section">
-            <h2>➕ AÑADIR ELEMENTOS</h2>
-            
-            <button onClick={() => addElementStart('shelf')} className="element-btn shelf">
-              <span className="icon">📦</span>
-              <span className="label">Estantería</span>
-              <small>Paletización / Picking</small>
+        <aside className="sidebar-left compact">
+          <div className="section-compact">
+            <h2>➕ ELEMENTOS</h2>
+            <button onClick={() => addElementStart('shelf')} className="btn-compact shelf">
+              📦 Estantería
             </button>
-            
-            <button onClick={() => addElementStart('office')} className="element-btn office">
-              <span className="icon">🏢</span>
-              <span className="label">Oficina</span>
-              <small>Planta baja / Entreplanta</small>
+            <button onClick={() => addElementStart('office')} className="btn-compact office">
+              🏢 Oficina
             </button>
-            
-            <button onClick={() => addElementStart('dock')} className="element-btn dock">
-              <span className="icon">🚛</span>
-              <span className="label">Muelle Carga</span>
-              <small>Con nivelador / rampa</small>
+            <button onClick={() => addElementStart('dock')} className="btn-compact dock">
+              🚛 Muelle
             </button>
-          </section>
+          </div>
 
-          <section className="section">
-            <h2>📏 DIMENSIONES NAVE</h2>
-            
-            <label>
-              Largo: <strong>{dimensions.length}m</strong>
+          <div className="section-compact">
+            <h2>📐 NAVE</h2>
+            <label className="label-compact">
+              L: {dimensions.length}m
               <input 
                 type="range" 
                 min="20" 
@@ -483,9 +588,8 @@ export default function App() {
                 onChange={(e) => setDimensions({...dimensions, length: Number(e.target.value)})}
               />
             </label>
-
-            <label>
-              Ancho: <strong>{dimensions.width}m</strong>
+            <label className="label-compact">
+              A: {dimensions.width}m
               <input 
                 type="range" 
                 min="15" 
@@ -494,9 +598,8 @@ export default function App() {
                 onChange={(e) => setDimensions({...dimensions, width: Number(e.target.value)})}
               />
             </label>
-
-            <label>
-              Alto: <strong>{dimensions.height}m</strong>
+            <label className="label-compact">
+              H: {dimensions.height}m
               <input 
                 type="range" 
                 min="6" 
@@ -505,29 +608,69 @@ export default function App() {
                 onChange={(e) => setDimensions({...dimensions, height: Number(e.target.value)})}
               />
             </label>
-          </section>
+          </div>
 
-          <section className="section">
-            <h2>📋 ELEMENTOS ({elements.length})</h2>
-            <div className="elements-list">
-              {elements.map(el => (
-                <div 
-                  key={el.id} 
-                  className={`element-item ${selectedElement?.id === el.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedElement(el)}
-                >
-                  <span className="type">{el.type === 'shelf' ? '📦' : el.type === 'office' ? '🏢' : '🚛'}</span>
-                  <span className="info">{el.type} #{el.id.slice(-4)}</span>
-                  <button onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }} className="delete-btn">🗑️</button>
-                </div>
-              ))}
+          <div className="section-compact">
+            <h2>📦 TIPO PALET</h2>
+            <select 
+              value={palletType} 
+              onChange={(e) => setPalletType(e.target.value)}
+              className="select-compact"
+            >
+              <option value="EUR">Europalet (1.2×0.8m)</option>
+              <option value="US">Americano (1.2×1.0m)</option>
+              <option value="CUSTOM">Personalizado</option>
+            </select>
+            
+            {palletType === 'CUSTOM' && (
+              <div style={{marginTop: '8px'}}>
+                <input 
+                  type="number" 
+                  placeholder="Largo (m)" 
+                  step="0.1"
+                  value={customPallet.length}
+                  onChange={(e) => setCustomPallet({...customPallet, length: e.target.value})}
+                  style={{width: '100%', marginBottom: '4px', padding: '4px', fontSize: '12px'}}
+                />
+                <input 
+                  type="number" 
+                  placeholder="Ancho (m)" 
+                  step="0.1"
+                  value={customPallet.width}
+                  onChange={(e) => setCustomPallet({...customPallet, width: e.target.value})}
+                  style={{width: '100%', padding: '4px', fontSize: '12px'}}
+                />
+              </div>
+            )}
+          </div>
+
+          {elements.length > 0 && (
+            <div className="section-compact">
+              <h2>📋 LISTA ({elements.length})</h2>
+              <div className="elements-list-compact">
+                {elements.map(el => (
+                  <div 
+                    key={el.id} 
+                    className={`element-item-compact ${selectedElement?.id === el.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedElement(el)}
+                  >
+                    <span>{el.type === 'shelf' ? '📦' : el.type === 'office' ? '🏢' : '🚛'}</span>
+                    <span style={{flex: 1, fontSize: '11px'}}>#{el.id.slice(-4)}</span>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); deleteElement(el.id); }}
+                      style={{background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px'}}
+                    >
+                      ❌
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </section>
+          )}
         </aside>
 
-        {/* Canvas Principal */}
         <main className="canvas-container">
-          <div className="view-controls">
+          <div className="view-controls compact">
             {VIEW_MODES.map(mode => (
               <button
                 key={mode}
@@ -548,178 +691,158 @@ export default function App() {
               onSelectElement={setSelectedElement}
               onUpdateElement={updateElement}
               viewMode={viewMode}
+              palletType={palletType}
             />
             <OrbitControls 
               enableDamping 
               dampingFactor={0.05}
-              minDistance={10}
-              maxDistance={200}
+              minDistance={15}
+              maxDistance={150}
             />
           </Canvas>
 
-          {/* Ayuda */}
-          <div className="help-box">
-            <p>💡 <strong>Click</strong> en elemento para seleccionar</p>
-            <p>✋ <strong>Arrastra</strong> para mover</p>
-            <p>🖱️ <strong>Scroll</strong> para zoom</p>
-            <p>🔄 <strong>Click derecho</strong> + arrastrar para rotar vista</p>
+          <div className="help-compact">
+            Click elemento → Arrastrar | Scroll = Zoom
           </div>
         </main>
 
-        {/* Sidebar Derecho */}
-        <aside className="sidebar-right">
+        <aside className="sidebar-right compact">
           {selectedElement ? (
-            <section className="section">
-              <h2>⚙️ PROPIEDADES</h2>
-              <div className="properties">
-                <div className="property">
-                  <strong>Tipo:</strong>
-                  <span>{selectedElement.type.toUpperCase()}</span>
-                </div>
-                
-                <h3>📍 Posición</h3>
-                <div className="property-group">
-                  <label>
-                    X: <input 
-                      type="number" 
-                      step="0.1"
-                      value={selectedElement.position.x}
-                      onChange={(e) => updateElement(selectedElement.id, {
-                        position: {...selectedElement.position, x: parseFloat(e.target.value)}
-                      })}
-                    /> m
-                  </label>
-                  <label>
-                    Y: <input 
-                      type="number" 
-                      step="0.1"
-                      value={selectedElement.position.y}
-                      onChange={(e) => updateElement(selectedElement.id, {
-                        position: {...selectedElement.position, y: parseFloat(e.target.value)}
-                      })}
-                    /> m
-                  </label>
-                  <label>
-                    Z (altura): <input 
-                      type="number" 
-                      step="0.1"
-                      value={selectedElement.position.z}
-                      onChange={(e) => updateElement(selectedElement.id, {
-                        position: {...selectedElement.position, z: parseFloat(e.target.value)}
-                      })}
-                    /> m
-                  </label>
-                  <label>
-                    Rotación: <input 
-                      type="number" 
-                      step="15"
-                      value={selectedElement.position.rotation}
-                      onChange={(e) => updateElement(selectedElement.id, {
-                        position: {...selectedElement.position, rotation: parseFloat(e.target.value)}
-                      })}
-                    /> °
-                  </label>
-                </div>
+            <div className="section-compact">
+              <h2>⚙️ {selectedElement.type.toUpperCase()}</h2>
+              
+              <label className="label-compact">
+                Posición Horizontal X
+                <input 
+                  type="number" 
+                  step="0.1"
+                  value={selectedElement.position.x}
+                  onChange={(e) => updateElement(selectedElement.id, {
+                    position: {...selectedElement.position, x: parseFloat(e.target.value)}
+                  })}
+                />
+              </label>
+              
+              <label className="label-compact">
+                Posición Horizontal Y
+                <input 
+                  type="number" 
+                  step="0.1"
+                  value={selectedElement.position.y}
+                  onChange={(e) => updateElement(selectedElement.id, {
+                    position: {...selectedElement.position, y: parseFloat(e.target.value)}
+                  })}
+                />
+              </label>
+              
+              <label className="label-compact">
+                Altura desde suelo
+                <input 
+                  type="number" 
+                  step="0.1"
+                  value={selectedElement.position.z}
+                  onChange={(e) => updateElement(selectedElement.id, {
+                    position: {...selectedElement.position, z: parseFloat(e.target.value)}
+                  })}
+                />
+              </label>
+              
+              <label className="label-compact">
+                Rotación (grados)
+                <input 
+                  type="number" 
+                  step="15"
+                  value={selectedElement.position.rotation}
+                  onChange={(e) => updateElement(selectedElement.id, {
+                    position: {...selectedElement.position, rotation: parseFloat(e.target.value)}
+                  })}
+                />
+              </label>
 
-                <h3>📐 Dimensiones</h3>
-                <div className="property-group">
-                  {Object.entries(selectedElement.dimensions).map(([key, value]) => (
-                    <label key={key}>
-                      {key}: <input 
-                        type="number" 
-                        step="0.1"
-                        value={value}
-                        onChange={(e) => updateElement(selectedElement.id, {
-                          dimensions: {...selectedElement.dimensions, [key]: parseFloat(e.target.value)}
-                        })}
-                      /> {key === 'levels' ? '' : 'm'}
-                    </label>
-                  ))}
-                </div>
+              <h3 style={{fontSize: '11px', margin: '12px 0 8px 0', color: '#666'}}>DIMENSIONES</h3>
+              {Object.entries(selectedElement.dimensions).map(([key, value]) => (
+                <label key={key} className="label-compact">
+                  {key}
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    value={value}
+                    onChange={(e) => updateElement(selectedElement.id, {
+                      dimensions: {...selectedElement.dimensions, [key]: parseFloat(e.target.value)}
+                    })}
+                  />
+                </label>
+              ))}
 
-                <button 
-                  onClick={() => deleteElement(selectedElement.id)}
-                  className="action-btn danger"
-                >
-                  🗑️ ELIMINAR
-                </button>
+              <button 
+                onClick={() => deleteElement(selectedElement.id)}
+                className="btn-danger-compact"
+              >
+                🗑️ ELIMINAR
+              </button>
+            </div>
+          ) : calculations ? (
+            <div className="section-compact">
+              <h2>📊 RESULTADOS</h2>
+              <div className="calc-big">{calculations.total_pallets}</div>
+              <div className="calc-label">Palets Totales</div>
+              <div className="calc-small">Tipo: {calculations.pallet_type}</div>
+              
+              <div className="calc-row-compact">
+                <span>Aprovechamiento:</span>
+                <strong>{calculations.efficiency_percentage}%</strong>
               </div>
-            </section>
+              <div className="calc-row-compact">
+                <span>Área ocupada:</span>
+                <strong>{calculations.occupied_area} m²</strong>
+              </div>
+              <div className="calc-row-compact">
+                <span>Circulación:</span>
+                <strong>{calculations.circulation_area} m²</strong>
+              </div>
+
+              {calculations.warnings.map((w, i) => (
+                <div key={i} className="warning-compact">{w}</div>
+              ))}
+
+              <button className="btn-primary-compact" onClick={calculateCapacity}>
+                🔄 RECALCULAR
+              </button>
+              <button className="btn-secondary-compact">
+                📸 RENDER 3D
+              </button>
+              <button className="btn-secondary-compact">
+                📄 PDF
+              </button>
+            </div>
           ) : (
-            <section className="section">
-              <h2>📊 CÁLCULOS</h2>
-              {calculations ? (
-                <div className="calculations">
-                  <div className="calc-card">
-                    <div className="calc-value">{calculations.total_pallets}</div>
-                    <div className="calc-label">Palets Totales</div>
-                  </div>
-                  
-                  <div className="calc-card">
-                    <div className="calc-value">{calculations.efficiency_percentage}%</div>
-                    <div className="calc-label">Aprovechamiento</div>
-                  </div>
-                  
-                  <div className="calc-row">
-                    <span>Área ocupada:</span>
-                    <strong>{calculations.occupied_area} m²</strong>
-                  </div>
-                  
-                  <div className="calc-row">
-                    <span>Área circulación:</span>
-                    <strong>{calculations.circulation_area} m²</strong>
-                  </div>
-
-                  {calculations.warnings.length > 0 && (
-                    <div className="warnings">
-                      {calculations.warnings.map((w, i) => (
-                        <div key={i} className="warning">⚠️ {w}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="empty-state">Añade elementos para ver cálculos</p>
-              )}
-            </section>
+            <div style={{padding: '2rem', textAlign: 'center', color: '#999', fontSize: '13px'}}>
+              Añade elementos para calcular
+            </div>
           )}
-
-          <section className="section">
-            <h2>🎨 ACCIONES</h2>
-            <button className="action-btn primary" onClick={calculateCapacity}>
-              🔄 RECALCULAR
-            </button>
-            <button className="action-btn secondary">
-              📸 RENDER PROFESIONAL
-            </button>
-            <button className="action-btn secondary">
-              📄 EXPORTAR PDF
-            </button>
-            <button className="action-btn success">
-              💾 GUARDAR DISEÑO
-            </button>
-          </section>
         </aside>
       </div>
 
-      {/* Modal de Añadir Elemento */}
       {showAddForm && (
         <div className="modal-overlay" onClick={() => setShowAddForm(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Configurar {newElementType?.toUpperCase()}</h2>
+          <div className="modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h2>Nuevo {newElementType?.toUpperCase()}</h2>
+            <p style={{fontSize: '12px', color: '#666', marginBottom: '16px'}}>
+              Deja campos vacíos para valores por defecto
+            </p>
             
-            <div className="form-grid">
+            <div className="form-grid-compact">
               {Object.keys(formData).map(key => (
-                <label key={key}>
-                  {key.toUpperCase()}:
+                <label key={key} style={{fontSize: '12px'}}>
+                  {key.toUpperCase()}
                   <input
                     type="number"
                     step="0.1"
-                    placeholder={`Ingrese ${key}`}
+                    placeholder="Auto"
                     value={formData[key]}
                     onChange={(e) => setFormData({...formData, [key]: e.target.value})}
+                    style={{padding: '6px', fontSize: '13px'}}
                   />
-                  <span className="unit">{key === 'levels' || key === 'rotation' ? '' : 'm'}</span>
                 </label>
               ))}
             </div>
