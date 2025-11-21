@@ -1,0 +1,29 @@
+{
+  "name": "unitnave-designer-frontend",
+  "version": "1.0.0",
+  "description": "Diseñador 3D interactivo de naves industriales para UNITNAVE",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.160.0",
+    "@react-three/fiber": "^8.15.0",
+    "@react-three/drei": "^9.95.0",
+    "axios": "^1.6.5",
+    "zustand": "^4.5.0",
+    "lucide-react": "^0.309.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/three": "^0.160.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.11",
+    "typescript": "^5.3.3"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
