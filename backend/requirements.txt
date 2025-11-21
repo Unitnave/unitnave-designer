@@ -12,7 +12,7 @@ psycopg2-binary==2.9.9
 alembic==1.13.1
 
 # Blender rendering
-bpy==4.0.0  # Blender como módulo Python
+
 Pillow==10.2.0
 
 # PDF Generation
