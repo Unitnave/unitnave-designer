@@ -18,11 +18,11 @@ RUN blender --version
 WORKDIR /app
 
 # Copiar requirements e instalar dependencias Python
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código de la aplicación
-COPY . .
+COPY backend/ .
 
 # Crear directorios necesarios
 RUN mkdir -p /tmp/renders
