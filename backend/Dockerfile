@@ -22,7 +22,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código de la aplicación
-COPY . .
+COPY backend/ .
 
 # Crear directorios necesarios
 RUN mkdir -p /tmp/renders
