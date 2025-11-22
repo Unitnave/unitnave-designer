@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { useThree } from '@react-three/fiber'
-import { TransformControls, Html } from '@react-three/drei'
+import { TransformControls, Html, Line, GridHelper, AmbientLight, DirectionalLight, HemisphereLight } from '@react-three/drei'
 import * as THREE from 'three'
 
 import useWarehouseStore from '../stores/useWarehouseStore'
@@ -16,60 +16,162 @@ const VIEW_CONSTRAINTS = {
 
 export default function Warehouse3D() {
   const { dimensions, elements, columns } = useWarehouseStore()
-  const { viewMode, selectedElement, selectElement, previewElement, showDistances } = useUIStore()
+  const { viewMode, selectedElement, selectElement, previewElement, showDistances, measurementMode, measurements, addMeasurement } = useUIStore()
   const { getCurrentPallet } = useCalculationsStore()
 
-  const { camera } = useThree()
+  const { camera, gl, scene, mouse, controls } = useThree()
+  const raycaster = useRef(new THREE.Raycaster())
+  const clickPoints = useRef([])
 
+  // --- 1. LÓGICA DE MEDICIÓN ---
+  useEffect(() => {
+    const handleClick = (event) => {
+      if (!measurementMode) return
+      // Calcular posición del ratón normalizada
+      const rect = gl.domElement.getBoundingClientRect()
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.current.setFromCamera(mouse, camera)
+      // Intersectamos con todo lo que haya en la escena
+      const intersects = raycaster.current.intersectObjects(scene.children, true)
+      if (intersects.length > 0) {
+        // Filtramos para no medir sobre líneas o ayudas visuales si es posible
+        const point = intersects[0].point
+        clickPoints.current.push(point.clone())
+        if (clickPoints.current.length === 2) {
+          const start = clickPoints.current[0]
+          const end = clickPoints.current[1]
+          const distance = start.distanceTo(end).toFixed(2)
+         
+          addMeasurement({
+            id: Date.now(),
+            start: start.toArray(),
+            end: end.toArray(),
+            distance
+          })
+          clickPoints.current = []
+        }
+      }
+    }
+    gl.domElement.addEventListener('click', handleClick)
+    return () => gl.domElement.removeEventListener('click', handleClick)
+  }, [measurementMode, camera, gl, scene, addMeasurement, mouse])
+
+  // --- 2. CONTROL DE CÁMARA ---
   useEffect(() => {
     const { length, width, height } = dimensions
-    
+    const dist = Math.max(length, width, height) * 1.5
+   
+    let newPos = new THREE.Vector3()
+    let newLookAt = new THREE.Vector3()
+    let newUp = new THREE.Vector3(0, 1, 0)
     switch(viewMode) {
+      case '3D':
+        newPos.set(length * 1.2, height * 1.5, width * 1.2)
+        newLookAt.set(length/2, height/3, width/2)
+        break
       case 'Planta':
-        camera.position.set(length/2, height * 2.5, width/2)
-        camera.lookAt(length/2, 0, width/2)
-        camera.up.set(0, 0, -1)
+        newPos.set(length/2, dist, width/2)
+        newLookAt.set(length/2, 0, width/2)
+        newUp.set(0, 0, -1) // Orientar Norte correctamente
         break
       case 'Alzado':
-        camera.position.set(length/2, height/2, width * 2)
-        camera.lookAt(length/2, height/2, 0)
-        camera.up.set(0, 1, 0)
+        newPos.set(length/2, height/2, dist)
+        newLookAt.set(length/2, height/2, 0)
         break
       case 'Perfil':
-        camera.position.set(length * 2, height/2, width/2)
-        camera.lookAt(0, height/2, width/2)
-        camera.up.set(0, 1, 0)
+        newPos.set(dist, height/2, width/2)
+        newLookAt.set(0, height/2, width/2)
         break
-      default:
-        camera.position.set(length * 1.1, height * 0.9, width * 1.1)
-        camera.lookAt(length/2, height/3, width/2)
-        camera.up.set(0, 1, 0)
     }
-  }, [viewMode, dimensions, camera])
+    // Aplicar cambios inmediatamente (sin lerp) para evitar conflicto con OrbitControls
+    camera.position.copy(newPos)
+    camera.up.copy(newUp)
+    camera.lookAt(newLookAt)
+    // Ajustar Zoom si es ortográfica (Plano 2D)
+    if (camera.isOrthographicCamera) {
+       // Ajuste dinámico del zoom para que quepa la nave
+      const sceneSize = Math.max(length, width)
+      camera.zoom = Math.min(
+        window.innerWidth / sceneSize,
+        window.innerHeight / sceneSize
+      ) * 0.5 // Factor de ajuste para márgenes
+      camera.updateProjectionMatrix()
+    }
+    // IMPORTANTE: Actualizar el target de OrbitControls para que coincida
+    if (controls) {
+      controls.target.copy(newLookAt)
+      controls.update()
+    }
+  }, [viewMode, dimensions, camera, controls])
 
   return (
     <>
-      <mesh 
-        rotation={[-Math.PI / 2, 0, 0]} 
-        position={[dimensions.length/2, 0, dimensions.width/2]}
+      {/* --- 3. LUCES Y AMBIENTE --- */}
+      <AmbientLight intensity={0.7} />
+      <DirectionalLight
+        position={[50, 80, 50]}
+        intensity={1.5}
+        castShadow
+        shadow-mapSize={[2048, 2048]}
+      />
+      <HemisphereLight intensity={0.4} groundColor="#b0bec5" />
+
+      {/* --- 4. SUELO Y GRID --- */}
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[dimensions.length/2, -0.01, dimensions.width/2]} // Ligeramente abajo
         receiveShadow
-        onClick={() => selectElement(null)}
+        onClick={() => selectElement(null)} // Click fuera para deseleccionar
       >
-        <planeGeometry args={[dimensions.length, dimensions.width]} />
+        <planeGeometry args={[dimensions.length * 2, dimensions.width * 2]} />
         <meshStandardMaterial color="#eceff1" />
       </mesh>
+      {viewMode === '3D' && (
+        <GridHelper
+          args={[Math.max(dimensions.length, dimensions.width) * 2, 50, '#cfd8dc', '#eceff1']}
+          position={[dimensions.length/2, 0, dimensions.width/2]}
+        />
+      )}
 
-      <gridHelper 
-        args={[Math.max(dimensions.length, dimensions.width), Math.max(dimensions.length, dimensions.width) / 5, '#90a4ae', '#cfd8dc']} 
-        position={[dimensions.length/2, 0.01, dimensions.width/2]}
-      />
+      {/* --- 5. MEDICIONES --- */}
+      {measurements.map((meas) => (
+        <group key={meas.id}>
+          <Line
+            points={[meas.start, meas.end]}
+            color="#ff0000" // Rojo para mejor visibilidad
+            lineWidth={3}
+          />
+          <Html
+            position={[
+              (meas.start[0] + meas.end[0]) / 2,
+              (meas.start[1] + meas.end[1]) / 2 + 0.5,
+              (meas.start[2] + meas.end[2]) / 2
+            ]}
+            center
+          >
+            <div style={{
+              background: 'rgba(0,0,0,0.8)',
+              color: 'white',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 'bold',
+              whiteSpace: 'nowrap'
+            }}>
+              {meas.distance} m
+            </div>
+          </Html>
+        </group>
+      ))}
 
-      <WarehouseShell dimensions={dimensions} columns={columns} />
-
+      {/* --- 6. COMPONENTES DE LA NAVE --- */}
+      <Html center position={[dimensions.length/2, -2, dimensions.width/2]} style={{pointerEvents: 'none'}}>
+         {/* Etiquetas flotantes generales si las necesitas */}
+      </Html>
       <Dimensions dimensions={dimensions} />
-
+     
       {previewElement && <PreviewElement element={previewElement} />}
-
       {elements.map(element => (
         <Element3D
           key={element.id}
@@ -77,15 +179,11 @@ export default function Warehouse3D() {
           isSelected={selectedElement?.id === element.id}
           viewMode={viewMode}
           pallet={getCurrentPallet()}
-          showDistances={showDistances && selectedElement?.id === element.id}
+          showDistances={showDistances}
           warehouseDimensions={dimensions}
         />
       ))}
-
-      <ambientLight intensity={0.65} />
-      <directionalLight position={[30, 40, 30]} intensity={1.2} castShadow />
-      <directionalLight position={[-20, 30, -20]} intensity={0.5} />
-      <hemisphereLight intensity={0.6} groundColor="#b0bec5" />
+      <WarehouseShell dimensions={dimensions} columns={columns} />
     </>
   )
 }
