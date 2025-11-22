@@ -70,25 +70,21 @@ export default function App() {
               minDistance={10}
               maxDistance={200}
               enableRotate={is3DView}
-              enablePan={true}
+              enablePan={is3DView}
               enableZoom={true}
-              mouseButtons={{
-                LEFT: is3DView ? 0 : 2,
-                MIDDLE: 1,
-                RIGHT: 2
-              }}
+              screenSpacePanning={false}
             />
           </Canvas>
 
           {!is3DView && (
             <div className="view-mode-indicator">
-              📐 MODO EDICIÓN: {viewMode}
+              📐 VISTA TÉCNICA: {viewMode} (Solo Zoom)
             </div>
           )}
 
           {is3DView && (
             <div className="view-mode-indicator view-only">
-              👁️ SOLO VISUALIZACIÓN - Cambia a Planta/Alzado/Perfil para editar
+              👁️ VISTA 3D - Solo visualización
             </div>
           )}
         </div>
