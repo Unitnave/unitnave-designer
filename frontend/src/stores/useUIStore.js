@@ -38,6 +38,7 @@ function getEmptyFormByType(type) {
 
 const useUIStore = create((set) => ({
   viewMode: '3D',
+  cameraType: 'perspective',
   selectedElement: null,
   showAddModal: false,
   newElementType: null,
@@ -49,14 +50,29 @@ const useUIStore = create((set) => ({
   isLoading: false,
   notification: null,
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) => set({ 
+    viewMode: mode,
+    cameraType: mode === '3D' ? 'perspective' : 'orthographic',
+    selectedElement: mode === '3D' ? null : undefined
+  }),
+  
   selectElement: (element) => set({ selectedElement: element }),
   deselectElement: () => set({ selectedElement: null }),
   
-  openAddModal: (type) => set({ 
-    showAddModal: true, 
-    newElementType: type,
-    formData: getEmptyFormByType(type)
+  openAddModal: (type) => set((state) => {
+    if (state.viewMode === '3D') {
+      return {
+        notification: { 
+          type: 'warning', 
+          message: 'Cambia a vista Planta/Alzado/Perfil para añadir elementos' 
+        }
+      }
+    }
+    return {
+      showAddModal: true, 
+      newElementType: type,
+      formData: getEmptyFormByType(type)
+    }
   }),
   
   closeAddModal: () => set({ 

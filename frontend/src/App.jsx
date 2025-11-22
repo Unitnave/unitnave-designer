@@ -21,6 +21,8 @@ export default function App() {
     calculateCapacity(dimensions, elements)
   }
 
+  const is3DView = viewMode === '3D'
+
   return (
     <div className="app">
       <header className="header-compact">
@@ -29,6 +31,9 @@ export default function App() {
             src="https://unitnave.com/wp-content/uploads/2024/06/logo-unitnave-blanco.svg" 
             alt="UNITNAVE" 
             className="logo"
+            onError={(e) => {
+              e.target.style.display = 'none'
+            }}
           />
           <h1>DESIGNER</h1>
         </div>
@@ -56,7 +61,6 @@ export default function App() {
         <div className="canvas-container">
           <Canvas
             shadows
-            camera={{ position: [50, 30, 50], fov: 50 }}
             style={{ background: '#263238' }}
           >
             <Warehouse3D />
@@ -65,8 +69,28 @@ export default function App() {
               dampingFactor={0.05}
               minDistance={10}
               maxDistance={200}
+              enableRotate={is3DView}
+              enablePan={true}
+              enableZoom={true}
+              mouseButtons={{
+                LEFT: is3DView ? 0 : 2,
+                MIDDLE: 1,
+                RIGHT: 2
+              }}
             />
           </Canvas>
+
+          {!is3DView && (
+            <div className="view-mode-indicator">
+              📐 MODO EDICIÓN: {viewMode}
+            </div>
+          )}
+
+          {is3DView && (
+            <div className="view-mode-indicator view-only">
+              👁️ SOLO VISUALIZACIÓN - Cambia a Planta/Alzado/Perfil para editar
+            </div>
+          )}
         </div>
 
         <RightPanel />

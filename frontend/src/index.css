@@ -523,3 +523,24 @@ body {
 .distance-row:last-child {
   border-bottom: none;
 }
+
+/* ==================== VIEW MODE INDICATOR ==================== */
+.view-mode-indicator {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(25, 118, 210, 0.95);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.view-mode-indicator.view-only {
+  background: rgba(158, 158, 158, 0.95);
+}
