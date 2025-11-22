@@ -50,6 +50,10 @@ const useUIStore = create((set) => ({
   isLoading: false,
   notification: null,
 
+  // --- NUEVAS VARIABLES PARA MEDICIÓN ---
+  measurementMode: false, // Activar/desactivar modo regla
+  measurements: [],       // Array para guardar las líneas pintadas
+
   setViewMode: (mode) => set({ 
     viewMode: mode,
     cameraType: mode === '3D' ? 'perspective' : 'orthographic',
@@ -96,7 +100,23 @@ const useUIStore = create((set) => ({
     }, 3000)
   },
   
-  hideNotification: () => set({ notification: null })
+  hideNotification: () => set({ notification: null }),
+
+  // --- NUEVAS ACCIONES PARA MEDICIÓN ---
+  toggleMeasurementMode: () => set(state => ({ 
+    measurementMode: !state.measurementMode,
+    selectedElement: null // Deseleccionar elementos al medir
+  })),
+
+  addMeasurement: (measurement) => set(state => ({
+    measurements: [...state.measurements, measurement]
+  })),
+
+  clearMeasurements: () => set({ measurements: [] }),
+  
+  deleteMeasurement: (id) => set(state => ({
+    measurements: state.measurements.filter(m => m.id !== id)
+  }))
 }))
 
 export default useUIStore
