@@ -18,23 +18,34 @@ const useWarehouseStore = create((set) => ({
 
   setDimensions: (dims) => set({ dimensions: dims }),
 
+  // ✅ VALIDACIÓN CORREGIDA
   addElement: (element) => set((state) => {
     const { length, width } = state.dimensions
     const pos = element.position
     
-    let maxX = 0, maxY = 0
+    // Obtener dimensiones correctas según tipo
+    let elementLength = 0
+    let elementWidth = 0
+    
     if (element.type === 'shelf') {
-      maxX = element.dimensions.length
-      maxY = element.dimensions.depth
+      elementLength = element.dimensions.length || 0
+      elementWidth = element.dimensions.depth || 0
     } else if (element.type === 'office') {
-      maxX = element.dimensions.largo
-      maxY = element.dimensions.ancho
+      elementLength = element.dimensions.largo || 0
+      elementWidth = element.dimensions.ancho || 0
     } else if (element.type === 'dock') {
-      maxX = element.dimensions.width
+      elementLength = element.dimensions.width || 0
+      elementWidth = element.dimensions.depth || 3
     }
 
-    if (pos.x + maxX > length || pos.y + maxY > width) {
-      return { }
+    // ✅ Validar con margen de seguridad
+    if (pos.x + elementLength > length || pos.y + elementWidth > width) {
+      console.warn('Elemento fuera de límites:', {
+        position: pos,
+        dimensions: { elementLength, elementWidth },
+        limits: { length, width }
+      })
+      return state // No añadir si está fuera
     }
 
     return { elements: [...state.elements, element] }

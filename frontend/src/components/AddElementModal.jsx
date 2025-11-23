@@ -2,7 +2,7 @@ import useWarehouseStore from '../stores/useWarehouseStore'
 import useUIStore from '../stores/useUIStore'
 
 export default function AddElementModal() {
-  const { addElement } = useWarehouseStore()
+  const { dimensions, addElement } = useWarehouseStore()
   const { 
     showAddModal, 
     newElementType, 
@@ -39,27 +39,45 @@ export default function AddElementModal() {
   }
 
   const handleConfirm = () => {
+    // ✅ Posición AUTO inteligente
+    let autoX = parseFloat(formData.x) || 5
+    let autoY = parseFloat(formData.y) || 5
+    
+    // Validar que no esté fuera
+    const dims = getDimensionsFromForm(newElementType, formData)
+    const maxX = newElementType === 'shelf' ? dims.length : 
+                 newElementType === 'office' ? dims.largo : dims.width
+    const maxY = newElementType === 'shelf' ? dims.depth : 
+                 newElementType === 'office' ? dims.ancho : dims.depth || 3
+    
+    if (autoX + maxX > dimensions.length) {
+      autoX = Math.max(0, dimensions.length - maxX - 1)
+    }
+    if (autoY + maxY > dimensions.width) {
+      autoY = Math.max(0, dimensions.width - maxY - 1)
+    }
+    
     const element = {
       id: `${newElementType}-${Date.now()}`,
       type: newElementType,
       position: {
-        x: parseFloat(formData.x) || 5,
-        y: parseFloat(formData.y) || 5,
+        x: autoX,
+        y: autoY,
         z: parseFloat(formData.z) || 0,
         rotation: parseFloat(formData.rotation) || 0
       },
-      dimensions: getDimensionsFromForm(newElementType, formData),
+      dimensions: dims,
       properties: {}
     }
     
     const success = addElement(element)
     
-    if (success) {
+    if (success !== false) {
       closeAddModal()
       setViewMode('Planta')
       showNotification('success', 'Elemento añadido correctamente')
     } else {
-      showNotification('error', 'Error: elemento fuera de límites')
+      showNotification('error', 'Error: elemento fuera de límites. Ajusta las dimensiones.')
     }
   }
 
@@ -80,11 +98,11 @@ export default function AddElementModal() {
         
         <div className="form-grid-office">
           {newElementType === 'office' ? (
-            <OfficeForm formData={formData} onChange={handleInputChange} />
+            <OfficeForm formData={formData} onChange={handleInputChange} dimensions={dimensions} />
           ) : newElementType === 'dock' ? (
-            <DockForm formData={formData} onChange={handleInputChange} />
+            <DockForm formData={formData} onChange={handleInputChange} dimensions={dimensions} />
           ) : (
-            <ShelfForm formData={formData} onChange={handleInputChange} />
+            <ShelfForm formData={formData} onChange={handleInputChange} dimensions={dimensions} />
           )}
         </div>
 
@@ -101,7 +119,7 @@ export default function AddElementModal() {
   )
 }
 
-function OfficeForm({ formData, onChange }) {
+function OfficeForm({ formData, onChange, dimensions }) {
   return (
     <>
       <label>
@@ -109,7 +127,7 @@ function OfficeForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Ej: 10"
+          placeholder={`Máx: ${dimensions.length}`}
           value={formData.largo || ''}
           onChange={(e) => onChange('largo', e.target.value)}
         />
@@ -119,7 +137,7 @@ function OfficeForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Ej: 8"
+          placeholder={`Máx: ${dimensions.width}`}
           value={formData.ancho || ''}
           onChange={(e) => onChange('ancho', e.target.value)}
         />
@@ -129,23 +147,10 @@ function OfficeForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Ej: 3.5"
+          placeholder={`Máx: ${dimensions.height}`}
           value={formData.alto || ''}
           onChange={(e) => onChange('alto', e.target.value)}
         />
-      </label>
-      <label>
-        <strong>Altura desde suelo (m)</strong>
-        <input
-          type="number"
-          step="0.1"
-          placeholder="0 = planta baja"
-          value={formData.z || ''}
-          onChange={(e) => onChange('z', e.target.value)}
-        />
-        <small style={{fontSize: '10px', color: '#999', marginTop: '2px'}}>
-          0=Planta baja, 4-5=Entreplanta, 6-8=Superior
-        </small>
       </label>
       <label>
         <strong>Posición X (m)</strong>
@@ -171,7 +176,7 @@ function OfficeForm({ formData, onChange }) {
   )
 }
 
-function DockForm({ formData, onChange }) {
+function DockForm({ formData, onChange, dimensions }) {
   return (
     <>
       <label>
@@ -200,9 +205,6 @@ function DockForm({ formData, onChange }) {
           value={formData.height || '1.2'}
           onChange={(e) => onChange('height', e.target.value)}
         />
-        <small style={{fontSize: '10px', color: '#999', marginTop: '2px'}}>
-          Estándar: 1.1-1.2m
-        </small>
       </label>
       <label>
         <strong>Zona maniobra (m)</strong>
@@ -212,9 +214,6 @@ function DockForm({ formData, onChange }) {
           value={formData.maneuverZone || '12'}
           onChange={(e) => onChange('maneuverZone', e.target.value)}
         />
-        <small style={{fontSize: '10px', color: '#999', marginTop: '2px'}}>
-          Mínimo 12m para camión rígido
-        </small>
       </label>
       <label>
         <strong>Posición X (m)</strong>
@@ -240,7 +239,7 @@ function DockForm({ formData, onChange }) {
   )
 }
 
-function ShelfForm({ formData, onChange }) {
+function ShelfForm({ formData, onChange, dimensions }) {
   return (
     <>
       <label>
@@ -248,7 +247,7 @@ function ShelfForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Ej: 12"
+          placeholder={`Máx: ${dimensions.length}`}
           value={formData.length || ''}
           onChange={(e) => onChange('length', e.target.value)}
         />
@@ -268,7 +267,7 @@ function ShelfForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Ej: 8"
+          placeholder={`Máx: ${dimensions.height}`}
           value={formData.height || ''}
           onChange={(e) => onChange('height', e.target.value)}
         />
@@ -288,7 +287,7 @@ function ShelfForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Auto"
+          placeholder="Auto (5m)"
           value={formData.x || ''}
           onChange={(e) => onChange('x', e.target.value)}
         />
@@ -298,29 +297,9 @@ function ShelfForm({ formData, onChange }) {
         <input
           type="number"
           step="0.1"
-          placeholder="Auto"
+          placeholder="Auto (5m)"
           value={formData.y || ''}
           onChange={(e) => onChange('y', e.target.value)}
-        />
-      </label>
-      <label>
-        <strong>Altura desde suelo (m)</strong>
-        <input
-          type="number"
-          step="0.1"
-          placeholder="0"
-          value={formData.z || ''}
-          onChange={(e) => onChange('z', e.target.value)}
-        />
-      </label>
-      <label>
-        <strong>Rotación (grados)</strong>
-        <input
-          type="number"
-          step="15"
-          placeholder="0"
-          value={formData.rotation || ''}
-          onChange={(e) => onChange('rotation', e.target.value)}
         />
       </label>
     </>
