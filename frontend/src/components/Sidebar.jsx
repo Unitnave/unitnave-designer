@@ -4,7 +4,15 @@ import useCalculationsStore from '../stores/useCalculationsStore'
 
 export default function Sidebar() {
   const { dimensions, elements, setDimensions, deleteElement } = useWarehouseStore()
-  const { selectedElement, selectElement, openAddModal } = useUIStore()
+  const { 
+    selectedElement, 
+    selectElement, 
+    openAddModal, 
+    measurementMode, 
+    toggleMeasurementMode,
+    clearMeasurements,
+    measurements 
+  } = useUIStore()
   const { palletType, setPalletType, customPallet, setCustomPallet } = useCalculationsStore()
 
   const handleDimensionChange = (key, value) => {
@@ -17,6 +25,46 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar-left compact">
+      {/* SECCIÓN HERRAMIENTAS */}
+      <div className="section-compact" style={{background: measurementMode ? '#fff3cd' : '#e3f2fd'}}>
+        <h2>🛠️ HERRAMIENTAS</h2>
+        <button 
+          onClick={toggleMeasurementMode} 
+          className="btn-compact"
+          style={{
+            background: measurementMode ? '#ff9800' : 'white',
+            color: measurementMode ? 'white' : '#333',
+            fontWeight: 'bold',
+            border: measurementMode ? '2px solid #f57c00' : '2px solid #ddd'
+          }}
+        >
+          {measurementMode ? '❌ CANCELAR REGLA' : '📏 REGLETA / MEDIR'}
+        </button>
+        
+        {measurements.length > 0 && (
+          <button 
+            onClick={clearMeasurements} 
+            className="btn-compact"
+            style={{fontSize: '11px', color: '#f44336', marginTop: '8px'}}
+          >
+            🗑️ Borrar {measurements.length} cota{measurements.length !== 1 ? 's' : ''}
+          </button>
+        )}
+        
+        {measurementMode && (
+          <div style={{
+            marginTop: '8px', 
+            padding: '8px', 
+            background: '#fff9c4', 
+            borderRadius: '4px', 
+            fontSize: '11px',
+            color: '#666'
+          }}>
+            💡 Haz clic en 2 puntos para medir la distancia
+          </div>
+        )}
+      </div>
+
       <div className="section-compact">
         <h2>➕ ELEMENTOS</h2>
         <button onClick={() => openAddModal('shelf')} className="btn-compact shelf">
@@ -109,7 +157,9 @@ export default function Sidebar() {
                 onClick={() => selectElement(el)}
               >
                 <span>{el.type === 'shelf' ? '📦' : el.type === 'office' ? '🏢' : '🚛'}</span>
-                <span style={{flex: 1, fontSize: '11px'}}>#{el.id.slice(-4)}</span>
+                <span style={{flex: 1, fontSize: '11px'}}>
+                  {el.type.toUpperCase()} #{el.id.slice(-4)}
+                </span>
                 <button 
                   onClick={(e) => { 
                     e.stopPropagation(); 

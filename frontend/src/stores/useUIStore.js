@@ -50,32 +50,34 @@ const useUIStore = create((set) => ({
   isLoading: false,
   notification: null,
 
-  // --- NUEVAS VARIABLES PARA MEDICIÓN ---
-  measurementMode: false, // Activar/desactivar modo regla
-  measurements: [],       // Array para guardar las líneas pintadas
+  // Mediciones
+  measurementMode: false,
+  measurements: [],
 
   setViewMode: (mode) => set({ 
     viewMode: mode,
     cameraType: mode === '3D' ? 'perspective' : 'orthographic',
-    selectedElement: mode === '3D' ? null : undefined
+    selectedElement: null,
+    measurementMode: false // Desactivar medición al cambiar vista
   }),
   
   selectElement: (element) => set({ selectedElement: element }),
   deselectElement: () => set({ selectedElement: null }),
   
   openAddModal: (type) => set((state) => {
-    if (state.viewMode === '3D') {
+    if (state.viewMode === '3D' || state.viewMode === 'Planta') {
       return {
-        notification: { 
-          type: 'warning', 
-          message: 'Cambia a vista Planta/Alzado/Perfil para añadir elementos' 
-        }
+        showAddModal: true, 
+        newElementType: type,
+        formData: getEmptyFormByType(type),
+        measurementMode: false // Desactivar medición al añadir
       }
     }
     return {
-      showAddModal: true, 
-      newElementType: type,
-      formData: getEmptyFormByType(type)
+      notification: { 
+        type: 'warning', 
+        message: 'Añade elementos en vista 3D o Planta' 
+      }
     }
   }),
   
@@ -102,10 +104,10 @@ const useUIStore = create((set) => ({
   
   hideNotification: () => set({ notification: null }),
 
-  // --- NUEVAS ACCIONES PARA MEDICIÓN ---
+  // Mediciones
   toggleMeasurementMode: () => set(state => ({ 
     measurementMode: !state.measurementMode,
-    selectedElement: null // Deseleccionar elementos al medir
+    selectedElement: null // Deseleccionar al medir
   })),
 
   addMeasurement: (measurement) => set(state => ({
