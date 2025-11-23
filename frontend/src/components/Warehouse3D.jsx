@@ -20,14 +20,14 @@ export default function Warehouse3D() {
   const clickPoints = useRef([])
   const planeRef = useRef()
 
-  // Estado para arrastrar sin re-renderizar todo el componente
+  // Estado para arrastrar
   const dragState = useRef({
     isDragging: false,
     draggedElement: null,
     offset: new THREE.Vector3()
   })
 
-  // --- LÓGICA DE ARRASTRE (DRAG & DROP) ---
+  // --- LÓGICA DE ARRASTRE ---
   const handlePointerDown = (e, element) => {
     if (measurementMode || (viewMode !== 'Planta' && viewMode !== '3D')) return
     
@@ -58,7 +58,7 @@ export default function Warehouse3D() {
     if (!dragState.current.isDragging || !dragState.current.draggedElement) return
     
     const element = dragState.current.draggedElement
-    // Límites de seguridad para no sacar elementos de la nave
+    // Usamos dimensions aquí porque estamos dentro del componente principal
     const newX = Math.max(0, Math.min(dimensions.length, e.point.x + dragState.current.offset.x))
     const newZ = Math.max(0, Math.min(dimensions.width, e.point.z + dragState.current.offset.z))
     
@@ -71,7 +71,7 @@ export default function Warehouse3D() {
     })
   }
 
-  // --- LÓGICA DE MEDICIÓN ---
+  // --- MEDICIÓN ---
   const handleMeasureClick = (event) => {
     if (!measurementMode) return
 
@@ -80,12 +80,11 @@ export default function Warehouse3D() {
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
     
     raycaster.current.setFromCamera(mouse, camera)
-    // Intersectar con el plano invisible del suelo
     const intersects = raycaster.current.intersectObject(planeRef.current, true)
     
     if (intersects.length > 0) {
       const point = intersects[0].point
-      point.y = 0.2 // Elevar un poco para que se vea sobre el suelo
+      point.y = 0.2
       clickPoints.current.push(point.clone())
       
       if (clickPoints.current.length === 2) {
@@ -114,67 +113,51 @@ export default function Warehouse3D() {
     }
   }, [measurementMode, gl])
 
-  // --- CONTROL DE CÁMARA 2D/3D (CORREGIDO CON CENTRADO REAL) ---
+  // --- CÁMARA ---
   useEffect(() => {
     const { length, width, height } = dimensions
     const center = new THREE.Vector3(length / 2, 0, width / 2)
-    
-    // 1. Obtener dimensiones REALES del lienzo 3D (sin la barra lateral)
     const canvasWidth = gl.domElement.clientWidth
     const canvasHeight = gl.domElement.clientHeight
     
     if (viewMode === 'Planta') {
-      // CÁMARA CENITAL
       camera.position.set(center.x, 100, center.z)
       camera.lookAt(center)
-      camera.rotation.z = 0 // Reset rotación Z por si acaso
-      camera.up.set(0, 0, -1) // Norte arriba
+      camera.rotation.z = 0
+      camera.up.set(0, 0, -1)
       
       if (camera.isOrthographicCamera) {
-        // Calcular zoom basado en el tamaño del Canvas, no de la ventana
         const maxDim = Math.max(length, width)
-        const zoom = Math.min(canvasWidth, canvasHeight) / maxDim * 0.8 // 0.8 deja un margen
-        
-        camera.zoom = zoom
+        camera.zoom = Math.min(canvasWidth, canvasHeight) / maxDim * 0.8
         camera.updateProjectionMatrix()
       }
     } 
     else if (viewMode === 'Alzado') {
-      // VISTA FRONTAL
       camera.position.set(center.x, height / 2, width + 100)
       camera.lookAt(center.x, height / 2, center.z)
       camera.up.set(0, 1, 0)
       
       if (camera.isOrthographicCamera) {
-        // Ajustar para que quepa el largo y el alto
-        const zoom = Math.min(canvasWidth / length, canvasHeight / height) * 0.8
-        
-        camera.zoom = zoom
+        camera.zoom = Math.min(canvasWidth / length, canvasHeight / height) * 0.8
         camera.updateProjectionMatrix()
       }
     }
     else if (viewMode === 'Perfil') {
-      // VISTA LATERAL
       camera.position.set(length + 100, height / 2, center.z)
       camera.lookAt(center.x, height / 2, center.z)
       camera.up.set(0, 1, 0)
       
       if (camera.isOrthographicCamera) {
-        // Ajustar para que quepa el ancho y el alto
-        const zoom = Math.min(canvasWidth / width, canvasHeight / height) * 0.8
-        
-        camera.zoom = zoom
+        camera.zoom = Math.min(canvasWidth / width, canvasHeight / height) * 0.8
         camera.updateProjectionMatrix()
       }
     }
     else if (viewMode === '3D') {
-      // VISTA PERSPECTIVA
       camera.position.set(length * 1.2, height * 1.5, width * 1.2)
       camera.lookAt(center)
       camera.up.set(0, 1, 0)
     }
 
-    // Actualizar target de los controles orbitales
     if (controls) {
       controls.enableRotate = (viewMode === '3D')
       controls.target.copy(center)
@@ -189,7 +172,6 @@ export default function Warehouse3D() {
       <directionalLight position={[50, 100, 50]} intensity={1.2} castShadow />
       <hemisphereLight intensity={0.3} groundColor="#b0bec5" />
 
-      {/* PLANO INVISIBLE PARA GESTIONAR EL ARRASTRE */}
       <mesh 
         ref={planeRef}
         rotation={[-Math.PI / 2, 0, 0]} 
@@ -202,40 +184,37 @@ export default function Warehouse3D() {
         <meshBasicMaterial />
       </mesh>
 
-      {/* SUELO VISIBLE */}
-      <mesh 
-        rotation={[-Math.PI / 2, 0, 0]} 
-        position={[dimensions.length/2, -0.05, dimensions.width/2]}
-        receiveShadow
-        onClick={() => !dragState.current.isDragging && selectElement(null)}
-      >
-        <planeGeometry args={[dimensions.length, dimensions.width]} />
-        <meshStandardMaterial color="#f5f5f5" />
-      </mesh>
+      {(viewMode === '3D' || viewMode === 'Planta') && (
+        <mesh 
+          rotation={[-Math.PI / 2, 0, 0]} 
+          position={[dimensions.length/2, -0.05, dimensions.width/2]}
+          receiveShadow
+          onClick={() => !dragState.current.isDragging && selectElement(null)}
+        >
+          <planeGeometry args={[dimensions.length, dimensions.width]} />
+          <meshStandardMaterial color="#f5f5f5" />
+        </mesh>
+      )}
 
-      {/* GRID (Solo en 3D y Planta) */}
       {(viewMode === '3D' || viewMode === 'Planta') && (
         <gridHelper 
           args={[
             Math.max(dimensions.length, dimensions.width) * 1.5, 
-            Math.max(dimensions.length, dimensions.width), 
-            '#1976d2', // Eje principal azul
-            '#e0e0e0'  // Secundario gris suave
+            50, 
+            '#1976d2', 
+            '#e0e0e0'
           ]} 
           position={[dimensions.length/2, -0.04, dimensions.width/2]}
         />
       )}
 
-      {/* COTAS DE DIMENSIONES */}
       <Dimensions dimensions={dimensions} viewMode={viewMode} />
 
-      {/* ELEMENTOS DE LA NAVE */}
       {elements.map(element => (
         <DraggableElement
           key={element.id}
           element={element}
           isSelected={selectedElement?.id === element.id}
-          // Pasamos estado de drag para optimizar renderizado
           isDragging={dragState.current.isDragging && dragState.current.draggedElement?.id === element.id}
           onPointerDown={handlePointerDown}
           pallet={getCurrentPallet()}
@@ -245,40 +224,25 @@ export default function Warehouse3D() {
 
       {previewElement && <PreviewElement element={previewElement} />}
       
-      {/* LÍNEAS DE MEDICIÓN */}
       {measurements.map((meas) => (
         <group key={meas.id}>
-          <Line points={[meas.start, meas.end]} color="#ff0000" lineWidth={3} />
+          <Line points={[meas.start, meas.end]} color="#d32f2f" lineWidth={2} />
           <Html position={[(meas.start[0] + meas.end[0]) / 2, 0.5, (meas.start[2] + meas.end[2]) / 2]}>
-            <div style={{
-              background: 'white', 
-              padding: '2px 6px', 
-              borderRadius: '4px', 
-              border: '1px solid #ff0000', 
-              fontSize: '10px', 
-              fontWeight: 'bold',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none'
-            }}>
-              📏 {meas.distance}m
+            <div style={{background: 'white', padding: '2px 6px', border: '1px solid #d32f2f', fontSize: '10px', fontWeight: 'bold', color: '#d32f2f'}}>
+              {meas.distance}m
             </div>
           </Html>
-          {/* Puntos extremos */}
-          <mesh position={meas.start}><sphereGeometry args={[0.15]} /><meshBasicMaterial color="red"/></mesh>
-          <mesh position={meas.end}><sphereGeometry args={[0.15]} /><meshBasicMaterial color="red"/></mesh>
+          <mesh position={meas.start}><sphereGeometry args={[0.15]} /><meshBasicMaterial color="#d32f2f"/></mesh>
+          <mesh position={meas.end}><sphereGeometry args={[0.15]} /><meshBasicMaterial color="#d32f2f"/></mesh>
         </group>
       ))}
 
-      {/* CONTORNO TÉCNICO DE LA NAVE */}
       <WarehouseShell dimensions={dimensions} columns={columns} viewMode={viewMode} />
     </>
   )
 }
 
-// --- COMPONENTES AUXILIARES ---
-
 function Dimensions({ dimensions, viewMode }) {
-  // Solo mostrar en 3D y Planta
   if (viewMode === 'Alzado' || viewMode === 'Perfil') return null
   
   return (
@@ -301,70 +265,25 @@ function Dimensions({ dimensions, viewMode }) {
 function DraggableElement({ element, isSelected, isDragging, onPointerDown, pallet, viewMode }) {
   const [hovered, setHover] = useState(false)
   
-  // --- ✅ CONTROL DE CÁMARA CORREGIDO ---
   useEffect(() => {
-    const { length, width, height } = dimensions
-    const center = new THREE.Vector3(length / 2, height / 2, width / 2)
-    
-    if (viewMode === 'Planta') {
-      // ✅ VISTA CENITAL (desde arriba, mirando hacia abajo)
-      camera.position.set(center.x, Math.max(length, width) * 1.5, center.z)
-      camera.lookAt(center.x, 0, center.z)
-      camera.up.set(0, 0, -1) // Norte arriba
-      camera.rotation.z = 0
-      
-      if (camera.isOrthographicCamera) {
-        camera.zoom = 10
-        camera.updateProjectionMatrix()
-      }
-    } 
-    else if (viewMode === 'Alzado') {
-      // ✅ VISTA FRONTAL PURA (desde el frente, SIN profundidad)
-      camera.position.set(center.x, center.y, width + Math.max(length, height))
-      camera.lookAt(center.x, center.y, center.z)
-      camera.up.set(0, 1, 0)
-      camera.rotation.z = 0
-      
-      if (camera.isOrthographicCamera) {
-        camera.zoom = 8
-        camera.updateProjectionMatrix()
-      }
-    }
-    else if (viewMode === 'Perfil') {
-      // ✅ VISTA LATERAL PURA (desde el lado, SIN profundidad)
-      camera.position.set(length + Math.max(width, height), center.y, center.z)
-      camera.lookAt(center.x, center.y, center.z)
-      camera.up.set(0, 1, 0)
-      camera.rotation.z = 0
-      
-      if (camera.isOrthographicCamera) {
-        camera.zoom = 8
-        camera.updateProjectionMatrix()
-      }
-    }
-    else if (viewMode === '3D') {
-      // ✅ VISTA PERSPECTIVA 3D
-      camera.position.set(length * 1.2, height * 1.5, width * 1.2)
-      camera.lookAt(center)
-      camera.up.set(0, 1, 0)
-    }
-
-    // Actualizar controles
-    if (controls) {
-      controls.enableRotate = (viewMode === '3D')
-      controls.target.copy(viewMode === 'Planta' ? new THREE.Vector3(center.x, 0, center.z) : center)
-      controls.update()
-    }
-
-  }, [viewMode, dimensions, camera, controls])
+    if (hovered && !isDragging) document.body.style.cursor = 'grab'
+    return () => { if(!isDragging) document.body.style.cursor = 'auto' }
+  }, [hovered, isDragging])
 
   const highlightColor = isSelected ? '#2196f3' : (hovered ? '#64b5f6' : null)
 
-  // Calcular tamaño para la caja de selección
   let w, d
-  if (element.type === 'shelf') { w = element.dimensions.length; d = element.dimensions.depth }
-  else if (element.type === 'office') { w = element.dimensions.largo; d = element.dimensions.ancho }
-  else { w = element.dimensions.width; d = element.dimensions.depth || 3 }
+  // CORRECCIÓN: Usar valores seguros si no están definidos
+  if (element.type === 'shelf') { 
+    w = element.dimensions.length || 1; 
+    d = element.dimensions.depth || 1 
+  } else if (element.type === 'office') { 
+    w = element.dimensions.largo || 1; 
+    d = element.dimensions.ancho || 1 
+  } else { 
+    w = element.dimensions.width || 1; 
+    d = element.dimensions.depth || 3 
+  }
 
   return (
     <group
@@ -374,7 +293,6 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
       onPointerOver={() => !isDragging && setHover(true)}
       onPointerOut={() => setHover(false)}
     >
-      {/* Caja de resaltado */}
       {(isSelected || hovered) && !isDragging && (
         <mesh position={[w/2, 0.05, d/2]}>
           <boxGeometry args={[w + 0.2, 0.1, d + 0.2]} />
@@ -382,7 +300,6 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
         </mesh>
       )}
 
-      {/* Renderizar geometría específica */}
       {element.type === 'shelf' && <ShelfMesh element={element} customColor={highlightColor} pallet={pallet} isSelected={isSelected && !isDragging} viewMode={viewMode} />}
       {element.type === 'office' && <OfficeMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
       {element.type === 'dock' && <DockMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
@@ -390,13 +307,11 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
   )
 }
 
-// --- GEOMETRÍAS DE ELEMENTOS (Igual que tu versión anterior) ---
-
 function ShelfMesh({ element, customColor, pallet, isSelected, viewMode }) {
   const { length, height, depth, levels } = element.dimensions
   const color = customColor || '#ff6b35'
-  const palletsPerLevel = Math.floor((length / pallet.length) * (depth / pallet.width))
-  const totalPallets = palletsPerLevel * levels
+  const palletsPerLevel = Math.floor((length / (pallet?.length || 1.2)) * (depth / (pallet?.width || 0.8)))
+  const totalPallets = palletsPerLevel * (levels || 1)
 
   return (
     <group>
@@ -405,9 +320,8 @@ function ShelfMesh({ element, customColor, pallet, isSelected, viewMode }) {
         <meshStandardMaterial color={color} metalness={0.6} roughness={0.4} />
       </mesh>
       
-      {/* Líneas de detalle solo en 3D para no ensuciar el plano */}
-      {viewMode === '3D' && Array.from({ length: levels }).map((_, i) => {
-        const y = (height / levels) * (i + 1)
+      {viewMode === '3D' && Array.from({ length: levels || 1 }).map((_, i) => {
+        const y = (height / (levels || 1)) * (i + 1)
         return <Line key={i} points={[[0, y, 0], [length, y, 0], [length, y, depth], [0, y, depth], [0, y, 0]]} color="white" lineWidth={1} />
       })}
       
@@ -434,7 +348,7 @@ function OfficeMesh({ element, customColor, isSelected }) {
         <lineBasicMaterial color="white" />
       </lineSegments>
       {isSelected && (
-        <Html position={[largo/2, alto + 0.5, ancho/2]} center>
+        <Html position={[largo/2, alto+0.5, ancho/2]} center>
           <div className="element-label">🏢 OFICINA<br/>{(largo * ancho).toFixed(1)} m²</div>
         </Html>
       )}
@@ -457,7 +371,7 @@ function DockMesh({ element, customColor, isSelected }) {
       </mesh>
       <gridHelper args={[maneuverZone, 10, '#ff1744', '#ff5252']} position={[width/2, 0.02, depth + maneuverZone/2]} />
       {isSelected && (
-        <Html position={[width/2, height + 1, depth + maneuverZone/2]} center>
+        <Html position={[width/2, height+1, depth+maneuverZone/2]} center>
           <div className="element-label maneuver">🚛 MUELLE</div>
         </Html>
       )}
@@ -468,9 +382,11 @@ function DockMesh({ element, customColor, isSelected }) {
 function PreviewElement({ element }) {
   if (!element) return null
   const dims = element.dimensions
-  const w = dims.largo || dims.length || dims.width || 5
-  const d = dims.ancho || dims.depth || 5
-  const h = dims.alto || dims.height || 2
+  // Usamos dims.largo/ancho para oficina, length/depth para estanteria, width/depth para muelle
+  const w = dims.largo || dims.length || dims.width || 1
+  const d = dims.ancho || dims.depth || 1
+  const h = dims.alto || dims.height || 1
+  
   return (
     <group position={[element.position.x, 0, element.position.y]}>
       <mesh position={[w/2, h/2, d/2]}>
@@ -485,17 +401,33 @@ function PreviewElement({ element }) {
 function WarehouseShell({ dimensions, columns, viewMode }) {
   const { length, width, height } = dimensions
   
-  // Contornos técnicos para vistas 2D
   if (viewMode === 'Planta') {
     return (
       <Line 
         points={[[0,0,0], [length,0,0], [length,0,width], [0,0,width], [0,0,0]]} 
-        color="#1976d2" lineWidth={3} position={[0, 0.1, 0]} rotation={[-Math.PI/2, 0, 0]} // Girado para verse desde arriba
+        color="#1565c0" lineWidth={4} position={[0, 0.1, 0]} rotation={[-Math.PI/2, 0, 0]} 
       />
     )
   }
-  // ... (resto de lógica de shell, igual que tu versión)
-  // Mantenemos tu implementación de Alzado, Perfil y 3D que estaba correcta.
+  
+  if (viewMode === 'Alzado') {
+    return (
+      <Line 
+        points={[[0,0,0], [length,0,0], [length,height,0], [0,height,0], [0,0,0]]} 
+        color="#1565c0" lineWidth={4} position={[0, 0, width/2]}
+      />
+    )
+  }
+
+  if (viewMode === 'Perfil') {
+    return (
+      <Line 
+        points={[[0,0,0], [0,0,width], [0,height,width], [0,height,0], [0,0,0]]} 
+        color="#1565c0" lineWidth={4} position={[length/2, 0, 0]} 
+      />
+    )
+  }
+
   return (
     <group>
       <lineSegments position={[length/2, height/2, width/2]}>
