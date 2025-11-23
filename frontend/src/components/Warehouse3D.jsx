@@ -58,7 +58,6 @@ export default function Warehouse3D() {
     if (!dragState.current.isDragging || !dragState.current.draggedElement) return
     
     const element = dragState.current.draggedElement
-    // Usamos dimensions aquí porque estamos dentro del componente principal
     const newX = Math.max(0, Math.min(dimensions.length, e.point.x + dragState.current.offset.x))
     const newZ = Math.max(0, Math.min(dimensions.width, e.point.z + dragState.current.offset.z))
     
@@ -113,54 +112,118 @@ export default function Warehouse3D() {
     }
   }, [measurementMode, gl])
 
-  // --- CÁMARA ---
+  // --- CÁMARA CORREGIDA ---
   useEffect(() => {
     const { length, width, height } = dimensions
-    const center = new THREE.Vector3(length / 2, 0, width / 2)
+    const centerX = length / 2
+    const centerZ = width / 2
     const canvasWidth = gl.domElement.clientWidth
     const canvasHeight = gl.domElement.clientHeight
+    const aspect = canvasWidth / canvasHeight
+    
+    // Configurar controles PRIMERO
+    if (controls) {
+      controls.enableRotate = (viewMode === '3D')
+      controls.enablePan = true
+      controls.enableZoom = true
+      controls.screenSpacePanning = (viewMode !== '3D')
+    }
     
     if (viewMode === 'Planta') {
-      camera.position.set(center.x, 100, center.z)
-      camera.lookAt(center)
-      camera.rotation.z = 0
-      camera.up.set(0, 0, -1)
+      // Vista desde arriba, mirando hacia abajo
+      const targetY = 0
+      
+      if (controls) {
+        controls.target.set(centerX, targetY, centerZ)
+      }
+      
+      camera.position.set(centerX, 80, centerZ)
+      camera.up.set(0, 0, -1) // Y apunta hacia adelante en planta
+      camera.lookAt(centerX, targetY, centerZ)
       
       if (camera.isOrthographicCamera) {
         const maxDim = Math.max(length, width)
-        camera.zoom = Math.min(canvasWidth, canvasHeight) / maxDim * 0.8
+        const viewSize = maxDim * 1.2 // Añadir margen
+        
+        camera.left = -viewSize * aspect / 2
+        camera.right = viewSize * aspect / 2
+        camera.top = viewSize / 2
+        camera.bottom = -viewSize / 2
+        camera.zoom = 1
         camera.updateProjectionMatrix()
       }
     } 
     else if (viewMode === 'Alzado') {
-      camera.position.set(center.x, height / 2, width + 100)
-      camera.lookAt(center.x, height / 2, center.z)
+      // Vista frontal (desde el frente mirando hacia atrás)
+      const targetY = height / 2
+      
+      if (controls) {
+        controls.target.set(centerX, targetY, centerZ)
+      }
+      
+      camera.position.set(centerX, targetY, width + 50)
       camera.up.set(0, 1, 0)
+      camera.lookAt(centerX, targetY, centerZ)
       
       if (camera.isOrthographicCamera) {
-        camera.zoom = Math.min(canvasWidth / length, canvasHeight / height) * 0.8
+        const viewWidth = length * 1.2
+        const viewHeight = height * 1.2
+        
+        camera.left = -viewWidth * aspect / 2
+        camera.right = viewWidth * aspect / 2
+        camera.top = viewHeight / 2
+        camera.bottom = -viewHeight / 2
+        camera.zoom = 1
         camera.updateProjectionMatrix()
       }
     }
     else if (viewMode === 'Perfil') {
-      camera.position.set(length + 100, height / 2, center.z)
-      camera.lookAt(center.x, height / 2, center.z)
+      // Vista lateral (desde el lateral derecho mirando hacia la izquierda)
+      const targetY = height / 2
+      
+      if (controls) {
+        controls.target.set(centerX, targetY, centerZ)
+      }
+      
+      camera.position.set(length + 50, targetY, centerZ)
       camera.up.set(0, 1, 0)
+      camera.lookAt(centerX, targetY, centerZ)
       
       if (camera.isOrthographicCamera) {
-        camera.zoom = Math.min(canvasWidth / width, canvasHeight / height) * 0.8
+        const viewWidth = width * 1.2
+        const viewHeight = height * 1.2
+        
+        camera.left = -viewWidth * aspect / 2
+        camera.right = viewWidth * aspect / 2
+        camera.top = viewHeight / 2
+        camera.bottom = -viewHeight / 2
+        camera.zoom = 1
         camera.updateProjectionMatrix()
       }
     }
     else if (viewMode === '3D') {
-      camera.position.set(length * 1.2, height * 1.5, width * 1.2)
-      camera.lookAt(center)
+      // Vista 3D isométrica
+      const targetY = height / 2
+      
+      if (controls) {
+        controls.target.set(centerX, targetY, centerZ)
+      }
+      
+      camera.position.set(
+        centerX + length * 0.8, 
+        height * 1.5, 
+        centerZ + width * 0.8
+      )
       camera.up.set(0, 1, 0)
+      camera.lookAt(centerX, targetY, centerZ)
+      
+      if (camera.isPerspectiveCamera) {
+        camera.updateProjectionMatrix()
+      }
     }
 
+    // Actualizar controles AL FINAL
     if (controls) {
-      controls.enableRotate = (viewMode === '3D')
-      controls.target.copy(center)
       controls.update()
     }
 
@@ -273,7 +336,6 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
   const highlightColor = isSelected ? '#2196f3' : (hovered ? '#64b5f6' : null)
 
   let w, d
-  // CORRECCIÓN: Usar valores seguros si no están definidos
   if (element.type === 'shelf') { 
     w = element.dimensions.length || 1; 
     d = element.dimensions.depth || 1 
@@ -382,7 +444,6 @@ function DockMesh({ element, customColor, isSelected }) {
 function PreviewElement({ element }) {
   if (!element) return null
   const dims = element.dimensions
-  // Usamos dims.largo/ancho para oficina, length/depth para estanteria, width/depth para muelle
   const w = dims.largo || dims.length || dims.width || 1
   const d = dims.ancho || dims.depth || 1
   const h = dims.alto || dims.height || 1
