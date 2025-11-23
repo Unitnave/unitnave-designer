@@ -301,10 +301,62 @@ function Dimensions({ dimensions, viewMode }) {
 function DraggableElement({ element, isSelected, isDragging, onPointerDown, pallet, viewMode }) {
   const [hovered, setHover] = useState(false)
   
+  // --- ✅ CONTROL DE CÁMARA CORREGIDO ---
   useEffect(() => {
-    if (hovered && !isDragging) document.body.style.cursor = 'grab'
-    return () => { if(!isDragging) document.body.style.cursor = 'auto' }
-  }, [hovered, isDragging])
+    const { length, width, height } = dimensions
+    const center = new THREE.Vector3(length / 2, height / 2, width / 2)
+    
+    if (viewMode === 'Planta') {
+      // ✅ VISTA CENITAL (desde arriba, mirando hacia abajo)
+      camera.position.set(center.x, Math.max(length, width) * 1.5, center.z)
+      camera.lookAt(center.x, 0, center.z)
+      camera.up.set(0, 0, -1) // Norte arriba
+      camera.rotation.z = 0
+      
+      if (camera.isOrthographicCamera) {
+        camera.zoom = 10
+        camera.updateProjectionMatrix()
+      }
+    } 
+    else if (viewMode === 'Alzado') {
+      // ✅ VISTA FRONTAL PURA (desde el frente, SIN profundidad)
+      camera.position.set(center.x, center.y, width + Math.max(length, height))
+      camera.lookAt(center.x, center.y, center.z)
+      camera.up.set(0, 1, 0)
+      camera.rotation.z = 0
+      
+      if (camera.isOrthographicCamera) {
+        camera.zoom = 8
+        camera.updateProjectionMatrix()
+      }
+    }
+    else if (viewMode === 'Perfil') {
+      // ✅ VISTA LATERAL PURA (desde el lado, SIN profundidad)
+      camera.position.set(length + Math.max(width, height), center.y, center.z)
+      camera.lookAt(center.x, center.y, center.z)
+      camera.up.set(0, 1, 0)
+      camera.rotation.z = 0
+      
+      if (camera.isOrthographicCamera) {
+        camera.zoom = 8
+        camera.updateProjectionMatrix()
+      }
+    }
+    else if (viewMode === '3D') {
+      // ✅ VISTA PERSPECTIVA 3D
+      camera.position.set(length * 1.2, height * 1.5, width * 1.2)
+      camera.lookAt(center)
+      camera.up.set(0, 1, 0)
+    }
+
+    // Actualizar controles
+    if (controls) {
+      controls.enableRotate = (viewMode === '3D')
+      controls.target.copy(viewMode === 'Planta' ? new THREE.Vector3(center.x, 0, center.z) : center)
+      controls.update()
+    }
+
+  }, [viewMode, dimensions, camera, controls])
 
   const highlightColor = isSelected ? '#2196f3' : (hovered ? '#64b5f6' : null)
 

@@ -8,7 +8,7 @@ import useCalculationsStore from './stores/useCalculationsStore';
 
 import Warehouse3D from './components/Warehouse3D.jsx';
 import Sidebar from './components/Sidebar.jsx';
-import RightPanel from './components/RightPanel.jsx';
+import FloatingPanel from './components/FloatingPanel.jsx';
 import AddElementModal from './components/AddElementModal.jsx';
 import Notification from './components/Notification.jsx';
 
@@ -27,12 +27,12 @@ export default function App() {
     <div className="app">
       <header className="header-compact">
         <div className="logo-section">
-          <img 
-            src="https://unitnave.com/wp-content/uploads/2024/06/logo-unitnave-blanco.svg" 
-            alt="UNITNAVE" 
-            className="logo"
-            onError={(e) => { e.target.style.display = 'none'; }}
-          />
+          {/* Logo SVG inline para asegurar que siempre funcione */}
+          <svg width="120" height="32" viewBox="0 0 120 32" xmlns="http://www.w3.org/2000/svg">
+            <text x="10" y="24" fontFamily="Arial, sans-serif" fontSize="20" fontWeight="bold" fill="white">
+              UNITNAVE
+            </text>
+          </svg>
           <h1>DESIGNER</h1>
         </div>
 
@@ -61,7 +61,6 @@ export default function App() {
             shadows
             style={{ background: '#263238' }}
           >
-            {/* Alternar cámaras */}
             {is3DView ? (
               <PerspectiveCamera makeDefault position={[50, 50, 50]} fov={50} />
             ) : (
@@ -70,19 +69,17 @@ export default function App() {
 
             <Warehouse3D />
             
-            {/* Controles mejorados */}
             <OrbitControls 
               enableDamping 
               dampingFactor={0.05}
               minDistance={10}
               maxDistance={200}
-              minZoom={5}  // Límites de zoom para evitar extremos
+              minZoom={5}
               maxZoom={50}
               enableRotate={is3DView} 
-              enablePan={true}  // Siempre pan para mover en 2D
+              enablePan={true}
               enableZoom={true}
-              screenSpacePanning={!is3DView}  // Pan como en dibujo 2D
-              // Opcional: Limita ángulos en 3D para no "voltear" la vista
+              screenSpacePanning={!is3DView}
               minPolarAngle={0}
               maxPolarAngle={Math.PI / 2}
             />
@@ -90,7 +87,7 @@ export default function App() {
 
           {!is3DView && (
             <div className="view-mode-indicator">
-              📐 VISTA TÉCNICA: {viewMode} (2D - Zoom y Pan)
+              📐 VISTA TÉCNICA: {viewMode} (2D)
             </div>
           )}
           
@@ -101,7 +98,8 @@ export default function App() {
           )}
         </div>
 
-        <RightPanel />
+        {/* Panel flotante en lugar de barra fija */}
+        <FloatingPanel />
       </div>
 
       <AddElementModal />
