@@ -681,6 +681,20 @@ async def shutdown_event():
     logger.info(f"   - Diseños guardados: {len(designs_db)}")
     logger.info(f"   - Renders procesados: {len(render_jobs)}")
 
+@app.post("/api/optimize/scenarios", response_model=Dict[str, OptimizationResult])
+async def optimize_multi_scenario(input_data: WarehouseInput):
+    """
+    🎯 MULTI-ESCENARIO: Genera 3 variantes (Contrapesada/Retráctil/VNA)
+    """
+    try:
+        from optimizer import generate_multi_scenario_layouts
+        
+        scenarios = generate_multi_scenario_layouts(input_data)
+        return scenarios
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== MAIN ====================
 
 if __name__ == "__main__":

@@ -20,7 +20,6 @@ export default function Warehouse3D() {
   const clickPoints = useRef([])
   const planeRef = useRef()
 
-  // Estado para arrastrar
   const dragState = useRef({
     isDragging: false,
     draggedElement: null,
@@ -112,11 +111,13 @@ export default function Warehouse3D() {
     }
   }, [measurementMode, gl])
 
-  // --- CÁMARA CORREGIDA ---
+  // ⭐ CÁMARA CORREGIDA - USA clientWidth/clientHeight
   useEffect(() => {
     const { length, width, height } = dimensions
     const centerX = length / 2
     const centerZ = width / 2
+    
+    // ✅ CORRECCIÓN: Obtener aspect ratio del canvas real
     const canvasWidth = gl.domElement.clientWidth
     const canvasHeight = gl.domElement.clientHeight
     const aspect = canvasWidth / canvasHeight
@@ -130,7 +131,6 @@ export default function Warehouse3D() {
     }
     
     if (viewMode === 'Planta') {
-      // Vista desde arriba, mirando hacia abajo
       const targetY = 0
       
       if (controls) {
@@ -138,12 +138,12 @@ export default function Warehouse3D() {
       }
       
       camera.position.set(centerX, 80, centerZ)
-      camera.up.set(0, 0, -1) // Y apunta hacia adelante en planta
+      camera.up.set(0, 0, -1)
       camera.lookAt(centerX, targetY, centerZ)
       
       if (camera.isOrthographicCamera) {
         const maxDim = Math.max(length, width)
-        const viewSize = maxDim * 1.2 // Añadir margen
+        const viewSize = maxDim * 1.2
         
         camera.left = -viewSize * aspect / 2
         camera.right = viewSize * aspect / 2
@@ -154,7 +154,6 @@ export default function Warehouse3D() {
       }
     } 
     else if (viewMode === 'Alzado') {
-      // Vista frontal (desde el frente mirando hacia atrás)
       const targetY = height / 2
       
       if (controls) {
@@ -178,7 +177,6 @@ export default function Warehouse3D() {
       }
     }
     else if (viewMode === 'Perfil') {
-      // Vista lateral (desde el lateral derecho mirando hacia la izquierda)
       const targetY = height / 2
       
       if (controls) {
@@ -202,7 +200,6 @@ export default function Warehouse3D() {
       }
     }
     else if (viewMode === '3D') {
-      // Vista 3D isométrica
       const targetY = height / 2
       
       if (controls) {
@@ -222,7 +219,6 @@ export default function Warehouse3D() {
       }
     }
 
-    // Actualizar controles AL FINAL
     if (controls) {
       controls.update()
     }
@@ -335,15 +331,17 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
 
   const highlightColor = isSelected ? '#2196f3' : (hovered ? '#64b5f6' : null)
 
+  // ✅ CORRECCIÓN: Lógica específica por tipo como en código antiguo
   let w, d
   if (element.type === 'shelf') { 
-    w = element.dimensions.length || 1; 
+    w = element.dimensions.length || 1
     d = element.dimensions.depth || 1 
   } else if (element.type === 'office') { 
-    w = element.dimensions.largo || 1; 
+    w = element.dimensions.largo || 1
     d = element.dimensions.ancho || 1 
   } else { 
-    w = element.dimensions.width || 1; 
+    // dock, operational_zone, service_room, technical_room
+    w = element.dimensions.width || 1
     d = element.dimensions.depth || 3 
   }
 
@@ -365,6 +363,11 @@ function DraggableElement({ element, isSelected, isDragging, onPointerDown, pall
       {element.type === 'shelf' && <ShelfMesh element={element} customColor={highlightColor} pallet={pallet} isSelected={isSelected && !isDragging} viewMode={viewMode} />}
       {element.type === 'office' && <OfficeMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
       {element.type === 'dock' && <DockMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
+      
+      {/* Nuevos elementos del optimizer V3 */}
+      {element.type === 'service_room' && <ServiceRoomMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
+      {element.type === 'operational_zone' && <OperationalZoneMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
+      {element.type === 'technical_room' && <TechnicalRoomMesh element={element} customColor={highlightColor} isSelected={isSelected && !isDragging} />}
     </group>
   )
 }
@@ -389,7 +392,7 @@ function ShelfMesh({ element, customColor, pallet, isSelected, viewMode }) {
       
       {isSelected && (
         <Html position={[length/2, height + 0.5, depth/2]} center>
-          <div className="capacity-label">📦 {totalPallets} pales</div>
+          <div className="capacity-label">📦 {totalPallets} palets</div>
         </Html>
       )}
     </group>
@@ -398,9 +401,11 @@ function ShelfMesh({ element, customColor, pallet, isSelected, viewMode }) {
 
 function OfficeMesh({ element, customColor, isSelected }) {
   const { largo, ancho, alto } = element.dimensions
+  const elevation = element.properties?.elevation || 0
   const color = customColor || '#1e88e5'
+  
   return (
-    <group>
+    <group position={[0, elevation, 0]}>
       <mesh position={[largo/2, alto/2, ancho/2]} castShadow receiveShadow>
         <boxGeometry args={[largo, alto, ancho]} />
         <meshPhysicalMaterial color={color} transparent opacity={0.5} />
@@ -421,6 +426,7 @@ function OfficeMesh({ element, customColor, isSelected }) {
 function DockMesh({ element, customColor, isSelected }) {
   const { width, height, depth, maneuverZone } = element.dimensions
   const color = customColor || '#616161'
+  
   return (
     <group>
       <mesh position={[width/2, height/2, depth/2]} castShadow>
@@ -435,6 +441,73 @@ function DockMesh({ element, customColor, isSelected }) {
       {isSelected && (
         <Html position={[width/2, height+1, depth+maneuverZone/2]} center>
           <div className="element-label maneuver">🚛 MUELLE</div>
+        </Html>
+      )}
+    </group>
+  )
+}
+
+// ⭐ NUEVOS COMPONENTES PARA ELEMENTOS DEL OPTIMIZER V3
+
+function ServiceRoomMesh({ element, customColor, isSelected }) {
+  const { largo, ancho, alto } = element.dimensions
+  const elevation = element.properties?.elevation || 0
+  const label = element.properties?.label || 'Servicio'
+  const color = customColor || '#4caf50'
+  
+  return (
+    <group position={[0, elevation, 0]}>
+      <mesh position={[largo/2, alto/2, ancho/2]} castShadow>
+        <boxGeometry args={[largo, ancho, alto]} />
+        <meshStandardMaterial color={color} roughness={0.6} />
+      </mesh>
+      {isSelected && (
+        <Html position={[largo/2, alto+0.5, ancho/2]} center>
+          <div className="element-label">🚻 {label}</div>
+        </Html>
+      )}
+    </group>
+  )
+}
+
+function OperationalZoneMesh({ element, customColor, isSelected }) {
+  const { largo, ancho } = element.dimensions
+  const label = element.properties?.label || 'Zona Operativa'
+  const color = customColor || '#ffeb3b'
+  
+  return (
+    <group>
+      <mesh position={[largo/2, 0.05, ancho/2]} rotation={[-Math.PI/2, 0, 0]}>
+        <planeGeometry args={[largo, ancho]} />
+        <meshBasicMaterial color={color} transparent opacity={0.3} side={THREE.DoubleSide} />
+      </mesh>
+      <lineSegments position={[largo/2, 0.06, ancho/2]}>
+        <edgesGeometry args={[new THREE.PlaneGeometry(largo, ancho)]} />
+        <lineBasicMaterial color="#f57f17" linewidth={2} />
+      </lineSegments>
+      {isSelected && (
+        <Html position={[largo/2, 1, ancho/2]} center>
+          <div className="element-label">📦 {label}</div>
+        </Html>
+      )}
+    </group>
+  )
+}
+
+function TechnicalRoomMesh({ element, customColor, isSelected }) {
+  const { largo, ancho, alto } = element.dimensions
+  const label = element.properties?.label || 'Técnica'
+  const color = customColor || '#9e9e9e'
+  
+  return (
+    <group>
+      <mesh position={[largo/2, alto/2, ancho/2]} castShadow>
+        <boxGeometry args={[largo, alto, ancho]} />
+        <meshStandardMaterial color={color} metalness={0.5} roughness={0.3} />
+      </mesh>
+      {isSelected && (
+        <Html position={[largo/2, alto+0.5, ancho/2]} center>
+          <div className="element-label">⚡ {label}</div>
         </Html>
       )}
     </group>

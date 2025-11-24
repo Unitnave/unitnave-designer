@@ -27,7 +27,6 @@ export default function App() {
     <div className="app">
       <header className="header-compact">
         <div className="logo-section">
-          {/* Logo SVG inline para asegurar que siempre funcione */}
           <svg width="120" height="32" viewBox="0 0 120 32" xmlns="http://www.w3.org/2000/svg">
             <text x="10" y="24" fontFamily="Arial, sans-serif" fontSize="20" fontWeight="bold" fill="white">
               UNITNAVE
@@ -70,6 +69,7 @@ export default function App() {
             <Warehouse3D />
             
             <OrbitControls 
+              makeDefault
               enableDamping 
               dampingFactor={0.05}
               minDistance={10}
@@ -98,7 +98,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Panel flotante en lugar de barra fija */}
         <FloatingPanel />
       </div>
 

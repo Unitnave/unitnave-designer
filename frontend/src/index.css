@@ -94,6 +94,7 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
+  position: relative;
 }
 
 /* ==================== SIDEBAR LEFT ==================== */
@@ -155,6 +156,19 @@ body {
   border-left: 4px solid #616161;
 }
 
+/* ⭐ NUEVO: Estilos para elementos del optimizer V3 */
+.btn-compact.service {
+  border-left: 4px solid #4caf50;
+}
+
+.btn-compact.operational {
+  border-left: 4px solid #ffeb3b;
+}
+
+.btn-compact.technical {
+  border-left: 4px solid #9e9e9e;
+}
+
 .label-compact {
   display: flex;
   flex-direction: column;
@@ -214,14 +228,7 @@ body {
 
 /* ==================== SIDEBAR RIGHT ==================== */
 .sidebar-right {
-  width: 280px;
-  background: #fafafa;
-  border-left: 1px solid #e0e0e0;
-  overflow-y: auto;
-}
-
-.sidebar-right.compact {
-  width: 260px;
+  display: none; /* Deshabilitado - usando floating panel */
 }
 
 .btn-primary-compact,
@@ -304,6 +311,29 @@ body {
   color: #856404;
   margin-top: 4px;
   border-radius: 4px;
+}
+
+/* ⭐ NUEVO: Estilos para optimizer V3 stats */
+.optimization-stats {
+  background: #e3f2fd;
+  border-left: 3px solid #1976d2;
+  padding: 10px;
+  font-size: 11px;
+  color: #0d47a1;
+  margin-top: 8px;
+  border-radius: 4px;
+}
+
+.optimization-stats h4 {
+  font-size: 12px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.optimization-stats .stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
 }
 
 /* ==================== MODAL ==================== */
@@ -545,7 +575,7 @@ body {
   background: rgba(158, 158, 158, 0.95);
 }
 
-/* ==================== FLOATING PANEL (NUEVO) ==================== */
+/* ==================== FLOATING PANEL ==================== */
 .floating-panel {
   position: absolute;
   top: 60px;
@@ -603,12 +633,127 @@ body {
   text-transform: uppercase;
 }
 
-/* Actualizar main-content */
-.main-content {
-  position: relative;
+/* ⭐ NUEVAS MEJORAS OPCIONALES */
+
+/* Scrollbar styling */
+.floating-panel-content::-webkit-scrollbar,
+.elements-list-compact::-webkit-scrollbar,
+.sidebar-left::-webkit-scrollbar {
+  width: 6px;
 }
 
-/* Quitar sidebar derecha si existe */
-.sidebar-right {
-  display: none;
+.floating-panel-content::-webkit-scrollbar-track,
+.elements-list-compact::-webkit-scrollbar-track,
+.sidebar-left::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.floating-panel-content::-webkit-scrollbar-thumb,
+.elements-list-compact::-webkit-scrollbar-thumb,
+.sidebar-left::-webkit-scrollbar-thumb {
+  background: #1976d2;
+  border-radius: 3px;
+}
+
+.floating-panel-content::-webkit-scrollbar-thumb:hover,
+.elements-list-compact::-webkit-scrollbar-thumb:hover,
+.sidebar-left::-webkit-scrollbar-thumb:hover {
+  background: #1565c0;
+}
+
+/* Loading spinner (opcional para futuras features) */
+.loading-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid rgba(25, 118, 210, 0.3);
+  border-radius: 50%;
+  border-top-color: #1976d2;
+  animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Tooltip (opcional) */
+.tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.tooltip .tooltiptext {
+  visibility: hidden;
+  width: 200px;
+  background-color: rgba(0, 0, 0, 0.9);
+  color: #fff;
+  text-align: center;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 11px;
+  position: absolute;
+  z-index: 1000;
+  bottom: 125%;
+  left: 50%;
+  margin-left: -100px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.tooltip:hover .tooltiptext {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Badge para notificaciones de capacidad */
+.capacity-badge {
+  display: inline-block;
+  background: #4caf50;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: bold;
+  margin-left: 6px;
+}
+
+.capacity-badge.warning {
+  background: #ff9800;
+}
+
+.capacity-badge.error {
+  background: #f44336;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+  .sidebar-left {
+    width: 240px;
+  }
+  
+  .floating-panel {
+    width: 280px;
+  }
+}
+
+@media (max-width: 768px) {
+  .header-compact {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+  
+  .view-controls {
+    order: 3;
+    width: 100%;
+    margin-top: 8px;
+  }
+  
+  .sidebar-left {
+    width: 200px;
+  }
+  
+  .floating-panel {
+    width: 260px;
+    top: 120px;
+  }
 }
