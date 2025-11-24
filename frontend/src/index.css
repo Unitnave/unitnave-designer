@@ -6,7 +6,7 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-  overflow: hidden;
+  overflow: auto; /* ✅ Permite scroll por defecto (para el Wizard) */
 }
 
 .app {
@@ -14,8 +14,8 @@ body {
   flex-direction: column;
   height: 100vh;
   width: 100vw;
+  overflow: hidden; /* ✅ Bloquea scroll SOLO en modo manual */
 }
-
 /* ==================== HEADER ==================== */
 .header-compact {
   background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
