@@ -38,13 +38,6 @@ export default function useWarehouseDesign() {
       optimizationResult: result
     }));
   }, [designState.formData, setDimensions, setElements]);
-    
-    setDesignState(prev => ({ 
-      ...prev, 
-      currentStep: 'results',
-      optimizationResult: result
-    }));
-  }, [designState.formData, setDimensions, setElements]);
 
   const selectScenario = useCallback((scenario) => {
     setDesignState(prev => ({ ...prev, selectedScenario: scenario }));
