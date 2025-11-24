@@ -20,7 +20,7 @@ export default function WizardStepper({ onComplete }) {
     machinery: 'retractil',
     pallet_type: 'EUR',
     workers: null,
-    activity_type: 'warehouse'
+    activity_type: 'ecommerce'
   });
 
   const handleNext = () => {

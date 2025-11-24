@@ -177,17 +177,17 @@ export default function Step2Configuration({ data, onChange }) {
             onChange={(e) => onChange('activity_type', e.target.value)}
           >
             <FormControlLabel 
-              value="warehouse" 
+              value="industrial" 
               control={<Radio />} 
               label="Almacén General" 
             />
             <FormControlLabel 
-              value="distribution" 
+              value="3pl" 
               control={<Radio />} 
               label="Centro Distribución" 
             />
             <FormControlLabel 
-              value="production" 
+              value="industrial" 
               control={<Radio />} 
               label="Producción + Almacén" 
             />
