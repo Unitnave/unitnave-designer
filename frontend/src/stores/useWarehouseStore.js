@@ -18,6 +18,12 @@ const useWarehouseStore = create((set) => ({
 
   setDimensions: (dims) => set({ dimensions: dims }),
 
+  // ✅ NUEVO: Función necesaria para que el optimizador guarde los resultados
+  setElements: (newElements) => set({ elements: newElements }),
+
+  // ✅ NUEVO: Función necesaria para limpiar el diseño antes de generar uno nuevo
+  clearWarehouse: () => set({ elements: [] }),
+
   // ✅ VALIDACIÓN CORREGIDA
   addElement: (element) => set((state) => {
     const { length, width } = state.dimensions
