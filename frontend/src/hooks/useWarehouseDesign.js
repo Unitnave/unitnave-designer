@@ -18,16 +18,26 @@ export default function useWarehouseDesign() {
     setDesignState(prev => ({ ...prev, currentStep: 'optimizing' }));
   }, []);
 
-  const setOptimizationResult = useCallback((result) => {
-    // Actualizar store de Zustand
-    if (result.elements) {
+  // Aceptamos 'inputData' como segundo parámetro opcional
+  const setOptimizationResult = useCallback((result, inputData) => {
+    // Usamos el dato pasado directamente O el del estado si no se pasa
+    const dataToUse = inputData || designState.formData;
+
+    if (result.elements && dataToUse) {
       setDimensions({
-        length: designState.formData.length,
-        width: designState.formData.width,
-        height: designState.formData.height
+        length: dataToUse.length,
+        width: dataToUse.width,
+        height: dataToUse.height
       });
       setElements(result.elements);
     }
+    
+    setDesignState(prev => ({ 
+      ...prev, 
+      currentStep: 'results',
+      optimizationResult: result
+    }));
+  }, [designState.formData, setDimensions, setElements]);
     
     setDesignState(prev => ({ 
       ...prev, 

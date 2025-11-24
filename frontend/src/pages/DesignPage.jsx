@@ -30,8 +30,9 @@ export default function DesignPage() {
     try {
       // Generar escenario único primero
       const result = await optimize(formData);
-      setOptimizationResult(result);
-
+      // Aceptamos 'inputData' como segundo parámetro opcional
+  
+      setOptimizationResult(result, formData);
       // Generar multi-escenario en background
       const scenariosData = await optimizeScenarios(formData);
       setScenarios(scenariosData);
