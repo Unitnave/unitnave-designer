@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Container, Box, CircularProgress, Alert, Snackbar } from '@mui/material';
+import { Container, Box, CircularProgress, Alert, Snackbar, Typography } from '@mui/material';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import Header from '../components/layout/Header';
