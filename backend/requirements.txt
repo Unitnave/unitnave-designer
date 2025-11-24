@@ -1,31 +1,15 @@
-# Framework
 fastapi==0.115.0
 uvicorn[standard]==0.27.0
 pydantic==2.5.3
-python-multipart==0.0.6
-
-# Computación científica (NUEVO)
+python-multipart==0.0.9
 numpy==1.26.0
-
-# Base de datos (PostgreSQL producción)
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 alembic==1.13.1
-
-# Blender rendering (mantener)
 Pillow==10.2.0
-
-# PDF Generation
 reportlab==4.0.9
 PyPDF2==3.0.1
-
-# Utilidades
 python-dotenv==1.0.0
 httpx==0.26.0
 aiofiles==23.2.1
-
-# Monitoreo
 python-json-logger==2.0.7
-
-# CORS
-python-multipart==0.0.9
