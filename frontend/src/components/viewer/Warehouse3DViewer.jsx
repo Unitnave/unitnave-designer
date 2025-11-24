@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import { Box, Paper, ToggleButtonGroup, ToggleButton, Typography } from '@mui/material';
-import { View3D, ViewInAr, GridOn, Layers } from '@mui/icons-material';
+import { ThreeDRotation, ViewInAr, GridOn, Layers } from '@mui/icons-material';
 import { useState } from 'react';
 import Warehouse3D from '../Warehouse3D';
 import useUIStore from '../../stores/useUIStore';
@@ -25,7 +25,7 @@ export default function Warehouse3DViewer() {
           size="small"
         >
           <ToggleButton value="3D">
-            <View3D sx={{ mr: 1 }} />
+            <ThreeDRotation sx={{ mr: 1 }} />
             3D
           </ToggleButton>
           <ToggleButton value="Planta">
