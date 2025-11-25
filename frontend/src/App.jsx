@@ -1,21 +1,25 @@
 /**
  * UNITNAVE Designer - App Principal v4.0
- * LIMPIO Y PROFESIONAL
+ * EQUILIBRADO: Funcionalidad completa pero limpia
  */
 
-import { useState } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
+import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei'
 import './index.css'
 
 // Stores
 import useWarehouseStore from './stores/useWarehouseStore'
 import useUIStore from './stores/useUIStore'
+import useCalculationsStore from './stores/useCalculationsStore'
 
 // Componentes
 import Warehouse3DPro from './components/Warehouse3DPro'
 import Sidebar from './components/Sidebar'
+import FloatingPanel from './components/FloatingPanel'
 import AddElementModal from './components/AddElementModal'
+import Notification from './components/Notification'
+import LegendPanel from './components/ui/LegendPanel'
 
 // Wizard
 import DesignPage from './pages/DesignPage'
@@ -43,7 +47,19 @@ export default function App() {
             fontSize: '24px',
             cursor: 'pointer',
             boxShadow: '0 6px 20px rgba(245, 158, 11, 0.4)',
-            zIndex: 9999
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'transform 0.2s, box-shadow 0.2s'
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.transform = 'scale(1.1)'
+            e.currentTarget.style.boxShadow = '0 8px 25px rgba(245, 158, 11, 0.5)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.transform = 'scale(1)'
+            e.currentTarget.style.boxShadow = '0 6px 20px rgba(245, 158, 11, 0.4)'
           }}
           title="Modo Manual"
         >
@@ -57,8 +73,32 @@ export default function App() {
 }
 
 function ManualDesignMode({ onSwitchToWizard }) {
-  const { dimensions } = useWarehouseStore()
+  const { dimensions, elements } = useWarehouseStore()
   const { viewMode, setViewMode } = useUIStore()
+  const { calculateCapacity } = useCalculationsStore()
+  
+  const [showLegend, setShowLegend] = useState(true)
+  const [isCalculating, setIsCalculating] = useState(false)
+
+  // Calcular automáticamente al cambiar elementos
+  useEffect(() => {
+    if (elements.length > 0) {
+      calculateCapacity(dimensions, elements)
+    }
+  }, [elements, dimensions, calculateCapacity])
+
+  const handleCalculate = useCallback(async () => {
+    if (elements.length === 0) return
+    
+    setIsCalculating(true)
+    try {
+      await calculateCapacity(dimensions, elements)
+    } catch (e) {
+      console.error('Error:', e)
+    } finally {
+      setIsCalculating(false)
+    }
+  }, [dimensions, elements, calculateCapacity])
 
   const is3DView = viewMode === '3D'
 
@@ -101,7 +141,9 @@ function ManualDesignMode({ onSwitchToWizard }) {
         <div style={{ display: 'flex', gap: '6px' }}>
           {[
             { id: '3D', icon: '🎮', label: '3D' },
-            { id: 'Planta', icon: '📐', label: 'Planta' }
+            { id: 'Planta', icon: '📐', label: 'Planta' },
+            { id: 'Alzado', icon: '🏗️', label: 'Alzado' },
+            { id: 'Perfil', icon: '📊', label: 'Perfil' }
           ].map(v => (
             <button
               key={v.id}
@@ -119,7 +161,8 @@ function ManualDesignMode({ onSwitchToWizard }) {
                 fontWeight: viewMode === v.id ? '600' : '400',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '6px',
+                transition: 'all 0.2s'
               }}
             >
               <span>{v.icon}</span>
@@ -128,90 +171,129 @@ function ManualDesignMode({ onSwitchToWizard }) {
           ))}
         </div>
 
-        {/* Botón Optimizar */}
-        <button
-          onClick={onSwitchToWizard}
-          style={{
-            padding: '12px 24px',
-            background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-            border: 'none',
-            borderRadius: '8px',
-            color: 'white',
-            cursor: 'pointer',
-            fontSize: '15px',
-            fontWeight: '600',
-            boxShadow: '0 4px 15px rgba(59, 130, 246, 0.4)'
-          }}
-        >
-          ⚡ Optimizar
-        </button>
+        {/* Acciones */}
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <button
+            onClick={() => setShowLegend(!showLegend)}
+            style={{
+              padding: '10px 16px',
+              background: 'rgba(255,255,255,0.1)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: '8px',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: '13px'
+            }}
+          >
+            📊 {showLegend ? 'Ocultar' : 'Mostrar'} Info
+          </button>
+
+          <button
+            onClick={handleCalculate}
+            disabled={isCalculating || elements.length === 0}
+            style={{
+              padding: '10px 20px',
+              background: elements.length === 0 ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              border: 'none',
+              borderRadius: '8px',
+              color: 'white',
+              cursor: elements.length === 0 ? 'not-allowed' : (isCalculating ? 'wait' : 'pointer'),
+              fontSize: '14px',
+              fontWeight: '600',
+              boxShadow: elements.length === 0 ? 'none' : '0 4px 15px rgba(16, 185, 129, 0.3)',
+              opacity: (isCalculating || elements.length === 0) ? 0.5 : 1
+            }}
+          >
+            {isCalculating ? '⏳ Calculando...' : '🧮 Calcular'}
+          </button>
+
+          <button
+            onClick={onSwitchToWizard}
+            style={{
+              padding: '10px 20px',
+              background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+              border: 'none',
+              borderRadius: '8px',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '600',
+              boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)'
+            }}
+          >
+            ⚡ Optimizar
+          </button>
+        </div>
       </header>
 
-      {/* Contenido Principal */}
-      <div style={{ 
-        position: 'relative', 
-        height: 'calc(100vh - 60px)',
-        background: '#ffffff'
-      }}>
+      {/* Main */}
+      <div className="main-content">
         <Sidebar />
+
+        <div className="canvas-container" style={{ position: 'relative', flex: 1 }}>
+          <Canvas
+            shadows
+            style={{ background: '#ffffff' }}
+            gl={{ preserveDrawingBuffer: true, antialias: true, alpha: false }}
+          >
+            <color attach="background" args={['#ffffff']} />
+            <fog attach="fog" args={['#ffffff', 100, 300]} />
+
+            {is3DView ? (
+              <PerspectiveCamera
+                makeDefault
+                position={[dimensions.length * 0.8, dimensions.height * 2, dimensions.width * 0.8]}
+                fov={50}
+                near={0.1}
+                far={1000}
+              />
+            ) : (
+              <OrthographicCamera
+                makeDefault
+                position={[0, 100, 0]}
+                zoom={8}
+                near={-500}
+                far={500}
+              />
+            )}
+
+            <OrbitControls
+              enableDamping
+              dampingFactor={0.05}
+              minDistance={5}
+              maxDistance={300}
+              maxPolarAngle={Math.PI / 2}
+            />
+
+            {/* Iluminación mejorada para fondo blanco */}
+            <ambientLight intensity={0.7} />
+            <directionalLight
+              position={[50, 100, 50]}
+              intensity={0.8}
+              castShadow
+              shadow-mapSize-width={2048}
+              shadow-mapSize-height={2048}
+              shadow-camera-far={300}
+              shadow-camera-left={-100}
+              shadow-camera-right={100}
+              shadow-camera-top={100}
+              shadow-camera-bottom={-100}
+            />
+            <directionalLight position={[-50, 50, -50]} intensity={0.4} />
+            <hemisphereLight args={['#ffffff', '#e2e8f0', 0.3]} />
+
+            <Warehouse3DPro />
+          </Canvas>
+
+          {showLegend && <LegendPanel />}
+          <FloatingPanel />
+        </div>
+
         <AddElementModal />
-
-        {/* Canvas 3D */}
-        <Canvas
-          shadows
-          gl={{ 
-            preserveDrawingBuffer: true, 
-            antialias: true, 
-            alpha: true 
-          }}
-          style={{ 
-            background: '#ffffff',
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0
-          }}
-        >
-          <color attach="background" args={['#ffffff']} />
-          <fog attach="fog" args={['#ffffff', 50, 200]} />
-
-          {/* Iluminación */}
-          <ambientLight intensity={0.6} />
-          <directionalLight
-            position={[50, 100, 50]}
-            intensity={0.8}
-            castShadow
-            shadow-mapSize-width={2048}
-            shadow-mapSize-height={2048}
-            shadow-camera-far={300}
-            shadow-camera-left={-100}
-            shadow-camera-right={100}
-            shadow-camera-top={100}
-            shadow-camera-bottom={-100}
-          />
-          <directionalLight position={[-50, 50, -50]} intensity={0.3} />
-
-          {/* Cámara */}
-          {is3DView ? (
-            <PerspectiveCamera makeDefault position={[60, 40, 60]} fov={50} />
-          ) : (
-            <PerspectiveCamera makeDefault position={[dimensions.length / 2, 80, dimensions.width / 2]} fov={50} />
-          )}
-
-          <OrbitControls
-            enableDamping
-            dampingFactor={0.05}
-            minDistance={10}
-            maxDistance={200}
-            maxPolarAngle={Math.PI / 2}
-          />
-
-          {/* Escena */}
-          <Warehouse3DPro viewMode={viewMode} />
-        </Canvas>
+        <Notification />
       </div>
     </div>
   )
 }
+
 

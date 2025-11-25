@@ -1,10 +1,11 @@
 /**
  * UNITNAVE Designer - Visualizador 3D Profesional
- * LIMPIO: Paredes transparentes, fondo blanco, sin mensajes
+ * FINAL: Paredes transparentes, colores claros, funcionalidad completa
  */
 
-import { useRef, useMemo } from 'react'
-import { useThree } from '@react-three/fiber'
+import { useRef, useEffect, useState, useMemo } from 'react'
+import { useThree, useFrame } from '@react-three/fiber'
+import { Html, Line } from '@react-three/drei'
 import * as THREE from 'three'
 
 import useWarehouseStore from '../stores/useWarehouseStore'
@@ -19,21 +20,22 @@ import DetailedServiceRooms from './3d/DetailedServiceRooms'
 import DetailedOperationalZone from './3d/DetailedOperationalZone'
 import IndustrialFloor from './3d/IndustrialFloor'
 
-// Colores CLAROS
+// Colores CLAROS y profesionales
 const STRUCTURE_COLORS = {
   wallExterior: '#e2e8f0',    // Gris muy claro
   wallInterior: '#f8fafc',    // Casi blanco
-  wallCut: '#fca5a5',         // Rojo suave
+  wallCut: '#fca5a5',         // Rojo suave para corte
   column: '#cbd5e1',          // Columnas claras
   beam: '#94a3b8',            // Vigas claras
   roofFrame: '#64748b',       // Cerchas claras
 }
 
 export default function Warehouse3DPro() {
-  const { dimensions, elements, updateElement } = useWarehouseStore()
-  const { viewMode, selectedElement, selectElement } = useUIStore()
+  const { dimensions, elements, columns, updateElement } = useWarehouseStore()
+  const { viewMode, selectedElement, selectElement, previewElement } = useUIStore()
+  const { palletHeight } = useCalculationsStore()
 
-  const { gl, controls } = useThree()
+  const { camera, gl, controls } = useThree()
   const groupRef = useRef()
 
   // Estado de drag & drop
@@ -94,7 +96,6 @@ export default function Warehouse3DPro() {
     const newX = e.point.x + dragState.current.offset.x
     const newZ = e.point.z + dragState.current.offset.z
     
-    // Limitar a los bordes de la nave
     const clampedX = Math.max(0, Math.min(dimensions.length, newX))
     const clampedZ = Math.max(0, Math.min(dimensions.width, newZ))
     
@@ -130,9 +131,9 @@ export default function Warehouse3DPro() {
 
       {/* ========== ESTRUCTURA DE LA NAVE ========== */}
       
-      {/* Paredes - TRANSPARENTES */}
+      {/* Paredes - TRANSPARENTES Y CLARAS */}
       <group>
-        {/* Pared norte (fondo) */}
+        {/* Pared norte */}
         <mesh position={[dimensions.length / 2, cutHeight / 2, 0]} castShadow receiveShadow>
           <boxGeometry args={[dimensions.length, cutHeight, 0.2]} />
           <meshStandardMaterial 
@@ -144,7 +145,7 @@ export default function Warehouse3DPro() {
           />
         </mesh>
 
-        {/* Pared sur (frente) */}
+        {/* Pared sur */}
         <mesh position={[dimensions.length / 2, cutHeight / 2, dimensions.width]} castShadow receiveShadow>
           <boxGeometry args={[dimensions.length, cutHeight, 0.2]} />
           <meshStandardMaterial 
@@ -180,7 +181,7 @@ export default function Warehouse3DPro() {
           />
         </mesh>
 
-        {/* Línea de corte superior (efecto maqueta) */}
+        {/* Líneas de corte superior (efecto maqueta) */}
         <mesh position={[dimensions.length / 2, cutHeight, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <planeGeometry args={[dimensions.length + 0.4, 0.1]} />
           <meshStandardMaterial color={STRUCTURE_COLORS.wallCut} />
@@ -199,7 +200,7 @@ export default function Warehouse3DPro() {
         </mesh>
       </group>
 
-      {/* Columnas estructurales */}
+      {/* Columnas estructurales - CLARAS Y SEMI-TRANSPARENTES */}
       <group>
         {Array.from({ length: Math.floor(dimensions.length / 8) + 1 }).map((_, i) => 
           Array.from({ length: Math.floor(dimensions.width / 8) + 1 }).map((_, j) => {
@@ -214,7 +215,7 @@ export default function Warehouse3DPro() {
                   color={STRUCTURE_COLORS.column} 
                   roughness={0.6}
                   transparent
-                  opacity={0.6}
+                  opacity={0.5}
                 />
               </mesh>
             )
@@ -222,7 +223,7 @@ export default function Warehouse3DPro() {
         )}
       </group>
 
-      {/* Cerchas de cubierta (visibles desde arriba) */}
+      {/* Cerchas de cubierta */}
       <group position={[0, dimensions.height - 0.3, 0]}>
         {Array.from({ length: Math.floor(dimensions.length / 8) }).map((_, i) => (
           <mesh key={`truss-${i}`} position={[(i + 1) * 8, 0, dimensions.width / 2]} castShadow>
@@ -271,6 +272,20 @@ export default function Warehouse3DPro() {
           }
         })}
       </group>
+
+      {/* Elemento en preview (cuando se está añadiendo) */}
+      {previewElement && (
+        <group position={[previewElement.position.x, 0, previewElement.position.y]}>
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[
+              previewElement.dimensions?.length || 5,
+              1,
+              previewElement.dimensions?.width || 5
+            ]} />
+            <meshStandardMaterial color="#3b82f6" transparent opacity={0.5} wireframe />
+          </mesh>
+        </group>
+      )}
 
       {/* Grid de referencia (solo en vista planta) */}
       {viewMode === 'Planta' && (
