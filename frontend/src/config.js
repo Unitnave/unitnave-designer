@@ -1,4 +1,7 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'https://unitnave-designer-production.up.railway.app';
+// frontend/src/config.js
+
+// 🔴 CAMBIO IMPORTANTE: Quitamos "import.meta.env..." para forzar producción
+export const API_URL = 'https://unitnave-designer-production.up.railway.app';
 
 export const config = {
   apiUrl: API_URL,
@@ -6,9 +9,9 @@ export const config = {
     calculate: '/api/calculate',
     render: '/api/render',
     designs: '/api/designs',
-    optimize: '/api/optimize',              // ⭐ NUEVO
-    optimizeScenarios: '/api/optimize/scenarios', // ⭐ NUEVO
-    health: '/health'
+    optimize: '/api/optimize',
+    optimizeScenarios: '/api/optimize/scenarios',
+    health: '/api/health'
   }
 };
 
