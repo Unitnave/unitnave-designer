@@ -1,209 +1,224 @@
+/**
+ * UNITNAVE Designer - Calculations Store v4.0
+ * 
+ * Cálculos de capacidad:
+ * - Palets totales
+ * - Cubicaje (volumen)
+ * - Niveles según altura de palet
+ * - Eficiencia de ocupación
+ * - Superficies por tipo
+ */
+
 import { create } from 'zustand'
 
+// Tipos de palet
 const PALLET_TYPES = {
-  EUR: { name: 'Europalet', length: 1.2, width: 0.8 },
-  US: { name: 'Americano', length: 1.2, width: 1.0 },
-  CUSTOM: { name: 'Personalizado', length: 0, width: 0 }
+  EUR: { name: 'Europalet', length: 1.2, width: 0.8, defaultHeight: 1.5 },
+  US: { name: 'Americano', length: 1.2, width: 1.0, defaultHeight: 1.5 }
+}
+
+// Anchos de pasillo por maquinaria
+const AISLE_WIDTHS = {
+  transpaleta: 1.8,
+  apilador: 2.4,
+  retractil: 2.8,
+  contrapesada: 3.6,
+  trilateral: 1.9
 }
 
 const useCalculationsStore = create((set, get) => ({
-  // ==================== ESTADO ====================
-  
-  // Tipo de palet
+  // ==================== CONFIGURACIÓN ====================
   palletType: 'EUR',
-  
-  // Palet personalizado
-  customPallet: { length: '', width: '' },
-  
-  // Resultados de cálculos
-  calculations: null,
-  
-  // Advertencias y validaciones
-  warnings: [],
-  
-  // Validaciones de pasillos
-  aisleValidations: [],
+  palletHeight: 1.5,
+  machinery: 'retractil',
+  aisleWidth: 2.8,
 
-  // ==================== ACTIONS ====================
-  
-  // Cambiar tipo de palet
+  // ==================== RESULTADOS ====================
+  capacity: null,
+  surfaces: null,
+  cubicaje: null,
+  warnings: [],
+  loading: false,
+
+  // ==================== SETTERS ====================
   setPalletType: (type) => {
-    set({ palletType: type })
-    get().recalculate()
+    const height = PALLET_TYPES[type]?.defaultHeight || 1.5
+    set({ palletType: type, palletHeight: height })
   },
-  
-  // Actualizar palet personalizado
-  setCustomPallet: (pallet) => {
-    set({ customPallet: pallet })
-    if (get().palletType === 'CUSTOM') {
-      get().recalculate()
+
+  setPalletHeight: (height) => {
+    set({ palletHeight: Math.max(0.5, Math.min(3.0, parseFloat(height) || 1.5)) })
+  },
+
+  setMachinery: (machinery) => {
+    const width = AISLE_WIDTHS[machinery] || 2.8
+    set({ machinery, aisleWidth: width })
+  },
+
+  // ==================== GETTERS ====================
+  getCurrentPallet: () => {
+    const { palletType, palletHeight } = get()
+    const base = PALLET_TYPES[palletType] || PALLET_TYPES.EUR
+    return {
+      length: base.length,
+      width: base.width,
+      height: palletHeight
     }
   },
-  
-  // Calcular capacidad total
-  calculateCapacity: (dimensions, elements) => {
-    const { palletType, customPallet } = get()
+
+  getMaxLevels: (warehouseHeight) => {
+    const { palletHeight } = get()
+    const levelHeight = palletHeight + 0.25
+    return Math.max(1, Math.floor((warehouseHeight - 0.5) / levelHeight))
+  },
+
+  // ==================== CÁLCULO PRINCIPAL ====================
+  calculateCapacity: async (dimensions, elements) => {
+    set({ loading: true })
     
-    // Obtener dimensiones del palet
-    const pallet = palletType === 'CUSTOM' ? 
-      { 
-        length: parseFloat(customPallet.length) || 1.2, 
-        width: parseFloat(customPallet.width) || 0.8 
-      } :
-      PALLET_TYPES[palletType]
+    const { palletType, palletHeight, aisleWidth } = get()
     
+    // Obtener palet
+    const pallet = {
+      ...(PALLET_TYPES[palletType] || PALLET_TYPES.EUR),
+      height: palletHeight
+    }
+
+    // Calcular niveles máximos
+    const levelHeight = palletHeight + 0.25
+    const maxLevels = Math.max(1, Math.floor((dimensions.height - 0.5) / levelHeight))
+
+    // Inicializar contadores
     let totalPallets = 0
-    let occupiedArea = 0
-    
-    // Calcular por cada elemento
-    elements.forEach(el => {
-      if (el.type === 'shelf') {
-        const { length, depth, levels } = el.dimensions
-        const palletsPerLevel = Math.floor((length / pallet.length) * (depth / pallet.width))
-        totalPallets += palletsPerLevel * levels
-        occupiedArea += length * depth
-      } else if (el.type === 'office') {
-        occupiedArea += el.dimensions.largo * el.dimensions.ancho
-      } else if (el.type === 'dock') {
-        occupiedArea += el.dimensions.width * el.dimensions.maneuverZone
-      }
-    })
-    
-    // Áreas
-    const totalArea = dimensions.length * dimensions.width
-    const circulationArea = totalArea - occupiedArea
-    const efficiency = ((occupiedArea / totalArea) * 100).toFixed(2)
-    
-    // Advertencias
+    let totalVolume = 0
+    let storageArea = 0
+    let officeArea = 0
+    let servicesArea = 0
+    let dockArea = 0
+    let operationalArea = 0
     const warnings = []
-    if (circulationArea < totalArea * 0.30) {
-      warnings.push('⚠️ Área de circulación < 30% (recomendado mínimo 30%)')
-    }
-    if (circulationArea < totalArea * 0.20) {
-      warnings.push('🚨 Área de circulación crítica < 20%')
-    }
-    
-    const calculations = {
-      total_pallets: totalPallets,
-      occupied_area: occupiedArea.toFixed(2),
-      circulation_area: circulationArea.toFixed(2),
-      total_area: totalArea.toFixed(2),
-      efficiency_percentage: efficiency,
-      pallet_type: `${pallet.length}m × ${pallet.width}m`,
-      pallet_dimensions: pallet,
-      warnings
-    }
-    
-    set({ calculations, warnings })
-    return calculations
-  },
-  
-  // Validar pasillos entre elementos
-  validateAisles: (elements, minAisleWidth = 3.5) => {
-    const validations = []
-    
-    // Comparar cada par de elementos
-    for (let i = 0; i < elements.length; i++) {
-      for (let j = i + 1; j < elements.length; j++) {
-        const el1 = elements[i]
-        const el2 = elements[j]
-        
-        // Calcular distancia entre elementos
-        const distance = calculateDistance(el1, el2)
-        
-        if (distance < minAisleWidth) {
-          validations.push({
-            element1: el1.id,
-            element2: el2.id,
-            distance: distance.toFixed(2),
-            status: distance < 3 ? 'critical' : 'warning',
-            message: `Pasillo de ${distance.toFixed(2)}m entre elementos (mínimo ${minAisleWidth}m)`
-          })
+
+    // Procesar cada elemento
+    elements.forEach(el => {
+      switch (el.type) {
+        case 'shelf': {
+          const { length = 0, depth = 0, levels = maxLevels } = el.dimensions || {}
+          
+          // Calcular palets por nivel (mejor orientación)
+          const opt1 = Math.floor(length / pallet.length) * Math.floor(depth / pallet.width)
+          const opt2 = Math.floor(length / pallet.width) * Math.floor(depth / pallet.length)
+          const palletsPerLevel = Math.max(opt1, opt2)
+          
+          const actualLevels = Math.min(levels, maxLevels)
+          const shelfPallets = palletsPerLevel * actualLevels
+          
+          totalPallets += shelfPallets
+          totalVolume += shelfPallets * pallet.length * pallet.width * pallet.height
+          storageArea += length * depth
+          break
+        }
+
+        case 'office': {
+          const area = (el.dimensions?.largo || 0) * (el.dimensions?.ancho || 0)
+          officeArea += area
+          break
+        }
+
+        case 'dock': {
+          const w = el.dimensions?.width || 3.5
+          const d = el.dimensions?.depth || 4
+          const m = el.dimensions?.maneuverZone || 12
+          dockArea += w * (d + m)
+          break
+        }
+
+        case 'service_room':
+        case 'technical_room': {
+          const area = (el.dimensions?.largo || 0) * (el.dimensions?.ancho || 0)
+          servicesArea += area
+          break
+        }
+
+        case 'operational_zone': {
+          const area = (el.dimensions?.largo || 0) * (el.dimensions?.ancho || 0)
+          operationalArea += area
+          break
         }
       }
+    })
+
+    // Cálculos finales
+    const totalArea = dimensions.length * dimensions.width
+    const occupiedArea = storageArea + officeArea + servicesArea + dockArea + operationalArea
+    const circulationArea = Math.max(0, totalArea - occupiedArea)
+    const usableArea = totalArea - officeArea
+    const efficiency = usableArea > 0 ? (storageArea / usableArea) * 100 : 0
+
+    // Warnings
+    const circulationPercent = (circulationArea / totalArea) * 100
+    if (circulationPercent < 25) {
+      warnings.push('⚠️ Área de circulación muy baja (<25%)')
     }
-    
-    set({ aisleValidations: validations })
-    return validations
-  },
-  
-  // Recalcular todo (capacity + aisles)
-  recalculate: () => {
-    // Esta función será llamada desde el componente pasando dimensions y elements
-    // No accedemos a warehouse store directamente para evitar dependencias circulares
-    return {
-      needsRecalculation: true
+    if (circulationPercent < 15) {
+      warnings.push('🚨 Circulación crítica (<15%) - revisar diseño')
     }
+    if (totalPallets === 0 && elements.some(e => e.type === 'shelf')) {
+      warnings.push('⚠️ Estanterías sin palets calculados')
+    }
+
+    // Capacidad
+    const shelfCount = elements.filter(e => e.type === 'shelf').length
+    const capacity = {
+      total_pallets: totalPallets,
+      pallets_per_level: shelfCount > 0 ? Math.round(totalPallets / shelfCount / maxLevels) : 0,
+      levels_avg: maxLevels,
+      storage_volume_m3: Math.round(totalVolume * 100) / 100,
+      efficiency_percentage: Math.round(efficiency * 100) / 100
+    }
+
+    // Superficies
+    const surfaces = {
+      total_area: Math.round(totalArea * 100) / 100,
+      storage_area: Math.round(storageArea * 100) / 100,
+      office_area: Math.round(officeArea * 100) / 100,
+      services_area: Math.round(servicesArea * 100) / 100,
+      dock_area: Math.round(dockArea * 100) / 100,
+      operational_area: Math.round(operationalArea * 100) / 100,
+      circulation_area: Math.round(circulationArea * 100) / 100,
+      efficiency: Math.round(efficiency * 100) / 100
+    }
+
+    // Cubicaje
+    const cubicaje = {
+      totalVolume: Math.round(totalVolume * 100) / 100,
+      volumePerPallet: Math.round(pallet.length * pallet.width * pallet.height * 1000) / 1000,
+      palletHeight: pallet.height,
+      maxLevels,
+      levelHeight: Math.round(levelHeight * 100) / 100,
+      warehouseVolume: Math.round(totalArea * dimensions.height * 100) / 100,
+      utilizationPercent: Math.round((totalVolume / (totalArea * dimensions.height)) * 10000) / 100
+    }
+
+    set({
+      capacity,
+      surfaces,
+      cubicaje,
+      warnings,
+      loading: false
+    })
+
+    return { capacity, surfaces, cubicaje, warnings }
   },
-  
-  // Limpiar cálculos
-  clearCalculations: () => set({ 
-    calculations: null, 
+
+  // ==================== RESET ====================
+  reset: () => set({
+    capacity: null,
+    surfaces: null,
+    cubicaje: null,
     warnings: [],
-    aisleValidations: []
-  }),
-  
-  // Obtener tipo de palet actual
-  getCurrentPallet: () => {
-    const { palletType, customPallet } = get()
-    
-    if (palletType === 'CUSTOM') {
-      return {
-        length: parseFloat(customPallet.length) || 1.2,
-        width: parseFloat(customPallet.width) || 0.8
-      }
-    }
-    
-    return PALLET_TYPES[palletType]
-  }
+    loading: false
+  })
 }))
 
-// ==================== HELPERS ====================
-
-// Calcular distancia mínima entre dos elementos
-function calculateDistance(el1, el2) {
-  // Obtener dimensiones
-  const dims1 = el1.dimensions
-  const dims2 = el2.dimensions
-  
-  const length1 = dims1.length || dims1.largo || 0
-  const width1 = dims1.width || dims1.ancho || dims1.depth || 0
-  const length2 = dims2.length || dims2.largo || 0
-  const width2 = dims2.width || dims2.ancho || dims2.depth || 0
-  
-  // Bounding boxes
-  const box1 = {
-    minX: el1.position.x,
-    maxX: el1.position.x + length1,
-    minY: el1.position.y,
-    maxY: el1.position.y + width1
-  }
-  
-  const box2 = {
-    minX: el2.position.x,
-    maxX: el2.position.x + length2,
-    minY: el2.position.y,
-    maxY: el2.position.y + width2
-  }
-  
-  // Calcular distancia mínima entre cajas
-  let dx = 0
-  let dy = 0
-  
-  if (box1.maxX < box2.minX) {
-    dx = box2.minX - box1.maxX
-  } else if (box2.maxX < box1.minX) {
-    dx = box1.minX - box2.maxX
-  }
-  
-  if (box1.maxY < box2.minY) {
-    dy = box2.minY - box1.maxY
-  } else if (box2.maxY < box1.minY) {
-    dy = box1.minY - box2.maxY
-  }
-  
-  return Math.sqrt(dx * dx + dy * dy)
-}
-
 export default useCalculationsStore
-export { PALLET_TYPES }
+export { PALLET_TYPES, AISLE_WIDTHS }
