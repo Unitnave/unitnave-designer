@@ -3,7 +3,7 @@ import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-thr
 import { Box, Paper, ToggleButtonGroup, ToggleButton, Typography } from '@mui/material';
 import { ThreeDRotation, ViewInAr, GridOn, Layers } from '@mui/icons-material';
 import { useState } from 'react';
-import Warehouse3D from '../Warehouse3D';
+import Warehouse3DPro from '../Warehouse3DPro';
 import useUIStore from '../../stores/useUIStore';
 
 export default function Warehouse3DViewer() {
