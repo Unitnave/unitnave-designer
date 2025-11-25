@@ -123,8 +123,7 @@ export default function Warehouse3DPro() {
 
       {/* ========== SUELO INDUSTRIAL ========== */}
       <IndustrialFloor
-        length={dimensions.length}
-        width={dimensions.width}
+        dimensions={dimensions}
         dockPositions={dockPositions}
         aisleWidth={aisleWidth}
       />

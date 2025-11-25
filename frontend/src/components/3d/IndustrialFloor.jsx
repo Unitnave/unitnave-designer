@@ -25,7 +25,7 @@ const COLORS = {
 }
 
 export default function IndustrialFloor({
-  dimensions,
+  dimensions = { length: 50, width: 30 },
   aisleWidth = 2.8,
   mainAisleWidth = 4.5,
   showGrid = true,
@@ -34,7 +34,7 @@ export default function IndustrialFloor({
   dockPositions = [],
   viewMode = '3D'
 }) {
-  const { length, width } = dimensions
+  const { length = 50, width = 30 } = dimensions || {}
 
   // Pasillos principales
   const mainAisles = useMemo(() => {
