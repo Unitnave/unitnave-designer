@@ -232,7 +232,6 @@ function ManualDesignMode({ onSwitchToWizard }) {
 
         <div className="canvas-container" style={{ position: 'relative', flex: 1 }}>
           <Canvas
-            shadows
             style={{ background: '#ffffff' }}
             gl={{ preserveDrawingBuffer: true, antialias: true, alpha: false }}
           >
@@ -265,22 +264,11 @@ function ManualDesignMode({ onSwitchToWizard }) {
               maxPolarAngle={Math.PI / 2}
             />
 
-            {/* Iluminación mejorada para fondo blanco */}
-            <ambientLight intensity={0.7} />
-            <directionalLight
-              position={[50, 100, 50]}
-              intensity={0.8}
-              castShadow
-              shadow-mapSize-width={2048}
-              shadow-mapSize-height={2048}
-              shadow-camera-far={300}
-              shadow-camera-left={-100}
-              shadow-camera-right={100}
-              shadow-camera-top={100}
-              shadow-camera-bottom={-100}
-            />
-            <directionalLight position={[-50, 50, -50]} intensity={0.4} />
-            <hemisphereLight args={['#ffffff', '#e2e8f0', 0.3]} />
+            {/* Iluminación sin sombras - Estilo plano técnico */}
+            <ambientLight intensity={1.2} />
+            <directionalLight position={[50, 100, 50]} intensity={0.6} />
+            <directionalLight position={[-50, 50, -50]} intensity={0.5} />
+            <hemisphereLight args={['#ffffff', '#e2e8f0', 0.5]} />
 
             <Warehouse3DPro />
           </Canvas>
@@ -295,5 +283,6 @@ function ManualDesignMode({ onSwitchToWizard }) {
     </div>
   )
 }
+
 
 

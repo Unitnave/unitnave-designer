@@ -23,17 +23,33 @@ export default function ScenarioComparator({ scenarios, onSelect }) {
     data: scenarios[key]
   }));
 
-  // Extraer métricas para comparación
-  const getMetrics = (scenario) => ({
-    capacity: scenario.data.capacity.total_pallets,
-    efficiency: scenario.data.surfaces.efficiency,
-    storage_area: scenario.data.surfaces.storage_area,
-    circulation: scenario.data.surfaces.circulation_area,
-    machinery: scenario.data.metadata.machinery,
-    aisle_width: scenario.data.metadata.aisle_width,
-    warnings: scenario.data.validations.filter(v => v.type === 'warning').length,
-    errors: scenario.data.validations.filter(v => v.type === 'error').length
-  });
+  // Extraer métricas para comparación - CON VALIDACIONES
+  const getMetrics = (scenario) => {
+    // Validar que existan todas las propiedades
+    if (!scenario?.data) {
+      return {
+        capacity: 0,
+        efficiency: 0,
+        storage_area: 0,
+        circulation: 0,
+        machinery: 'desconocido',
+        aisle_width: 0,
+        warnings: 0,
+        errors: 0
+      };
+    }
+
+    return {
+      capacity: scenario.data.capacity?.total_pallets || 0,
+      efficiency: scenario.data.surfaces?.efficiency || 0,
+      storage_area: scenario.data.surfaces?.storage_area || 0,
+      circulation: scenario.data.surfaces?.circulation_area || 0,
+      machinery: scenario.data.metadata?.machinery || 'desconocido',
+      aisle_width: scenario.data.metadata?.aisle_width || 0,
+      warnings: scenario.data.validations?.filter(v => v.type === 'warning').length || 0,
+      errors: scenario.data.validations?.filter(v => v.type === 'error').length || 0
+    };
+  };
 
   const renderComparisonTable = () => (
     <TableContainer component={Paper} sx={{ mt: 3 }}>

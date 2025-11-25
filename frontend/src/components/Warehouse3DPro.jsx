@@ -133,7 +133,7 @@ export default function Warehouse3DPro() {
       {/* Paredes - TRANSPARENTES Y CLARAS */}
       <group>
         {/* Pared norte */}
-        <mesh position={[dimensions.length / 2, cutHeight / 2, 0]} castShadow receiveShadow>
+        <mesh position={[dimensions.length / 2, cutHeight / 2, 0]}>
           <boxGeometry args={[dimensions.length, cutHeight, 0.2]} />
           <meshStandardMaterial 
             color={STRUCTURE_COLORS.wallExterior} 
@@ -145,7 +145,7 @@ export default function Warehouse3DPro() {
         </mesh>
 
         {/* Pared sur */}
-        <mesh position={[dimensions.length / 2, cutHeight / 2, dimensions.width]} castShadow receiveShadow>
+        <mesh position={[dimensions.length / 2, cutHeight / 2, dimensions.width]}>
           <boxGeometry args={[dimensions.length, cutHeight, 0.2]} />
           <meshStandardMaterial 
             color={STRUCTURE_COLORS.wallExterior} 
@@ -157,7 +157,7 @@ export default function Warehouse3DPro() {
         </mesh>
 
         {/* Pared oeste */}
-        <mesh position={[0, cutHeight / 2, dimensions.width / 2]} castShadow receiveShadow>
+        <mesh position={[0, cutHeight / 2, dimensions.width / 2]}>
           <boxGeometry args={[0.2, cutHeight, dimensions.width]} />
           <meshStandardMaterial 
             color={STRUCTURE_COLORS.wallExterior} 
@@ -169,7 +169,7 @@ export default function Warehouse3DPro() {
         </mesh>
 
         {/* Pared este */}
-        <mesh position={[dimensions.length, cutHeight / 2, dimensions.width / 2]} castShadow receiveShadow>
+        <mesh position={[dimensions.length, cutHeight / 2, dimensions.width / 2]}>
           <boxGeometry args={[0.2, cutHeight, dimensions.width]} />
           <meshStandardMaterial 
             color={STRUCTURE_COLORS.wallExterior} 
@@ -208,7 +208,7 @@ export default function Warehouse3DPro() {
             if (x > dimensions.length || z > dimensions.width) return null
             
             return (
-              <mesh key={`col-${i}-${j}`} position={[x, dimensions.height / 2, z]} castShadow>
+              <mesh key={`col-${i}-${j}`} position={[x, dimensions.height / 2, z]}>
                 <boxGeometry args={[0.4, dimensions.height, 0.4]} />
                 <meshStandardMaterial 
                   color={STRUCTURE_COLORS.column} 
@@ -225,7 +225,7 @@ export default function Warehouse3DPro() {
       {/* Cerchas de cubierta */}
       <group position={[0, dimensions.height - 0.3, 0]}>
         {Array.from({ length: Math.floor(dimensions.length / 8) }).map((_, i) => (
-          <mesh key={`truss-${i}`} position={[(i + 1) * 8, 0, dimensions.width / 2]} castShadow>
+          <mesh key={`truss-${i}`} position={[(i + 1) * 8, 0, dimensions.width / 2]}>
             <boxGeometry args={[0.3, 0.6, dimensions.width]} />
             <meshStandardMaterial 
               color={STRUCTURE_COLORS.roofFrame} 
