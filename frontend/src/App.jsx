@@ -93,14 +93,194 @@ function ManualDesignMode({ onSwitchToWizard }) {
   }, [elements, dimensions])
 
   const handleCalculate = useCallback(async () => {
+    if (elements.length === 0) return
+    
     setIsCalculating(true)
     try {
-      await calculateCapacity(dimensions, elements)
-    } catch (e) {
-      console.error('Error:', e)
+      const response = await fetch('http://localhost:8000/api/calculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Cálculo manual',
+          dimensions: {
+            length: dimensions.length,
+            width: dimensions.width,
+            height: dimensions.height
+          },
+          elements: elements
+        })
+      })
+      
+      if (!response.ok) throw new Error('Error en cálculo')
+      
+      const data = await response.json()
+      console.log('✅ Cálculo completado:', data)
+      
+      // Actualizar stores con resultados
+      useCalculationsStore.getState().updateCapacity(data.capacity)
+      useCalculationsStore.getState().updateSurfaces(data.surfaces)
+      
+      alert(`✅ Cálculo completado
+      
+📦 Capacidad: ${data.capacity.total_pallets} palets
+📊 Eficiencia: ${data.capacity.efficiency_percentage.toFixed(1)}%
+📐 Área almacenaje: ${data.surfaces.storage_area.toFixed(0)}m²`)
+      
+    } catch (error) {
+      console.error('❌ Error:', error)
+      alert('Error al calcular. Verifica que el servidor esté corriendo.')
+    } finally {
+      setIsCalculating(false)
     }
-    setIsCalculating(false)
-  }, [dimensions, elements, calculateCapacity])
+  }, [dimensions, elements])
+
+  const handleOptimize = useCallback(async () => {
+    const confirmed = window.confirm(
+      '⚡ Optimización Estándar\n\n' +
+      '• Sistema de calles organizado\n' +
+      '• Generación rápida (~1 segundo)\n' +
+      '• Layout predecible y eficiente\n\n' +
+      '⚠️ Esto reemplazará todos los elementos actuales.\n\n' +
+      '¿Continuar?'
+    )
+    
+    if (!confirmed) return
+    
+    setIsCalculating(true)
+    try {
+      const response = await fetch('http://localhost:8000/api/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          length: dimensions.length,
+          width: dimensions.width,
+          height: dimensions.height,
+          n_docks: 4,
+          machinery: machinery || 'retractil',
+          pallet_type: 'EUR',
+          pallet_height: palletHeight || 1.5,
+          activity_type: 'industrial',
+          office_floor: 'mezzanine',
+          office_height: 3.5,
+          has_elevator: true
+        })
+      })
+      
+      if (!response.ok) throw new Error('Error en optimización')
+      
+      const result = await response.json()
+      console.log('✅ Optimización completada:', result)
+      
+      // Limpiar elementos actuales
+      const { removeElement } = useWarehouseStore.getState()
+      elements.forEach(el => removeElement(el.id))
+      
+      // Añadir nuevos elementos
+      const { addElement } = useWarehouseStore.getState()
+      result.elements.forEach(el => {
+        addElement({
+          ...el,
+          position: { x: el.position.x, y: el.position.z || el.position.y }
+        })
+      })
+      
+      // Actualizar cálculos
+      useCalculationsStore.getState().updateCapacity(result.capacity)
+      useCalculationsStore.getState().updateSurfaces(result.surfaces)
+      
+      alert(`✅ Optimización completada
+      
+📦 Capacidad: ${result.capacity.total_pallets} palets
+📊 Eficiencia: ${result.capacity.efficiency_percentage.toFixed(1)}%
+🏭 Elementos: ${result.elements.length}`)
+      
+    } catch (error) {
+      console.error('❌ Error:', error)
+      alert('Error al optimizar. Verifica que el servidor esté corriendo.')
+    } finally {
+      setIsCalculating(false)
+    }
+  }, [dimensions, elements, machinery, palletHeight])
+
+  const handleOptimizeGA = useCallback(async () => {
+    const confirmed = window.confirm(
+      '🧬 Optimización con Algoritmo Genético (AI)\n\n' +
+      '• Maximiza capacidad de palets\n' +
+      '• Minimiza distancias de recorrido\n' +
+      '• Evoluciona 100 generaciones\n' +
+      '• Tarda ~30-60 segundos\n\n' +
+      '⚠️ Esto reemplazará todos los elementos actuales.\n\n' +
+      '¿Continuar?'
+    )
+    
+    if (!confirmed) return
+    
+    setIsCalculating(true)
+    try {
+      alert('🧬 Optimización GA iniciada. Esto puede tardar 30-60 segundos...')
+      
+      const response = await fetch('http://localhost:8000/api/optimize/ga', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          length: dimensions.length,
+          width: dimensions.width,
+          height: dimensions.height,
+          n_docks: 4,
+          machinery: machinery || 'retractil',
+          pallet_type: 'EUR',
+          pallet_height: palletHeight || 1.5,
+          activity_type: 'industrial',
+          ga_config: {
+            population_size: 50,
+            generations: 100,
+            mutation_rate: 0.15,
+            crossover_rate: 0.8,
+            weight_pallets: 0.6,
+            weight_distance: 0.4
+          }
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Error en optimización GA')
+      }
+      
+      const result = await response.json()
+      console.log('✅ Optimización GA completada:', result)
+      
+      // Limpiar elementos actuales
+      const { removeElement } = useWarehouseStore.getState()
+      elements.forEach(el => removeElement(el.id))
+      
+      // Añadir nuevos elementos
+      const { addElement } = useWarehouseStore.getState()
+      result.elements.forEach(el => {
+        addElement({
+          ...el,
+          position: { x: el.position.x, y: el.position.z || el.position.y }
+        })
+      })
+      
+      // Actualizar cálculos
+      useCalculationsStore.getState().updateCapacity(result.capacity)
+      useCalculationsStore.getState().updateSurfaces(result.surfaces)
+      
+      alert(`✅ Optimización GA completada
+      
+📦 Capacidad: ${result.capacity.total_pallets} palets
+📊 Eficiencia: ${result.capacity.efficiency_percentage.toFixed(1)}%
+🏭 Elementos: ${result.elements.length}
+🧬 Generaciones: 100`)
+      
+    } catch (error) {
+      console.error('❌ Error:', error)
+      alert(`Error al optimizar con GA:\n${error.message}\n\nVerifica que el servidor esté corriendo y que optimizer_ga.py esté instalado.`)
+    } finally {
+      setIsCalculating(false)
+    }
+  }, [dimensions, elements, machinery, palletHeight])
 
   const is3DView = viewMode === '3D'
 
@@ -192,42 +372,71 @@ function ManualDesignMode({ onSwitchToWizard }) {
 
           <button
             onClick={handleCalculate}
+            disabled={isCalculating || elements.length === 0}
+            style={{
+              padding: '10px 20px',
+              background: elements.length === 0 ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              border: 'none',
+              borderRadius: '8px',
+              color: 'white',
+              cursor: elements.length === 0 ? 'not-allowed' : (isCalculating ? 'wait' : 'pointer'),
+              fontSize: '14px',
+              fontWeight: '600',
+              boxShadow: elements.length === 0 ? 'none' : '0 4px 15px rgba(16, 185, 129, 0.3)',
+              opacity: (isCalculating || elements.length === 0) ? 0.5 : 1
+            }}
+            title={elements.length === 0 ? 'Añade elementos para calcular' : 'Calcular métricas del diseño actual'}
+          >
+            {isCalculating ? '⏳ Calculando...' : '🧮 Calcular'}
+          </button>
+
+          <button
+            onClick={handleOptimize}
             disabled={isCalculating}
             style={{
               padding: '10px 20px',
-              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              background: isCalculating ? 'rgba(59, 130, 246, 0.5)' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
               border: 'none',
               borderRadius: '8px',
               color: 'white',
               cursor: isCalculating ? 'wait' : 'pointer',
               fontSize: '14px',
               fontWeight: '600',
-              boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
+              boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)',
               opacity: isCalculating ? 0.7 : 1
             }}
+            title='Generar layout automático con sistema de calles (rápido)'
           >
-            {isCalculating ? '⏳ Calculando...' : '🧮 Calcular'}
+            ⚡ Optimizar
           </button>
 
           <button
-            onClick={onSwitchToWizard}
+            onClick={handleOptimizeGA}
+            disabled={isCalculating}
             style={{
               padding: '10px 20px',
-              background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
+              background: isCalculating ? 'rgba(139, 92, 246, 0.5)' : 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
               border: 'none',
               borderRadius: '8px',
               color: 'white',
-              cursor: 'pointer',
+              cursor: isCalculating ? 'wait' : 'pointer',
               fontSize: '14px',
               fontWeight: '600',
               boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)',
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
+              position: 'relative',
+              opacity: isCalculating ? 0.7 : 1
+            }}
+            title='Optimizar con algoritmo genético - Maximiza palets y minimiza recorridos'
+          >
+            🧬 Optimizar GA
               position: 'relative'
             }}
+            title='Optimizar con algoritmo genético - Maximiza palets y minimiza recorridos'
           >
-            ⚡ Optimizar GA
+            🧬 Optimizar GA
             <span style={{
               position: 'absolute',
               top: '-8px',
@@ -253,7 +462,7 @@ function ManualDesignMode({ onSwitchToWizard }) {
           <Canvas
             shadows
             style={{ background: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)' }}
-            gl={{ antialias: true, alpha: false }}
+            gl={{ preserveDrawingBuffer: true, antialias: true, alpha: false }}
           >
             {is3DView ? (
               <PerspectiveCamera

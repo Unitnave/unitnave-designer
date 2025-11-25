@@ -52,7 +52,7 @@ export default function Warehouse3DViewer() {
           )}
           
           <OrbitControls makeDefault />
-          <Warehouse3D />
+          <Warehouse3DPro />
         </Canvas>
       </Box>
     </Paper>

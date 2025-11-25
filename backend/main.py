@@ -1,12 +1,6 @@
 """
-UNITNAVE API v4.0
-Backend con Optimizador Genético
-
-Endpoints:
-- /api/optimize - Optimización estándar
-- /api/optimize/ga - Optimización con Algoritmo Genético
-- /api/calculate - Cálculos de capacidad
-- /api/designs - CRUD de diseños
+UNITNAVE API v4.1 - Definitivo
+Backend con Optimizador V4 + Algoritmo Genético (Experimental)
 """
 
 import os
@@ -52,7 +46,7 @@ except ImportError as e:
 app = FastAPI(
     title="UNITNAVE Designer API",
     description="API para diseño y optimización de naves industriales",
-    version="4.0.0",
+    version="4.1.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -92,11 +86,12 @@ class OptimizeRequest(BaseModel):
     machinery: str = Field(default="retractil")
     pallet_type: str = Field(default="EUR")
     pallet_height: Optional[float] = Field(default=1.5, ge=0.5, le=3.0)
+    custom_pallet: Optional[Dict[str, float]] = None
     activity_type: str = Field(default="industrial")
     workers: Optional[int] = Field(default=None, ge=1, le=500)
     
     # Configuración de oficinas
-    office_floor: str = Field(default="mezzanine")  # ground, mezzanine, both
+    office_floor: str = Field(default="mezzanine")
     office_height: float = Field(default=3.5, ge=2.5, le=5)
     has_elevator: bool = Field(default=True)
     
@@ -120,11 +115,12 @@ designs_db: Dict[str, Dict] = {}
 async def root():
     return {
         "name": "UNITNAVE Designer API",
-        "version": "4.0.0",
+        "version": "4.1.0",
         "status": "running",
         "endpoints": {
             "optimize": "/api/optimize",
             "optimize_ga": "/api/optimize/ga",
+            "scenarios": "/api/optimize/scenarios",
             "calculate": "/api/calculate",
             "docs": "/api/docs"
         }
@@ -146,7 +142,8 @@ async def health():
 @app.post("/api/optimize")
 async def optimize_layout(request: OptimizeRequest):
     """
-    Optimización estándar
+    Optimización estándar (Sistema de Calles)
+    Rápido (~1 segundo), predecible, eficiente
     """
     try:
         input_data = WarehouseInput(
@@ -156,21 +153,19 @@ async def optimize_layout(request: OptimizeRequest):
             n_docks=request.n_docks,
             machinery=request.machinery,
             pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
             activity_type=request.activity_type,
-            workers=request.workers
+            workers=request.workers,
+            office_floor=request.office_floor,
+            office_height=request.office_height,
+            has_elevator=request.has_elevator
         )
-        
-        input_data.pallet_height = request.pallet_height
-        input_data.office_config = {
-            "floor": request.office_floor,
-            "height": request.office_height,
-            "hasElevator": request.has_elevator
-        }
         
         optimizer = WarehouseOptimizer(input_data)
         result = optimizer.generate_layout()
         
-        logger.info(f"✅ Layout generado: {result.capacity.total_pallets} palets")
+        logger.info(f"✅ Layout estándar generado: {result.capacity.total_pallets} palets")
         
         return result.model_dump() if hasattr(result, 'model_dump') else result.__dict__
         
@@ -182,10 +177,11 @@ async def optimize_layout(request: OptimizeRequest):
 @app.post("/api/optimize/ga")
 async def optimize_genetic(request: OptimizeRequest):
     """
-    Optimización con Algoritmo Genético
+    Optimización con Algoritmo Genético (Experimental)
     
     Maximiza: Capacidad de palets
     Minimiza: Distancia de recorridos
+    Tiempo: ~30-60 segundos
     """
     if not GA_AVAILABLE:
         raise HTTPException(
@@ -201,11 +197,14 @@ async def optimize_genetic(request: OptimizeRequest):
             n_docks=request.n_docks,
             machinery=request.machinery,
             pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
             activity_type=request.activity_type,
-            workers=request.workers
+            workers=request.workers,
+            office_floor=request.office_floor,
+            office_height=request.office_height,
+            has_elevator=request.has_elevator
         )
-        
-        input_data.pallet_height = request.pallet_height
         
         ga_config = None
         if request.ga_config:
@@ -227,6 +226,54 @@ async def optimize_genetic(request: OptimizeRequest):
         
     except Exception as e:
         logger.error(f"❌ Error en GA: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimize/scenarios")
+async def optimize_scenarios(request: OptimizeRequest):
+    """
+    Comparador de escenarios
+    Genera 3 variantes con diferentes maquinarias
+    """
+    try:
+        scenarios = {}
+        
+        # Maquinarias a comparar
+        machinery_types = ["retractil", "trilateral", "contrapesada"]
+        
+        for machinery in machinery_types:
+            input_data = WarehouseInput(
+                length=request.length,
+                width=request.width,
+                height=request.height,
+                n_docks=request.n_docks,
+                machinery=machinery,
+                pallet_type=request.pallet_type,
+                pallet_height=request.pallet_height,
+                custom_pallet=request.custom_pallet,
+                activity_type=request.activity_type,
+                workers=request.workers,
+                office_floor=request.office_floor,
+                office_height=request.office_height,
+                has_elevator=request.has_elevator
+            )
+            
+            optimizer = WarehouseOptimizer(input_data)
+            result = optimizer.generate_layout()
+            
+            scenarios[machinery] = {
+                "total_pallets": result.capacity.total_pallets,
+                "efficiency": result.capacity.efficiency_percentage,
+                "elements_count": len(result.elements),
+                "full_result": result.model_dump() if hasattr(result, 'model_dump') else result.__dict__
+            }
+        
+        logger.info(f"✅ Comparación completada: {len(scenarios)} escenarios")
+        
+        return scenarios
+        
+    except Exception as e:
+        logger.error(f"❌ Error en comparación: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -330,10 +377,14 @@ async def compare_scenarios(request: OptimizeRequest):
             n_docks=request.n_docks,
             machinery=request.machinery,
             pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
             activity_type=request.activity_type,
-            workers=request.workers
+            workers=request.workers,
+            office_floor=request.office_floor,
+            office_height=request.office_height,
+            has_elevator=request.has_elevator
         )
-        input_data.pallet_height = request.pallet_height
         
         # Escenario 1: Estándar
         optimizer = WarehouseOptimizer(input_data)
@@ -375,7 +426,7 @@ async def compare_scenarios(request: OptimizeRequest):
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 50)
-    logger.info("🏭 UNITNAVE Designer API v4.0")
+    logger.info("🏭 UNITNAVE Designer API v4.1")
     logger.info("=" * 50)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
@@ -384,4 +435,5 @@ async def startup():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
