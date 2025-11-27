@@ -1,129 +1,113 @@
 /**
- * UNITNAVE Designer - WizardStepper V5
- * Wizard de 6 pasos con configuración completa
+ * UNITNAVE Designer - WizardStepper
+ * Controlador principal del wizard de 6 pasos
  * 
  * ARCHIVO: frontend/src/components/wizard/WizardStepper.jsx
- * ACCIÓN: REEMPLAZAR contenido completo
  */
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { 
-  Stepper, Step, StepLabel, Box, Container, Paper,
-  Button, Typography, StepConnector, styled, CircularProgress,
-  Chip
+  Box, Stepper, Step, StepLabel, StepContent,
+  Button, Paper, Typography, Alert, useTheme, useMediaQuery
 } from '@mui/material';
-import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ArrowBack, ArrowForward, Rocket,
-  Straighten, Settings, Business, LocalShipping, Tune, Visibility
+  NavigateNext, NavigateBefore, Check, 
+  Straighten, Settings, Business, LocalShipping, Tune, PlayArrow
 } from '@mui/icons-material';
 
+// Importar pasos
 import Step1Dimensions from './Step1Dimensions';
 import Step2Configuration from './Step2Configuration';
-import Step3Preview from './Step3Preview';
-
-// Nuevos componentes (se crean inline si no existen)
 import Step3Offices from './Step3Offices';
 import Step4Docks from './Step4Docks';
 import Step5Preferences from './Step5Preferences';
+import Step6Preview from './Step6Preview';
 
-// Conector personalizado
-const ColorlibConnector = styled(StepConnector)(({ theme }) => ({
-  '& .MuiStepConnector-line': {
-    height: 3,
-    border: 0,
-    backgroundColor: theme.palette.grey[300],
-    borderRadius: 1,
+// Definición de pasos
+const STEPS = [
+  { 
+    label: 'Dimensiones', 
+    description: 'Largo, ancho y alto de la nave',
+    icon: <Straighten />,
+    component: Step1Dimensions
   },
-  '&.Mui-active .MuiStepConnector-line': {
-    backgroundImage: 'linear-gradient(95deg, #2196F3 0%, #21CBF3 100%)',
+  { 
+    label: 'Configuración', 
+    description: 'Tipo de actividad y maquinaria',
+    icon: <Settings />,
+    component: Step2Configuration
   },
-  '&.Mui-completed .MuiStepConnector-line': {
-    backgroundImage: 'linear-gradient(95deg, #4CAF50 0%, #8BC34A 100%)',
+  { 
+    label: 'Oficinas', 
+    description: 'Zona administrativa y servicios',
+    icon: <Business />,
+    component: Step3Offices
   },
-}));
-
-// Icono personalizado
-const StepIconRoot = styled('div')(({ theme, ownerState }) => ({
-  backgroundColor: ownerState.completed ? '#4CAF50' : ownerState.active ? '#2196F3' : theme.palette.grey[300],
-  zIndex: 1,
-  color: '#fff',
-  width: 50,
-  height: 50,
-  display: 'flex',
-  borderRadius: '50%',
-  justifyContent: 'center',
-  alignItems: 'center',
-  boxShadow: ownerState.active ? '0 4px 10px 0 rgba(33,150,243,.35)' : 'none',
-  transition: 'all 0.3s ease',
-}));
-
-function ColorlibStepIcon(props) {
-  const { active, completed, icon } = props;
-  
-  const icons = {
-    1: <Straighten />,
-    2: <Settings />,
-    3: <Business />,
-    4: <LocalShipping />,
-    5: <Tune />,
-    6: <Visibility />,
-  };
-
-  return (
-    <StepIconRoot ownerState={{ completed, active }}>
-      {icons[String(icon)]}
-    </StepIconRoot>
-  );
-}
-
-const steps = [
-  { label: 'Dimensiones', description: 'Largo, ancho, alto' },
-  { label: 'Operativa', description: 'Maquinaria, palets' },
-  { label: 'Oficinas', description: 'Ubicación, tamaño' },
-  { label: 'Muelles', description: 'Cantidad, posición' },
-  { label: 'Preferencias', description: 'Prioridad, tipo' },
-  { label: 'Vista Previa', description: 'Resumen final' },
+  { 
+    label: 'Muelles', 
+    description: 'Carga, descarga y expedición',
+    icon: <LocalShipping />,
+    component: Step4Docks
+  },
+  { 
+    label: 'Preferencias', 
+    description: 'Prioridades y ABC Zoning',
+    icon: <Tune />,
+    component: Step5Preferences
+  },
+  { 
+    label: 'Optimizar', 
+    description: 'Vista previa y ejecución',
+    icon: <PlayArrow />,
+    component: Step6Preview
+  }
 ];
 
-export default function WizardStepper({ onComplete }) {
-  const [activeStep, setActiveStep] = useState(0);
-  const [loading, setLoading] = useState(false);
+export default function WizardStepper({ onComplete, initialData = {} }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   
-  const [formData, setFormData] = useState({
-    // Dimensiones
-    length: 50,
-    width: 30,
-    height: 10,
+  const [activeStep, setActiveStep] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  
+  // Estado consolidado del wizard
+  const [wizardData, setWizardData] = useState({
+    // Step 1: Dimensiones
+    length: initialData.length || 80,
+    width: initialData.width || 40,
+    height: initialData.height || 10,
     
-    // Operativa
-    n_docks: 4,
-    machinery: 'retractil',
-    pallet_type: 'EUR',
-    pallet_height: 1.5,
-    workers: null,
-    activity_type: 'industrial',
+    // Step 2: Configuración
+    activityType: initialData.activityType || 'industrial',
+    machinery: initialData.machinery || 'retractil',
+    palletType: initialData.palletType || 'europalet',
+    workers: initialData.workers || null,
     
-    // Oficinas (NUEVO)
-    officeConfig: {
+    // Step 3: Oficinas
+    officeConfig: initialData.officeConfig || {
+      include: true,
       area: 40,
       floor: 'mezzanine',
       mezzanineHeight: 3.5,
       hasElevator: true,
-      hasStairs: true
+      position: 'front_left'
     },
     
-    // Muelles (NUEVO)
-    dockConfig: {
+    // Step 4: Muelles
+    dockConfig: initialData.dockConfig || {
       count: 4,
-      position: 'center',
-      maneuverZone: 4.0,
+      position: 'front',
       dockWidth: 3.5,
-      dockDepth: 4.0
+      maneuverDepth: 4.0,
+      includeExpedition: true,
+      expeditionDepth: 8,
+      crossDocking: false
     },
     
-    // Preferencias (NUEVO)
-    preferences: {
+    // Step 5: Preferencias
+    preferences: initialData.preferences || {
       include_offices: true,
       include_services: true,
       include_docks: true,
@@ -131,205 +115,259 @@ export default function WizardStepper({ onComplete }) {
       priority: 'balance',
       warehouse_type: 'industrial',
       layout_complexity: 'medio',
+      enable_abc_zones: false,
+      abc_zone_a_pct: 0.20,
+      abc_zone_b_pct: 0.40,
+      abc_zone_c_pct: 0.40,
       high_rotation_pct: 0.20
     }
   });
 
+  // Actualizar datos desde los pasos
+  const handleStepChange = useCallback((stepData) => {
+    setWizardData(prev => ({
+      ...prev,
+      ...stepData
+    }));
+  }, []);
+
+  // Navegación
   const handleNext = () => {
-    if (activeStep === steps.length - 1) {
-      handleGenerate();
-    } else {
-      setActiveStep((prev) => prev + 1);
+    setActiveStep(prev => Math.min(prev + 1, STEPS.length - 1));
+  };
+
+  const handleBack = () => {
+    setActiveStep(prev => Math.max(prev - 1, 0));
+  };
+
+  const handleStepClick = (index) => {
+    // Permitir navegar a pasos anteriores o al actual
+    if (index <= activeStep) {
+      setActiveStep(index);
     }
   };
 
-  const handleBack = () => setActiveStep((prev) => prev - 1);
-
-  const updateFormData = (field, value) => {
-    if (typeof field === 'object') {
-      // Si es un objeto, merge completo
-      setFormData(prev => ({ ...prev, ...field }));
-    } else {
-      setFormData(prev => ({ ...prev, [field]: value }));
-    }
-  };
-
-  const handleGenerate = async () => {
-    setLoading(true);
-    
-    // Preparar datos finales para el backend
-    const finalData = {
-      ...formData,
-      
-      // Mapear officeConfig
-      office_floor: formData.officeConfig.floor,
-      office_height: formData.officeConfig.mezzanineHeight,
-      office_area: formData.officeConfig.area,
-      has_elevator: formData.officeConfig.hasElevator,
-      
-      // Mapear dockConfig
-      n_docks: formData.dockConfig.count,
-      dock_maneuver_zone: formData.dockConfig.maneuverZone,
-      dock_position: formData.dockConfig.position,
-      
-      // Mapear preferences
-      priority: formData.preferences.priority,
-      
-      // Incluir configs completas para el backend V5
-      office_config: {
-        area: formData.officeConfig.area,
-        floor: formData.officeConfig.floor,
-        mezzanine_height: formData.officeConfig.mezzanineHeight,
-        has_elevator: formData.officeConfig.hasElevator,
-        has_stairs: formData.officeConfig.hasStairs
-      },
-      dock_config: {
-        count: formData.dockConfig.count,
-        position: formData.dockConfig.position,
-        maneuver_zone: formData.dockConfig.maneuverZone,
-        dock_width: formData.dockConfig.dockWidth,
-        dock_depth: formData.dockConfig.dockDepth
-      },
-    };
+  // Ejecutar optimización
+  const handleOptimize = async () => {
+    setIsLoading(true);
+    setError(null);
     
     try {
-      await onComplete(finalData);
-    } catch (error) {
-      console.error('Error en generación:', error);
+      // Construir payload para API
+      const payload = {
+        length: wizardData.length,
+        width: wizardData.width,
+        height: wizardData.height,
+        activity_type: wizardData.activityType,
+        machinery: wizardData.machinery,
+        pallet_type: wizardData.palletType,
+        workers: wizardData.workers,
+        n_docks: wizardData.dockConfig?.count || 4,
+        
+        // Configuración de oficinas
+        office_config: wizardData.officeConfig?.include ? {
+          area: wizardData.officeConfig.area,
+          floor: wizardData.officeConfig.floor,
+          mezzanine_height: wizardData.officeConfig.mezzanineHeight,
+          has_elevator: wizardData.officeConfig.hasElevator,
+          position: wizardData.officeConfig.position
+        } : null,
+        
+        // Configuración de muelles
+        dock_config: {
+          count: wizardData.dockConfig?.count || 4,
+          position: wizardData.dockConfig?.position || 'front',
+          dock_width: wizardData.dockConfig?.dockWidth || 3.5,
+          maneuver_depth: wizardData.dockConfig?.maneuverDepth || 4.0,
+          include_expedition: wizardData.dockConfig?.includeExpedition !== false,
+          expedition_depth: wizardData.dockConfig?.expeditionDepth || 8
+        },
+        
+        // Preferencias
+        preferences: {
+          include_offices: wizardData.preferences?.include_offices !== false,
+          include_services: wizardData.preferences?.include_services !== false,
+          include_docks: wizardData.preferences?.include_docks !== false,
+          include_technical: wizardData.preferences?.include_technical !== false,
+          priority: wizardData.preferences?.priority || 'balance',
+          warehouse_type: wizardData.preferences?.warehouse_type || wizardData.activityType,
+          enable_abc_zones: wizardData.preferences?.enable_abc_zones || false,
+          abc_zone_a_pct: wizardData.preferences?.abc_zone_a_pct || 0.20,
+          abc_zone_b_pct: wizardData.preferences?.abc_zone_b_pct || 0.40,
+          abc_zone_c_pct: wizardData.preferences?.abc_zone_c_pct || 0.40,
+          high_rotation_pct: wizardData.preferences?.high_rotation_pct || 0.20
+        }
+      };
+
+      // Llamar a API
+      const response = await fetch('/api/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      setResult(data);
+      
+      // Callback al padre
+      if (onComplete) {
+        onComplete(data);
+      }
+      
+    } catch (err) {
+      console.error('Error en optimización:', err);
+      setError(err.message || 'Error desconocido');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  const isStepValid = (step) => {
-    switch (step) {
-      case 0:
-        return formData.length >= 15 && formData.width >= 10 && formData.height >= 4;
-      case 1:
-        return !!formData.machinery && !!formData.pallet_type;
-      case 2:
-        return formData.officeConfig.area >= 20;
-      case 3:
-        return formData.dockConfig.count >= 1;
-      case 4:
-        return !!formData.preferences.priority;
-      case 5:
-        return true;
-      default:
-        return true;
-    }
-  };
-
+  // Renderizar paso actual
   const renderStepContent = () => {
-    switch(activeStep) {
-      case 0:
-        return <Step1Dimensions data={formData} onChange={updateFormData} />;
-      case 1:
-        return <Step2Configuration data={formData} onChange={updateFormData} />;
-      case 2:
-        return <Step3Offices data={formData} onChange={updateFormData} />;
-      case 3:
-        return <Step4Docks data={formData} onChange={updateFormData} />;
-      case 4:
-        return <Step5Preferences data={formData} onChange={updateFormData} />;
-      case 5:
-        return <Step3Preview data={formData} />;  // Reutilizamos Step3Preview como resumen
-      default:
-        return null;
+    const StepComponent = STEPS[activeStep].component;
+    
+    // Paso 6 tiene props especiales
+    if (activeStep === 5) {
+      return (
+        <StepComponent 
+          data={wizardData}
+          onChange={handleStepChange}
+          onOptimize={handleOptimize}
+          isLoading={isLoading}
+          result={result}
+        />
+      );
     }
+    
+    return (
+      <StepComponent 
+        data={wizardData}
+        onChange={handleStepChange}
+      />
+    );
   };
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Paper elevation={3} sx={{ p: 4, borderRadius: 3 }}>
-        {/* Stepper mejorado */}
-        <Stepper 
-          activeStep={activeStep} 
-          alternativeLabel 
-          connector={<ColorlibConnector />}
-          sx={{ mb: 4 }}
-        >
-          {steps.map((step, index) => (
-            <Step key={step.label}>
-              <StepLabel 
-                StepIconComponent={ColorlibStepIcon}
-                optional={
-                  <Typography variant="caption" color="text.secondary">
-                    {step.description}
-                  </Typography>
-                }
-              >
-                {step.label}
-              </StepLabel>
-            </Step>
-          ))}
-        </Stepper>
+    <Box sx={{ maxWidth: 1200, mx: 'auto', p: { xs: 2, md: 4 } }}>
+      {/* Header */}
+      <Box sx={{ mb: 4, textAlign: 'center' }}>
+        <Typography variant="h4" fontWeight={700} gutterBottom>
+          🏭 UNITNAVE Designer V5
+        </Typography>
+        <Typography variant="body1" color="text.secondary">
+          Optimizador de layouts para naves industriales
+        </Typography>
+      </Box>
 
-        {/* Contenido animado */}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeStep}
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.3 }}
+      {/* Stepper */}
+      <Stepper 
+        activeStep={activeStep} 
+        orientation={isMobile ? 'vertical' : 'horizontal'}
+        sx={{ mb: 4 }}
+      >
+        {STEPS.map((step, index) => (
+          <Step 
+            key={step.label}
+            onClick={() => handleStepClick(index)}
+            sx={{ cursor: index <= activeStep ? 'pointer' : 'default' }}
           >
-            {renderStepContent()}
-          </motion.div>
-        </AnimatePresence>
-
-        {/* Navegación */}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4, alignItems: 'center' }}>
-          <Button
-            disabled={activeStep === 0}
-            onClick={handleBack}
-            startIcon={<ArrowBack />}
-            variant="outlined"
-            size="large"
-          >
-            Atrás
-          </Button>
-          
-          {/* Indicador central */}
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Typography variant="body2" color="text.secondary">
-              Paso {activeStep + 1} de {steps.length}
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 0.5, mx: 2 }}>
-              {steps.map((_, i) => (
+            <StepLabel
+              StepIconComponent={() => (
                 <Box
-                  key={i}
                   sx={{
-                    width: 8,
-                    height: 8,
+                    width: 40,
+                    height: 40,
                     borderRadius: '50%',
-                    bgcolor: i < activeStep ? 'success.main' : i === activeStep ? 'primary.main' : 'grey.300',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    bgcolor: index <= activeStep ? 'primary.main' : 'grey.300',
+                    color: 'white',
                     transition: 'all 0.3s'
                   }}
-                />
-              ))}
-            </Box>
-          </Box>
+                >
+                  {index < activeStep ? <Check /> : step.icon}
+                </Box>
+              )}
+            >
+              <Typography 
+                variant="body2" 
+                fontWeight={index === activeStep ? 700 : 400}
+                color={index <= activeStep ? 'text.primary' : 'text.secondary'}
+              >
+                {step.label}
+              </Typography>
+              {!isMobile && (
+                <Typography variant="caption" color="text.secondary">
+                  {step.description}
+                </Typography>
+              )}
+            </StepLabel>
+          </Step>
+        ))}
+      </Stepper>
 
-          <Button
-            variant="contained"
-            onClick={handleNext}
-            disabled={!isStepValid(activeStep) || loading}
-            endIcon={activeStep === steps.length - 1 ? (loading ? <CircularProgress size={20} color="inherit" /> : <Rocket />) : <ArrowForward />}
-            size="large"
-            sx={{
-              background: activeStep === steps.length - 1 
-                ? 'linear-gradient(45deg, #4CAF50 30%, #8BC34A 90%)'
-                : 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-              boxShadow: activeStep === steps.length - 1
-                ? '0 3px 5px 2px rgba(76, 175, 80, .3)'
-                : '0 3px 5px 2px rgba(33, 150, 243, .3)',
-            }}
-          >
-            {activeStep === steps.length - 1 ? (loading ? 'Generando...' : '🚀 Generar Diseño') : 'Siguiente'}
-          </Button>
-        </Box>
+      {/* Contenido del paso */}
+      <Paper elevation={3} sx={{ p: { xs: 2, md: 4 }, mb: 4 }}>
+        {renderStepContent()}
       </Paper>
-    </Container>
+
+      {/* Error */}
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      {/* Navegación */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+        <Button
+          variant="outlined"
+          startIcon={<NavigateBefore />}
+          onClick={handleBack}
+          disabled={activeStep === 0 || isLoading}
+        >
+          Anterior
+        </Button>
+        
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          {/* Indicador de progreso */}
+          <Typography 
+            variant="body2" 
+            color="text.secondary"
+            sx={{ alignSelf: 'center' }}
+          >
+            Paso {activeStep + 1} de {STEPS.length}
+          </Typography>
+          
+          {activeStep < STEPS.length - 1 && (
+            <Button
+              variant="contained"
+              endIcon={<NavigateNext />}
+              onClick={handleNext}
+              disabled={isLoading}
+            >
+              Siguiente
+            </Button>
+          )}
+        </Box>
+      </Box>
+
+      {/* Datos debug (solo desarrollo) */}
+      {process.env.NODE_ENV === 'development' && (
+        <Paper 
+          elevation={0} 
+          sx={{ mt: 4, p: 2, bgcolor: 'grey.100', maxHeight: 200, overflow: 'auto' }}
+        >
+          <Typography variant="caption" component="pre">
+            {JSON.stringify(wizardData, null, 2)}
+          </Typography>
+        </Paper>
+      )}
+    </Box>
   );
 }
