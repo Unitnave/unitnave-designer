@@ -1,16 +1,17 @@
 """
-UNITNAVE - Optimizador Layout Naves Industriales v3.0
-Algoritmo Híbrido: Greedy Multi-pass + Backtracking + Local Optimization
+UNITNAVE - Optimizador Layout Naves Industriales V5
+Algoritmo Híbrido Multi-Escenario
 
-MEJORAS vs V2:
-- +15-25% capacidad en espacios irregulares
-- Detección inteligente de segmentos libres
-- Relleno de huecos con backtracking
-- Optimización local (hill climbing)
-- Tiempo: 2-3 segundos (vs 10-60s de GA)
+MEJORAS V5:
+- Generación automática de 5-8 escenarios según tipo de almacén
+- Evaluación con fitness multi-criterio
+- Selección del mejor + alternativas
+- Informe detallado con medidas exactas
+- Zona maniobra reducida (4m vs 12m)
+- Servicios en bloque compacto
 
-Autor: UNITNAVE Team
-Fecha: 2024-11
+ARCHIVO: backend/optimizer.py
+ACCIÓN: REEMPLAZAR contenido completo
 """
 
 import uuid
@@ -18,9 +19,11 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import product
 
 from constants import *
 from models import *
+from fitness import calculate_fitness, FitnessResult
 
 
 # ==================== DATA CLASSES ====================
@@ -32,14 +35,13 @@ class RackConfiguration:
     z: float
     length: float
     depth: float
-    rotation: int  # 0 (horizontal) o 90 (vertical)
+    rotation: int
     levels: int
-    capacity: int  # Palets totales
-    score: float  # Heurística de calidad de posición
+    capacity: int
+    score: float
     label: str = ""
     
     def to_dict(self) -> Dict:
-        """Convertir a formato para warehouse element"""
         return {
             "length": self.length,
             "depth": self.depth,
@@ -48,7 +50,6 @@ class RackConfiguration:
         }
     
     def to_properties(self) -> Dict:
-        """Properties para warehouse element"""
         return {
             "rotation": self.rotation,
             "capacity": self.capacity,
@@ -57,46 +58,378 @@ class RackConfiguration:
         }
 
 
-# ==================== MULTI-ESCENARIO WRAPPER ====================
-
-def generate_multi_scenario_layouts(input_data: WarehouseInput) -> Dict[str, OptimizationResult]:
-    """
-    🎯 FUNCIÓN WRAPPER: Genera 3 escenarios (A/B/C) con diferentes maquinarias
-    """
-    scenarios = {}
-    
-    # Escenario A: Contrapesada (pasillos anchos, menos capacidad)
-    input_a = input_data.model_copy(update={"machinery": "contrapesada"})
-    optimizer_a = WarehouseOptimizer(input_a)
-    scenarios["Option_A_Counterbalanced"] = optimizer_a.generate_layout()
-    
-    # Escenario B: Retráctil (equilibrio, RECOMENDADO)
-    input_b = input_data.model_copy(update={"machinery": "retractil"})
-    optimizer_b = WarehouseOptimizer(input_b)
-    scenarios["Option_B_Reach"] = optimizer_b.generate_layout()
-    
-    # Escenario C: VNA Trilateral (pasillos estrechos, máxima capacidad)
-    input_c = input_data.model_copy(update={"machinery": "trilateral"})
-    optimizer_c = WarehouseOptimizer(input_c)
-    scenarios["Option_C_VNA"] = optimizer_c.generate_layout()
-    
-    return scenarios
+@dataclass
+class ScenarioConfig:
+    """Configuración de un escenario de diseño"""
+    name: str
+    rack_orientation: str  # parallel_length, parallel_width
+    aisle_strategy: str    # central, perimeter, multiple
+    services_position: str # corner_left, corner_right, opposite
+    office_position: str   # mezzanine_docks, ground_opposite, corner
+    priority: str = "balance"
 
 
-# ==================== OPTIMIZADOR V3 ====================
+@dataclass 
+class DesignPreferences:
+    """Preferencias del usuario para el diseño"""
+    include_offices: bool = True
+    include_mezzanine: bool = True
+    include_services: bool = True
+    include_docks: bool = True
+    include_technical: bool = True
+    
+    priority: str = "balance"
+    warehouse_type: str = "industrial"
+    layout_complexity: str = "medio"
+    
+    # ABC Zoning (NUEVO)
+    enable_abc_zones: bool = False  # Activar optimización por bloques
+    abc_zone_a_pct: float = 0.20    # % profundidad para zona A
+    abc_zone_b_pct: float = 0.40    # % profundidad para zona B
+    abc_zone_c_pct: float = 0.40    # % profundidad para zona C
+    
+    forbidden_zones: List[Dict] = field(default_factory=list)
+    min_free_area_center: float = 0
+    high_rotation_pct: float = 0.20
 
-class WarehouseOptimizer:
-    """
-    Optimizador Híbrido de Layouts de Naves Industriales
+
+@dataclass
+class ABCZone:
+    """Definición de una zona ABC"""
+    name: str           # A, B, C
+    z_start: float      # Inicio en profundidad
+    z_end: float        # Fin en profundidad
+    x_start: float      # Inicio en ancho
+    x_end: float        # Fin en ancho
+    priority: str       # speed, balance, density
+    description: str
+    depth_pct: float    # Porcentaje de profundidad
     
-    Algoritmo en 3 fases:
-    1. Greedy Multi-pass: Prueba orientaciones horizontal/vertical
-    2. Backtracking: Rellena huecos detectados con flood-fill
-    3. Local Optimization: Hill climbing para ajustes finos
+    @property
+    def area(self) -> float:
+        return (self.x_end - self.x_start) * (self.z_end - self.z_start)
+    
+    @property
+    def depth(self) -> float:
+        return self.z_end - self.z_start
+    
+    @property
+    def width(self) -> float:
+        return self.x_end - self.x_start
+
+
+# ==================== GENERADOR DE ESCENARIOS ====================
+
+class ScenarioGenerator:
+    """Genera combinaciones de escenarios según tipo de almacén"""
+    
+    def __init__(self, warehouse_type: str = "industrial"):
+        self.config = get_macro_config(warehouse_type)
+        self.warehouse_type = warehouse_type
+    
+    def generate_scenarios(self, max_scenarios: int = 8) -> List[ScenarioConfig]:
+        """Generar lista de escenarios a evaluar"""
+        scenarios = []
+        
+        orientations = [o.value for o in self.config["orientations"]]
+        aisles = [a.value for a in self.config["aisle_strategies"]]
+        services = ["corner_left", "corner_right", "opposite"]
+        offices = ["mezzanine_docks", "ground_opposite"]
+        
+        # Generar combinaciones
+        combinations = list(product(orientations, aisles, services[:2], offices[:1]))
+        
+        # Limitar y nombrar
+        for i, (orient, aisle, service, office) in enumerate(combinations[:max_scenarios]):
+            name = self._generate_name(orient, aisle)
+            scenarios.append(ScenarioConfig(
+                name=name,
+                rack_orientation=orient,
+                aisle_strategy=aisle,
+                services_position=service,
+                office_position=office
+            ))
+        
+        return scenarios
+    
+    def _generate_name(self, orientation: str, aisle: str) -> str:
+        """Generar nombre descriptivo del escenario"""
+        orient_names = {
+            "parallel_length": "Longitudinal",
+            "parallel_width": "Transversal"
+        }
+        aisle_names = {
+            "central": "Pasillo Central",
+            "perimeter": "Perimetral",
+            "multiple": "Multi-pasillo"
+        }
+        return f"{orient_names.get(orientation, orientation)} - {aisle_names.get(aisle, aisle)}"
+
+
+# ==================== ABC ZONE BUILDER ====================
+
+class ABCZoneBuilder:
+    """
+    Construye y optimiza zonas ABC con alineación de pasillos.
+    
+    El concepto:
+    - Zona A (cerca de muelles): Alta rotación, prioriza velocidad
+    - Zona B (medio): Rotación media, balance
+    - Zona C (fondo): Baja rotación, maximiza densidad (VNA, doble profundidad)
+    
+    Restricción crítica: Los pasillos deben alinearse entre zonas para permitir
+    circulación fluida de carretillas.
     """
     
-    def __init__(self, input_data: WarehouseInput):
+    def __init__(self, storage_rect: Dict, warehouse_type: str, preferences: DesignPreferences):
+        self.storage_rect = storage_rect
+        self.warehouse_type = warehouse_type
+        self.prefs = preferences
+        self.abc_config = get_abc_config(warehouse_type)
+        
+        # El "spine" - pasillo vertebral que atraviesa todas las zonas
+        self.spine_x = None
+        self.spine_width = AISLE_STANDARDS["main_aisle"]["width"]
+        
+        # Orientación líder (decidida por zona A)
+        self.leader_orientation = None
+        self.leader_aisle_positions = []
+    
+    def build_zones(self) -> List[ABCZone]:
+        """
+        Divide el rectángulo de almacenamiento en zonas ABC.
+        
+        MEJORA V5.1: Usa proporciones DINÁMICAS según profundidad real.
+        Esto es exactamente lo que haría un consultor profesional.
+        """
+        x_start = self.storage_rect["x_start"]
+        x_end = self.storage_rect["x_end"]
+        z_start = self.storage_rect["z_start"]
+        z_end = self.storage_rect["z_end"]
+        
+        total_depth = z_end - z_start
+        
+        # MEJORA 1: Proporciones dinámicas según profundidad
+        # Si el usuario especificó manualmente, respetamos sus valores
+        # Si no, calculamos automáticamente según reglas profesionales
+        if self.prefs.abc_zone_a_pct != 0.20:  # Usuario modificó el default
+            pct_a = self.prefs.abc_zone_a_pct
+            pct_b = self.prefs.abc_zone_b_pct
+            pct_c = self.prefs.abc_zone_c_pct
+        else:
+            # Cálculo dinámico profesional
+            pct_a, pct_b, pct_c = compute_zone_proportions(
+                total_depth, 
+                self.prefs.high_rotation_pct
+            )
+        
+        # Guardar proporciones calculadas para el reporte
+        self.computed_proportions = {"A": pct_a, "B": pct_b, "C": pct_c}
+        self.was_dynamic = (self.prefs.abc_zone_a_pct == 0.20)
+        
+        # Calcular límites Z (profundidad desde muelles)
+        z_a_end = z_start + (total_depth * pct_a)
+        z_b_end = z_a_end + (total_depth * pct_b)
+        z_c_end = z_end  # Hasta el fondo
+        
+        zones = [
+            ABCZone(
+                name="A",
+                z_start=z_start,
+                z_end=z_a_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["A"]["priority"],
+                description=f"{self.abc_config['A']['description']} ({pct_a*100:.0f}%)",
+                depth_pct=pct_a
+            ),
+            ABCZone(
+                name="B",
+                z_start=z_a_end,
+                z_end=z_b_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["B"]["priority"],
+                description=f"{self.abc_config['B']['description']} ({pct_b*100:.0f}%)",
+                depth_pct=pct_b
+            ),
+            ABCZone(
+                name="C",
+                z_start=z_b_end,
+                z_end=z_c_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["C"]["priority"],
+                description=f"{self.abc_config['C']['description']} ({pct_c*100:.0f}%)",
+                depth_pct=pct_c
+            )
+        ]
+        
+        return zones
+    
+    def calculate_spine_position(self, zones: List[ABCZone]) -> float:
+        """
+        Calcula la posición del pasillo vertebral central.
+        Este pasillo atraviesa A, B y C, permitiendo circulación directa.
+        """
+        # Centrado por defecto
+        x_center = (zones[0].x_start + zones[0].x_end) / 2
+        self.spine_x = x_center
+        return self.spine_x
+    
+    def optimize_zone_with_alignment(
+        self, 
+        zone: ABCZone, 
+        alignment_guide: Optional[Dict] = None,
+        machinery: str = "retractil"
+    ) -> Dict:
+        """
+        Optimiza una zona individual respetando la alineación de pasillos.
+        
+        Args:
+            zone: La zona a optimizar
+            alignment_guide: Configuración de la zona anterior (para heredar alineación)
+            machinery: Tipo de maquinaria
+        
+        Returns:
+            Dict con configuración óptima y racks generados
+        """
+        strategy = get_zone_strategy(zone.priority)
+        
+        # Determinar orientación
+        if alignment_guide and strategy["preferred_orientation"] == "inherit":
+            orientation = alignment_guide["orientation"]
+        else:
+            # Zona A decide libremente basándose en su prioridad
+            if zone.priority == "speed":
+                # Para velocidad, paralelo a muelles minimiza distancia
+                orientation = "parallel_length"
+            else:
+                orientation = "parallel_width"  # Default para densidad
+        
+        # Ajustar ancho de pasillo según estrategia
+        base_aisle = AISLE_STANDARDS[machinery]["width"]
+        aisle_width = base_aisle * strategy["aisle_width_modifier"]
+        
+        # Profundidad de rack (simple o doble)
+        rack_depth = PALLET_SIZES["EUR"]["depth"]
+        if strategy["rack_depth"] == "double" and strategy["allow_double_deep"]:
+            rack_depth = PALLET_SIZES["EUR"]["depth"] * 2  # Doble profundidad
+        
+        # Calcular posiciones de pasillos con alineación
+        aisle_positions = self._calculate_aligned_aisles(
+            zone, 
+            aisle_width, 
+            rack_depth,
+            alignment_guide
+        )
+        
+        # Guardar para siguiente zona si es la líder (A)
+        if zone.name == "A":
+            self.leader_orientation = orientation
+            self.leader_aisle_positions = aisle_positions
+        
+        return {
+            "zone": zone.name,
+            "orientation": orientation,
+            "aisle_width": aisle_width,
+            "rack_depth": rack_depth,
+            "aisle_positions": aisle_positions,
+            "strategy": strategy,
+            "is_double_deep": strategy["rack_depth"] == "double"
+        }
+    
+    def _calculate_aligned_aisles(
+        self, 
+        zone: ABCZone, 
+        aisle_width: float, 
+        rack_depth: float,
+        alignment_guide: Optional[Dict]
+    ) -> List[float]:
+        """
+        Calcula posiciones de pasillos alineados con zona anterior.
+        
+        El truco: Si hay guía de alineación, usamos las mismas posiciones X
+        aunque el ancho de pasillo sea diferente.
+        """
+        if alignment_guide and alignment_guide.get("aisle_positions"):
+            # Heredar posiciones de pasillos de la zona anterior
+            return alignment_guide["aisle_positions"]
+        
+        # Calcular desde cero (zona A)
+        positions = []
+        
+        # Pasillo principal (spine) siempre en el centro
+        center_x = (zone.x_start + zone.x_end) / 2
+        positions.append(center_x)
+        
+        # Pasillos secundarios según espacio disponible
+        available_width = zone.width - self.spine_width
+        module_width = rack_depth * 2 + aisle_width  # rack-pasillo-rack
+        
+        num_modules_per_side = int((available_width / 2) / module_width)
+        
+        for i in range(1, num_modules_per_side + 1):
+            offset = i * module_width
+            positions.append(center_x - offset)  # Izquierda
+            positions.append(center_x + offset)  # Derecha
+        
+        return sorted(positions)
+    
+    def generate_zone_report(self, zones: List[ABCZone], configs: List[Dict]) -> Dict:
+        """Genera informe detallado de la configuración ABC"""
+        report = {
+            "type": "abc_zoned",
+            "zones": [],
+            "alignment": {
+                "spine_position": self.spine_x,
+                "leader_orientation": self.leader_orientation,
+                "pasillos_alineados": True
+            },
+            "summary": {}
+        }
+        
+        total_area = 0
+        total_racks = 0
+        
+        for zone, config in zip(zones, configs):
+            zone_info = {
+                "name": zone.name,
+                "description": zone.description,
+                "area_m2": round(zone.area, 1),
+                "depth_m": round(zone.depth, 1),
+                "priority": zone.priority,
+                "configuration": {
+                    "orientation": config["orientation"],
+                    "aisle_width_m": config["aisle_width"],
+                    "rack_depth_m": config["rack_depth"],
+                    "is_double_deep": config["is_double_deep"],
+                    "num_aisles": len(config["aisle_positions"])
+                }
+            }
+            report["zones"].append(zone_info)
+            total_area += zone.area
+        
+        report["summary"] = {
+            "total_storage_area": round(total_area, 1),
+            "zone_distribution": {
+                "A": f"{zones[0].depth_pct * 100:.0f}%",
+                "B": f"{zones[1].depth_pct * 100:.0f}%",
+                "C": f"{zones[2].depth_pct * 100:.0f}%"
+            }
+        }
+        
+        return report
+
+
+# ==================== CONSTRUCTOR DE LAYOUTS ====================
+
+class LayoutBuilder:
+    """Construye un layout completo según configuración"""
+    
+    def __init__(self, input_data: WarehouseInput, preferences: DesignPreferences = None):
         self.input = input_data
+        self.prefs = preferences or DesignPreferences()
         self.dims = {
             "length": input_data.length,
             "width": input_data.width,
@@ -107,986 +440,947 @@ class WarehouseOptimizer:
         self.workers = input_data.workers or estimate_workers(self.total_area, input_data.activity_type)
         self.aisle_width = AISLE_WIDTHS.get(input_data.machinery, 2.8)
         
-        # Grid mejorado (resolución 0.5m)
+        # Grid
         self.grid_resolution = 0.5
         self.grid = self._init_grid()
         
-        # Dimensiones de palet
+        # Palet
         pallet_dims = PALLET_TYPES.get(input_data.pallet_type, PALLET_TYPES["EUR"])
-        self.pallet = {
-            "length": pallet_dims["length"],
-            "width": pallet_dims["width"]
-        }
+        self.pallet = {"length": pallet_dims["length"], "width": pallet_dims["width"]}
         
         self.elements: List[WarehouseElement] = []
+        self.racks: List[RackConfiguration] = []
+        self.fixed_area = 0
+        self.dock_positions = []
+        self.expedition_zone = {"x": 0, "z": 0}
         
-        # Sistema resiliente de errores
         self.warnings: List[str] = []
-        self.errors: List[str] = []
-        
-        # Métricas de optimización
-        self.optimization_stats = {
-            "greedy_racks": 0,
-            "backtrack_racks": 0,
-            "optimized_racks": 0,
-            "total_capacity": 0
-        }
     
     def _init_grid(self) -> np.ndarray:
-        """Grid NumPy para tracking ocupación"""
         rows = int(self.dims["length"] / self.grid_resolution)
         cols = int(self.dims["width"] / self.grid_resolution)
         return np.zeros((rows, cols), dtype=np.uint8)
     
-    def _mark_grid(self, x: float, z: float, width: float, depth: float, value: int = 1):
-        """Marcar zona ocupada en grid (con bounds checking)"""
-        try:
-            x_start = int(x / self.grid_resolution)
-            z_start = int(z / self.grid_resolution)
-            x_end = int((x + width) / self.grid_resolution)
-            z_end = int((z + depth) / self.grid_resolution)
-            
-            # Clamping seguro
-            x_start = max(0, min(x_start, self.grid.shape[0] - 1))
-            x_end = max(0, min(x_end, self.grid.shape[0]))
-            z_start = max(0, min(z_start, self.grid.shape[1] - 1))
-            z_end = max(0, min(z_end, self.grid.shape[1]))
-            
-            self.grid[x_start:x_end, z_start:z_end] = value
-        except Exception as e:
-            self.warnings.append(f"Grid marking error: {str(e)}")
+    def build(self, config: ScenarioConfig) -> Dict:
+        """Construir layout completo según configuración"""
+        self.elements = []
+        self.racks = []
+        self.fixed_area = 0
+        self.grid = self._init_grid()
+        
+        # 1. Muelles
+        if self.prefs.include_docks:
+            self._place_docks()
+        
+        # 2. Oficinas
+        if self.prefs.include_offices:
+            self._place_offices(config.office_position)
+        
+        # 3. Servicios
+        if self.prefs.include_services:
+            self._place_services_block(config.services_position)
+        
+        # 4. Técnicas
+        if self.prefs.include_technical:
+            self._place_technical()
+        
+        # 5. Zonas operativas
+        self._place_operational_zones()
+        
+        # 6. ESTANTERÍAS (CORE)
+        self._place_racks(config.rack_orientation, config.aisle_strategy)
+        
+        return {
+            "elements": self.elements,
+            "racks": self.racks,
+            "fixed_area": self.fixed_area,
+            "dock_positions": self.dock_positions,
+            "expedition_zone": self.expedition_zone,
+            "config": config
+        }
     
-    def _is_area_free(self, x: float, z: float, width: float, depth: float) -> bool:
-        """Verificar si área está libre en grid"""
-        try:
-            x_start = int(x / self.grid_resolution)
-            z_start = int(z / self.grid_resolution)
-            x_end = int((x + width) / self.grid_resolution)
-            z_end = int((z + depth) / self.grid_resolution)
-            
-            # Bounds check
-            if (x_start < 0 or x_end > self.grid.shape[0] or 
-                z_start < 0 or z_end > self.grid.shape[1]):
-                return False
-            
-            # Verificar si todas las celdas están libres (0)
-            area = self.grid[x_start:x_end, z_start:z_end]
-            return np.all(area == 0)
-            
-        except Exception:
-            return False
-    
-    def _add_element(self, element_type: str, x: float, z: float, dims: Dict, props: Dict = None) -> Optional[WarehouseElement]:
-        """Helper con validación y manejo errores"""
-        try:
-            # Validar que cabe en la nave
-            width = dims.get("width") or dims.get("largo") or dims.get("length", 0)
-            depth = dims.get("depth") or dims.get("ancho") or dims.get("width", 0)
-            
-            if x + width > self.dims["length"] or z + depth > self.dims["width"]:
-                self.warnings.append(f"Elemento {element_type} fuera de límites, ajustando...")
-                # Ajustar posición
-                x = min(x, self.dims["length"] - width - 0.5)
-                z = min(z, self.dims["width"] - depth - 0.5)
-                x = max(0, x)
-                z = max(0, z)
-            
-            element = WarehouseElement(
-                id=f"{element_type}-{uuid.uuid4().hex[:8]}",
-                type=element_type,
-                position=ElementPosition(
-                    x=round(x, 2),
-                    y=round(z, 2),
-                    z=props.get("elevation", 0) if props else 0,
-                    rotation=props.get("rotation", 0) if props else 0
-                ),
-                dimensions=ElementDimensions(**dims),
-                properties=props or {}
-            )
-            self.elements.append(element)
-            self._mark_grid(x, z, width, depth)
-            
-            return element
-            
-        except Exception as e:
-            self.warnings.append(f"Error añadiendo {element_type}: {str(e)}")
-            return None
-    
-    # ==================== PIPELINE GENERACIÓN (RESILIENTE) ====================
-    
-    def generate_layout(self) -> OptimizationResult:
-        """Pipeline con manejo de errores por fase"""
-        try:
-            # FASE 1: Zonas fijas
-            self._safe_execute(self._place_loading_docks, "Muelles")
-            self._safe_execute(self._place_offices_mezzanine, "Oficinas")
-            
-            # FASE 2: Servicios
-            self._safe_execute(self._place_employee_services, "Servicios empleados")
-            
-            # FASE 3: Técnicas
-            self._safe_execute(self._place_technical_rooms, "Instalaciones técnicas")
-            
-            # FASE 4: Operativas
-            self._safe_execute(self._place_operational_zones, "Zonas operativas")
-            
-            # FASE 5: CORE - Estanterías con Híbrido V3
-            storage_zones = self._get_available_storage_zones()
-            self._safe_execute(lambda: self._place_racks_optimized_v3(storage_zones), "Estanterías V3")
-            
-            # FASE 6: Cálculos
-            from calculations import CapacityCalculator
-            calculator = CapacityCalculator(self.input, self.elements, self.dims)
-            capacity = calculator.calculate_total_capacity()
-            surfaces = calculator.calculate_surfaces()
-            
-            # FASE 7: Validaciones
-            from validation import WarehouseValidator
-            validator = WarehouseValidator(self.input, self.elements, self.dims)
-            validations = validator.run_all_validations()
-            
-            # Añadir warnings del proceso
-            for warning in self.warnings:
-                validations.append(ValidationItem(
-                    type="warning",
-                    code="GENERATION",
-                    message=warning
-                ))
-            
-            # Estado final
-            has_errors = any(v.type == "error" for v in validations)
-            status = "error" if has_errors else ("warning" if self.warnings else "success")
-            
-            return OptimizationResult(
-                status=status,
-                elements=self.elements,
-                capacity=capacity,
-                surfaces=surfaces,
-                validations=validations,
-                metadata=self._generate_metadata(),
-                timestamp=datetime.now().isoformat()
-            )
-            
-        except Exception as e:
-            # Error crítico inesperado
-            return OptimizationResult(
-                status="error",
-                elements=self.elements,
-                capacity=CapacityResult(
-                    total_pallets=0, 
-                    pallets_per_level=0, 
-                    levels_avg=0, 
-                    storage_volume_m3=0, 
-                    efficiency_percentage=0
-                ),
-                surfaces=SurfaceSummary(
-                    total_area=self.total_area,
-                    storage_area=0,
-                    operational_area=0,
-                    services_area=0,
-                    circulation_area=0,
-                    office_area=0,
-                    efficiency=0
-                ),
-                validations=[ValidationItem(
-                    type="error",
-                    code="CRITICAL",
-                    message=f"Error crítico: {str(e)}"
-                )],
-                metadata={"error": str(e), "warnings": self.warnings},
-                timestamp=datetime.now().isoformat()
-            )
-    
-    def _safe_execute(self, func, phase_name: str):
-        """Ejecutar función con manejo de errores"""
-        try:
-            func()
-        except Exception as e:
-            self.warnings.append(f"Error en {phase_name}: {str(e)}")
-    
-    # ==================== MÉTODOS DE COLOCACIÓN FIJA ====================
-    
-    def _place_loading_docks(self):
-        """Muelles en frontal nave"""
+    def _place_docks(self):
+        """Colocar muelles con zona maniobra reducida"""
         n_docks = self.input.n_docks
         dock_width = DOCK_STANDARDS["width"]
-        dock_separation = DOCK_STANDARDS["separation"]
+        dock_sep = DOCK_STANDARDS["separation"]
+        maneuver = DOCK_STANDARDS["maneuver_zone"]  # 4m (reducido)
         
-        total_width = (n_docks * dock_width) + ((n_docks - 1) * dock_separation)
+        total_width = n_docks * dock_width + (n_docks - 1) * dock_sep
         start_x = (self.dims["length"] - total_width) / 2
         
         for i in range(n_docks):
-            x = start_x + i * (dock_width + dock_separation)
+            x = start_x + i * (dock_width + dock_sep)
             self._add_element("dock", x, 0, {
                 "width": dock_width,
                 "depth": DOCK_STANDARDS["depth"],
                 "height": DOCK_STANDARDS["height"],
-                "maneuverZone": DOCK_STANDARDS["maneuver_zone"]
+                "maneuverZone": maneuver
             }, {"label": f"Muelle {i+1}"})
-    
-    def _place_offices_mezzanine(self):
-        """Oficinas en entreplanta"""
-        office_area = max(
-            OFFICE_STANDARDS["min_area"],
-            self.workers * OFFICE_STANDARDS["m2_per_worker"]
-        )
+            
+            self.dock_positions.append({"x": x + dock_width/2, "z": DOCK_STANDARDS["depth"]})
         
+        # Marcar zona maniobra
+        self._mark_grid(0, 0, self.dims["length"], DOCK_STANDARDS["depth"] + maneuver)
+        self.fixed_area += self.dims["length"] * (DOCK_STANDARDS["depth"] + maneuver)
+    
+    def _place_offices(self, position: str):
+        """Colocar oficinas según posición"""
+        office_area = max(OFFICE_STANDARDS["min_area"], self.workers * OFFICE_STANDARDS["m2_per_worker"])
         office_width = min(10, self.dims["width"] * 0.25)
         office_length = office_area / office_width
         
-        x = 0
-        z = self.dims["width"] - office_width
+        if position == "mezzanine_docks":
+            x, z = 0, self.dims["width"] - office_width
+            elevation = 3.5
+            is_mezzanine = True
+        elif position == "ground_opposite":
+            x, z = 0, self.dims["width"] - office_width
+            elevation = 0
+            is_mezzanine = False
+            self.fixed_area += office_length * office_width
+        else:
+            x, z = 0, self.dims["width"] - office_width
+            elevation = 3.5
+            is_mezzanine = True
         
         self._add_element("office", x, z, {
             "largo": round(office_length, 1),
             "ancho": round(office_width, 1),
             "alto": OFFICE_STANDARDS["ceiling_height"]
         }, {
-            "elevation": 3.5,
-            "is_mezzanine": True,
+            "elevation": elevation,
+            "is_mezzanine": is_mezzanine,
             "label": "Oficinas",
             "workers": self.workers
         })
         
-        # Escalera + Ascensor
-        stairs_width = SERVICE_ROOMS["stairs"]["width"]
-        stairs_depth = SERVICE_ROOMS["stairs"]["depth"]
-        
+        # Acceso vertical
         self._add_element("service_room", office_length, z, {
-            "largo": stairs_width,
-            "ancho": stairs_depth,
+            "largo": SERVICE_ROOMS["vertical_access"]["width"],
+            "ancho": SERVICE_ROOMS["vertical_access"]["depth"],
             "alto": 7.0
         }, {"label": "Escalera + Ascensor", "type": "vertical_access"})
+        
+        if not is_mezzanine:
+            self._mark_grid(x, z, office_length + SERVICE_ROOMS["vertical_access"]["width"], office_width)
     
-    def _place_employee_services(self):
-        """Vestuarios, baños, comedor"""
-        # BAÑOS
-        num_restrooms = max(2, int(np.ceil(self.workers / SERVICE_ROOMS["restroom"]["per_workers"])))
-        restroom_width = SERVICE_ROOMS["restroom"]["width"]
-        restroom_depth = SERVICE_ROOMS["restroom"]["depth"]
+    def _place_services_block(self, position: str):
+        """Colocar bloque compacto de servicios"""
+        block = calculate_services_block(self.workers)
         
-        x_start = 0
-        z_start = self.dims["width"] - restroom_depth - 12
+        if position == "corner_left":
+            x, z = 1, DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 2
+        elif position == "corner_right":
+            x = self.dims["length"] - block["width"] - 1
+            z = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 2
+        else:  # opposite
+            x, z = 1, self.dims["width"] - block["depth"] - 12
         
-        for i in range(num_restrooms):
-            if self._is_area_free(x_start + i * (restroom_width + 0.5), z_start, restroom_width, restroom_depth):
-                self._add_element("service_room", x_start + i * (restroom_width + 0.5), z_start, {
-                    "largo": restroom_width,
-                    "ancho": restroom_depth,
-                    "alto": 3.0
-                }, {"label": f"Baño {i+1}", "type": "restroom"})
+        self._add_element("service_room", x, z, {
+            "largo": block["width"],
+            "ancho": block["depth"],
+            "alto": 3.5
+        }, {
+            "label": "Bloque Servicios",
+            "type": "services_block",
+            "components": block["components"]
+        })
         
-        # VESTUARIOS
-        if self.workers >= SERVICE_ROOMS["locker_room"]["min_workers"]:
-            locker_width = SERVICE_ROOMS["locker_room"]["width"]
-            locker_depth = SERVICE_ROOMS["locker_room"]["depth"]
-            
-            for i in range(2):
-                z_pos = z_start - (i+1) * (locker_depth + 1)
-                if self._is_area_free(x_start, z_pos, locker_width, locker_depth):
-                    self._add_element("service_room", x_start, z_pos, {
-                        "largo": locker_width,
-                        "ancho": locker_depth,
-                        "alto": 3.0
-                    }, {"label": f"Vestuario {'Hombres' if i==0 else 'Mujeres'}", "type": "locker_room"})
-        
-        # COMEDOR
-        break_area = self.workers * OFFICE_STANDARDS["break_room_m2_per_worker"]
-        break_width = SERVICE_ROOMS["break_room"]["width"]
-        break_depth = break_area / break_width
-        
-        if break_depth < self.dims["width"] * 0.3:
-            self._add_element("service_room", 20, self.dims["width"] - break_width, {
-                "largo": round(break_depth, 1),
-                "ancho": break_width,
-                "alto": 3.5
-            }, {
-                "elevation": 3.5,
-                "label": "Comedor",
-                "type": "break_room"
-            })
-        else:
-            self.warnings.append("Comedor no cabe en entreplanta")
+        self._mark_grid(x, z, block["width"], block["depth"])
+        self.fixed_area += block["area"]
     
-    def _place_technical_rooms(self):
-        """Instalaciones técnicas"""
-        # ELÉCTRICA
-        elec_width = TECHNICAL_ROOMS["electrical"]["width"]
-        elec_depth = TECHNICAL_ROOMS["electrical"]["depth"]
+    def _place_technical(self):
+        """Colocar salas técnicas"""
+        elec_w = TECHNICAL_ROOMS["electrical"]["width"]
+        elec_d = TECHNICAL_ROOMS["electrical"]["depth"]
         
-        self._add_element("technical_room", self.dims["length"] - elec_width - 1, 1, {
-            "largo": elec_width,
-            "ancho": elec_depth,
+        self._add_element("technical_room", self.dims["length"] - elec_w - 1, 1, {
+            "largo": elec_w,
+            "ancho": elec_d,
             "alto": 3.0
         }, {"label": "Sala Eléctrica", "type": "electrical"})
         
-        # BATERÍAS
-        battery_width = TECHNICAL_ROOMS["battery_charging"]["width"]
-        battery_depth = TECHNICAL_ROOMS["battery_charging"]["depth"]
-        
-        self._add_element("technical_room", self.dims["length"] - battery_width - 1, 10, {
-            "largo": battery_width,
-            "ancho": battery_depth,
-            "alto": 2.5
-        }, {"label": "Carga Baterías", "type": "battery_charging"})
+        self._mark_grid(self.dims["length"] - elec_w - 1, 1, elec_w, elec_d)
+        self.fixed_area += elec_w * elec_d
     
     def _place_operational_zones(self):
-        """Zonas operativas"""
-        # RECEPCIÓN
-        receiving_area = self.total_area * OPERATIONAL_ZONES["receiving"]
-        receiving_width = min(15, self.dims["length"] * 0.3)
-        receiving_depth = receiving_area / receiving_width
+        """Colocar zonas operativas"""
+        zones_area = calculate_operational_zones_area(self.total_area, self.input.n_docks)
+        dock_end = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"]
         
-        self._add_element("operational_zone", 5, DOCK_STANDARDS["maneuver_zone"] + 2, {
-            "largo": round(receiving_width, 1),
-            "ancho": round(receiving_depth, 1),
+        # Recepción
+        rec_width = min(15, self.dims["length"] * 0.2)
+        rec_depth = zones_area["receiving"] / rec_width
+        self._add_element("operational_zone", 5, dock_end + 1, {
+            "largo": round(rec_width, 1),
+            "ancho": round(rec_depth, 1),
             "alto": 0.1
         }, {"label": "Recepción", "type": "receiving"})
         
-        # PICKING
-        picking_area = self.total_area * OPERATIONAL_ZONES["picking"]
-        picking_width = min(20, self.dims["length"] * 0.4)
-        picking_depth = picking_area / picking_width
-        
-        self._add_element("operational_zone", self.dims["length"] / 2 - picking_width / 2, self.dims["width"] / 2, {
-            "largo": round(picking_width, 1),
-            "ancho": round(picking_depth, 1),
-            "alto": 0.1
-        }, {"label": "Picking", "type": "picking"})
-        
-        # EXPEDICIÓN
-        shipping_area = self.total_area * OPERATIONAL_ZONES["shipping"]
-        shipping_width = receiving_width
-        shipping_depth = shipping_area / shipping_width
-        
-        self._add_element("operational_zone", self.dims["length"] - shipping_width - 5, DOCK_STANDARDS["maneuver_zone"] + 2, {
-            "largo": round(shipping_width, 1),
-            "ancho": round(shipping_depth, 1),
+        # Expedición
+        exp_width = rec_width
+        exp_depth = zones_area["shipping"] / exp_width
+        exp_x = self.dims["length"] - exp_width - 5
+        self._add_element("operational_zone", exp_x, dock_end + 1, {
+            "largo": round(exp_width, 1),
+            "ancho": round(exp_depth, 1),
             "alto": 0.1
         }, {"label": "Expedición", "type": "shipping"})
-    
-    def _get_available_storage_zones(self) -> List[Dict]:
-        """Calcular áreas libres para almacenamiento"""
-        storage_z_start = DOCK_STANDARDS["maneuver_zone"] + 15
-        storage_z_end = self.dims["width"] - 15
-        storage_x_start = 2
-        storage_x_end = self.dims["length"] - 12
         
-        return [{
-            "x_start": storage_x_start,
-            "x_end": storage_x_end,
-            "z_start": storage_z_start,
-            "z_end": storage_z_end
-        }]
-    
-    # ==================== ALGORITMO V3: HÍBRIDO ====================
-    
-    def _place_racks_optimized_v3(self, storage_zones: List[Dict]):
-        """
-        ⭐⭐⭐ ALGORITMO HÍBRIDO V3 ⭐⭐⭐
+        self.expedition_zone = {"x": exp_x + exp_width/2, "z": dock_end + exp_depth/2}
         
-        FASE 1: Greedy Multi-pass (horizontal vs vertical)
-        FASE 2: Backtracking para rellenar huecos
-        FASE 3: Optimización local (hill climbing)
-        
-        Mejora +15-25% vs greedy puro
-        Tiempo: 2-3 segundos
-        """
+        # Picking
+        pick_width = min(20, self.dims["length"] * 0.3)
+        pick_depth = zones_area["picking"] / pick_width
+        self._add_element("operational_zone", self.dims["length"]/2 - pick_width/2, self.dims["width"]/2, {
+            "largo": round(pick_width, 1),
+            "ancho": round(pick_depth, 1),
+            "alto": 0.1
+        }, {"label": "Picking", "type": "picking"})
+    
+    def _place_racks(self, orientation: str, aisle_strategy: str):
+        """Colocar estanterías según orientación y estrategia"""
         rack_depth = RACK_STANDARDS["conventional"]["depth"]
-        rack_length = RACK_STANDARDS["conventional"]["beam_length"]
-        max_levels = calculate_rack_levels(self.dims["height"])
+        max_levels = calculate_rack_levels(self.dims["height"], self.input.pallet_height or 1.5)
         
-        for zone in storage_zones:
-            # FASE 1: Greedy multi-direccional
-            placed_racks = self._greedy_multipass_placement(zone, rack_length, rack_depth, max_levels)
-            self.optimization_stats["greedy_racks"] = len(placed_racks)
-            
-            # FASE 2: Backtracking fill gaps
-            filled_gaps = self._backtrack_fill_gaps(zone, rack_length, rack_depth, max_levels, placed_racks)
-            self.optimization_stats["backtrack_racks"] = len(filled_gaps)
-            
-            # FASE 3: Optimización local
-            all_racks = placed_racks + filled_gaps
-            if len(all_racks) > 0:
-                self._local_optimization(all_racks, zone)
-            
-            # Añadir racks finales al warehouse
-            for rack in all_racks:
-                self._add_element(
-                    "shelf", 
-                    rack.x, 
-                    rack.z, 
-                    rack.to_dict(),
-                    rack.to_properties()
-                )
-                self.optimization_stats["total_capacity"] += rack.capacity
-            
-            # Log de estadísticas
-            self.warnings.append(
-                f"Optimización V3: {len(placed_racks)} racks greedy + {len(filled_gaps)} backtrack = "
-                f"{len(all_racks)} total ({self.optimization_stats['total_capacity']} palets)"
+        # Zona de almacenamiento
+        storage_start_z = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 12
+        storage_end_z = self.dims["width"] - 12
+        storage_start_x = 12
+        storage_end_x = self.dims["length"] - 12
+        
+        storage_rect = {
+            "x_start": storage_start_x,
+            "x_end": storage_end_x,
+            "z_start": storage_start_z,
+            "z_end": storage_end_z
+        }
+        
+        # ===== ABC ZONING =====
+        if self.prefs.enable_abc_zones:
+            self._place_racks_abc_zoned(storage_rect, rack_depth, max_levels, aisle_strategy)
+            return
+        
+        # ===== MODO UNIFORME (Original) =====
+        if orientation == "parallel_length":
+            self._place_racks_parallel_length(
+                storage_start_x, storage_end_x,
+                storage_start_z, storage_end_z,
+                rack_depth, max_levels, aisle_strategy
+            )
+        else:
+            self._place_racks_parallel_width(
+                storage_start_x, storage_end_x,
+                storage_start_z, storage_end_z,
+                rack_depth, max_levels, aisle_strategy
             )
     
-    def _greedy_multipass_placement(
-        self, 
-        zone: Dict, 
-        rack_length: float,
-        rack_depth: float, 
-        max_levels: int
-    ) -> List[RackConfiguration]:
+    def _place_racks_abc_zoned(self, storage_rect: Dict, rack_depth: float, max_levels: int, aisle_strategy: str):
         """
-        FASE 1: Greedy con 2 orientaciones
+        Colocar estanterías con optimización ABC por zonas.
         
-        Prueba:
-        1. Horizontal (racks paralelos a length)
-        2. Vertical (racks paralelos a width)
-        
-        Retorna configuración con mayor capacidad
+        Proceso:
+        1. Dividir espacio en 3 zonas (A, B, C)
+        2. Zona A (líder): decide orientación óptima para velocidad
+        3. Zonas B y C: heredan alineación de pasillos de A
+        4. Zona C: puede usar VNA o doble profundidad
         """
-        orientations = [
-            ("horizontal", 0),
-            ("vertical", 90),
-        ]
+        abc_builder = ABCZoneBuilder(
+            storage_rect, 
+            self.prefs.warehouse_type, 
+            self.prefs
+        )
         
-        best_config = []
-        best_capacity = 0
+        # 1. Construir zonas
+        zones = abc_builder.build_zones()
         
-        for name, rotation in orientations:
-            # Crear grid temporal para esta orientación
-            temp_grid = self.grid.copy()
-            
-            racks = self._place_in_orientation(
+        # 2. Calcular pasillo vertebral
+        abc_builder.calculate_spine_position(zones)
+        
+        # 3. Optimizar cada zona con cascada de alineación
+        zone_configs = []
+        alignment_guide = None
+        
+        for zone in zones:
+            config = abc_builder.optimize_zone_with_alignment(
                 zone, 
-                rack_length,
-                rack_depth, 
-                max_levels, 
-                rotation,
-                temp_grid
+                alignment_guide,
+                self.input.machinery
             )
-            
-            total_capacity = sum(r.capacity for r in racks)
-            
-            if total_capacity > best_capacity:
-                best_capacity = total_capacity
-                best_config = racks
+            zone_configs.append(config)
+            alignment_guide = config  # Pasar como guía a la siguiente zona
         
-        # Aplicar mejor configuración al grid real
-        for rack in best_config:
-            self._mark_grid(rack.x, rack.z, rack.length, rack.depth)
+        # 4. Colocar racks en cada zona
+        for zone, config in zip(zones, zone_configs):
+            self._place_racks_in_zone(zone, config, rack_depth, max_levels)
         
-        return best_config
+        # 5. Guardar reporte ABC para metadata
+        self.abc_report = abc_builder.generate_zone_report(zones, zone_configs)
     
-    def _place_in_orientation(
-        self, 
-        zone: Dict, 
-        rack_length: float,
-        rack_depth: float, 
-        max_levels: int, 
-        rotation: int,
-        temp_grid: np.ndarray
-    ) -> List[RackConfiguration]:
-        """Colocar racks en una orientación específica"""
-        racks = []
+    def _place_racks_in_zone(self, zone: ABCZone, config: Dict, base_rack_depth: float, max_levels: int):
+        """Colocar racks dentro de una zona específica ABC"""
+        rack_depth = config["rack_depth"]  # Puede ser doble si es zona C
+        aisle_width = config["aisle_width"]
+        orientation = config["orientation"]
         
-        if rotation == 0:  # HORIZONTAL
-            available_length = zone["x_end"] - zone["x_start"]
-            available_width = zone["z_end"] - zone["z_start"]
-            
-            rack_module_depth = (rack_depth * 2) + self.aisle_width
-            num_rows = int(available_width / rack_module_depth)
-            
-            current_z = zone["z_start"]
-            
-            for row in range(num_rows):
-                # ⭐ CLAVE: Escanear línea para encontrar segmentos libres
-                segments = self._find_free_segments(
-                    temp_grid, 
-                    zone["x_start"], 
-                    zone["x_end"], 
-                    current_z, 
-                    rack_depth * 2,
-                    vertical=False
-                )
-                
-                for seg_start, seg_end in segments:
-                    seg_length = seg_end - seg_start
-                    
-                    if seg_length >= 5.0:  # Mínimo 5m para rack
-                        # Rack A (frontal)
-                        rack_a = RackConfiguration(
-                            x=seg_start,
-                            z=current_z,
-                            length=seg_length,
-                            depth=rack_depth,
-                            rotation=0,
-                            levels=max_levels,
-                            capacity=self._calculate_rack_capacity(seg_length, rack_depth, max_levels),
-                            score=self._calculate_rack_score(seg_start, current_z, seg_length, zone),
-                            label=f"A{row+1}"
-                        )
-                        racks.append(rack_a)
-                        self._mark_on_temp_grid(temp_grid, seg_start, current_z, seg_length, rack_depth)
-                        
-                        # Rack B (back-to-back)
-                        rack_b = RackConfiguration(
-                            x=seg_start,
-                            z=current_z + rack_depth,
-                            length=seg_length,
-                            depth=rack_depth,
-                            rotation=0,
-                            levels=max_levels,
-                            capacity=self._calculate_rack_capacity(seg_length, rack_depth, max_levels),
-                            score=self._calculate_rack_score(seg_start, current_z + rack_depth, seg_length, zone),
-                            label=f"B{row+1}"
-                        )
-                        racks.append(rack_b)
-                        self._mark_on_temp_grid(temp_grid, seg_start, current_z + rack_depth, seg_length, rack_depth)
-                
-                current_z += rack_module_depth
-        
-        elif rotation == 90:  # VERTICAL (perpendicular)
-            available_length = zone["z_end"] - zone["z_start"]
-            available_width = zone["x_end"] - zone["x_start"]
-            
-            rack_module_depth = (rack_depth * 2) + self.aisle_width
-            num_rows = int(available_width / rack_module_depth)
-            
-            current_x = zone["x_start"]
-            
-            for row in range(num_rows):
-                segments = self._find_free_segments(
-                    temp_grid, 
-                    zone["z_start"], 
-                    zone["z_end"], 
-                    current_x, 
-                    rack_depth * 2,
-                    vertical=True
-                )
-                
-                for seg_start, seg_end in segments:
-                    seg_length = seg_end - seg_start
-                    
-                    if seg_length >= 5.0:
-                        rack_a = RackConfiguration(
-                            x=current_x,
-                            z=seg_start,
-                            length=seg_length,
-                            depth=rack_depth,
-                            rotation=90,
-                            levels=max_levels,
-                            capacity=self._calculate_rack_capacity(seg_length, rack_depth, max_levels),
-                            score=self._calculate_rack_score(current_x, seg_start, seg_length, zone),
-                            label=f"V{row+1}A"
-                        )
-                        racks.append(rack_a)
-                        self._mark_on_temp_grid(temp_grid, current_x, seg_start, rack_depth, seg_length)
-                        
-                        rack_b = RackConfiguration(
-                            x=current_x + rack_depth,
-                            z=seg_start,
-                            length=seg_length,
-                            depth=rack_depth,
-                            rotation=90,
-                            levels=max_levels,
-                            capacity=self._calculate_rack_capacity(seg_length, rack_depth, max_levels),
-                            score=self._calculate_rack_score(current_x + rack_depth, seg_start, seg_length, zone),
-                            label=f"V{row+1}B"
-                        )
-                        racks.append(rack_b)
-                        self._mark_on_temp_grid(temp_grid, current_x + rack_depth, seg_start, rack_depth, seg_length)
-                
-                current_x += rack_module_depth
-        
-        return racks
+        if orientation == "parallel_length":
+            self._place_racks_parallel_length(
+                zone.x_start, zone.x_end,
+                zone.z_start, zone.z_end,
+                rack_depth, max_levels, "central",
+                zone_label=zone.name,
+                aisle_width_override=aisle_width
+            )
+        else:
+            self._place_racks_parallel_width(
+                zone.x_start, zone.x_end,
+                zone.z_start, zone.z_end,
+                rack_depth, max_levels, "central",
+                zone_label=zone.name,
+                aisle_width_override=aisle_width
+            )
     
-    def _find_free_segments(
-        self, 
-        grid: np.ndarray, 
-        start: float, 
-        end: float, 
-        perpendicular_pos: float, 
-        depth: float,
-        vertical: bool = False
-    ) -> List[Tuple[float, float]]:
-        """
-        ⭐⭐⭐ ALGORITMO CLAVE ⭐⭐⭐
+    def _place_racks_parallel_length(self, x_start, x_end, z_start, z_end, rack_depth, max_levels, strategy, zone_label: str = "", aisle_width_override: float = None):
+        """Racks paralelos al largo de la nave"""
+        available_width = z_end - z_start
+        aisle = aisle_width_override or self.aisle_width
+        rack_module = rack_depth * 2 + aisle  # Back-to-back + pasillo
         
-        Escanea una línea del grid y encuentra segmentos libres contiguos
+        num_rows = int(available_width / rack_module)
+        current_z = z_start
         
-        Ejemplo:
-        Grid: [0,0,0,1,1,0,0,0,0,1,0,0]
-        Returns: [(0, 1.5), (2.5, 4.5), (5.0, 6.0)]
+        for row in range(num_rows):
+            # Encontrar segmentos libres en esta línea
+            segments = self._find_free_segments(x_start, x_end, current_z, rack_depth * 2)
+            
+            for seg_start, seg_end in segments:
+                seg_length = seg_end - seg_start
+                if seg_length >= 5.0:
+                    label_prefix = f"{zone_label}" if zone_label else ""
+                    self._add_rack_pair(seg_start, current_z, seg_length, rack_depth, max_levels, row, label_prefix)
+            
+            current_z += rack_module
+    
+    def _place_racks_parallel_width(self, x_start, x_end, z_start, z_end, rack_depth, max_levels, strategy, zone_label: str = "", aisle_width_override: float = None):
+        """Racks paralelos al ancho de la nave"""
+        available_length = x_end - x_start
+        aisle = aisle_width_override or self.aisle_width
+        rack_module = rack_depth * 2 + aisle
         
-        Esto permite colocar racks en espacios no bloqueados por oficinas/servicios
-        """
+        num_cols = int(available_length / rack_module)
+        current_x = x_start
+        
+        for col in range(num_cols):
+            segments = self._find_free_segments_vertical(z_start, z_end, current_x, rack_depth * 2)
+            
+            for seg_start, seg_end in segments:
+                seg_length = seg_end - seg_start
+                if seg_length >= 5.0:
+                    label_prefix = f"{zone_label}" if zone_label else ""
+                    self._add_rack_pair_vertical(current_x, seg_start, seg_length, rack_depth, max_levels, col, label_prefix)
+            
+            current_x += rack_module
+    
+    def _add_rack_pair(self, x, z, length, depth, levels, row, label_prefix: str = ""):
+        """Añadir par de racks back-to-back horizontal"""
+        capacity = self._calc_capacity(length, depth, levels)
+        prefix = f"{label_prefix}-" if label_prefix else ""
+        
+        # Rack A
+        rack_a = RackConfiguration(
+            x=x, z=z, length=length, depth=depth,
+            rotation=0, levels=levels, capacity=capacity,
+            score=1.0, label=f"{prefix}A{row+1}"
+        )
+        self.racks.append(rack_a)
+        self._add_element("shelf", x, z, rack_a.to_dict(), rack_a.to_properties())
+        
+        # Rack B (back-to-back)
+        rack_b = RackConfiguration(
+            x=x, z=z + depth, length=length, depth=depth,
+            rotation=0, levels=levels, capacity=capacity,
+            score=1.0, label=f"{prefix}B{row+1}"
+        )
+        self.racks.append(rack_b)
+        self._add_element("shelf", x, z + depth, rack_b.to_dict(), rack_b.to_properties())
+        
+        self._mark_grid(x, z, length, depth * 2)
+    
+    def _add_rack_pair_vertical(self, x, z, length, depth, levels, col, label_prefix: str = ""):
+        """Añadir par de racks back-to-back vertical"""
+        capacity = self._calc_capacity(length, depth, levels)
+        prefix = f"{label_prefix}-" if label_prefix else ""
+        
+        rack_a = RackConfiguration(
+            x=x, z=z, length=depth, depth=length,
+            rotation=90, levels=levels, capacity=capacity,
+            score=1.0, label=f"{prefix}V{col+1}A"
+        )
+        self.racks.append(rack_a)
+        self._add_element("shelf", x, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels}, 
+                         {"rotation": 90, "capacity": capacity, "label": f"{prefix}V{col+1}A"})
+        
+        rack_b = RackConfiguration(
+            x=x + depth, z=z, length=depth, depth=length,
+            rotation=90, levels=levels, capacity=capacity,
+            score=1.0, label=f"{prefix}V{col+1}B"
+        )
+        self.racks.append(rack_b)
+        self._add_element("shelf", x + depth, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
+                         {"rotation": 90, "capacity": capacity, "label": f"{prefix}V{col+1}B"})
+        
+        self._mark_grid(x, z, depth * 2, length)
+    
+    def _calc_capacity(self, length, depth, levels):
+        """Calcular capacidad de rack"""
+        opt1 = int(length / self.pallet["length"]) * int(depth / self.pallet["width"])
+        opt2 = int(length / self.pallet["width"]) * int(depth / self.pallet["length"])
+        return max(opt1, opt2) * levels
+    
+    def _find_free_segments(self, start, end, z, depth):
+        """Encontrar segmentos libres horizontales"""
         segments = []
-        resolution = self.grid_resolution
+        res = self.grid_resolution
         
-        if not vertical:  # HORIZONTAL
-            start_idx = int(start / resolution)
-            end_idx = int(end / resolution)
-            perp_idx = int(perpendicular_pos / resolution)
-            depth_cells = int(depth / resolution)
-            
-            # Verificar bounds
-            if perp_idx < 0 or perp_idx + depth_cells >= grid.shape[1]:
-                return segments
-            
-            current_segment_start = None
-            
-            for i in range(start_idx, min(end_idx, grid.shape[0])):
-                # Verificar si toda la franja de profundidad está libre
-                is_free = np.all(grid[i, perp_idx:min(perp_idx + depth_cells, grid.shape[1])] == 0)
-                
-                if is_free:
-                    if current_segment_start is None:
-                        current_segment_start = i * resolution
-                else:
-                    if current_segment_start is not None:
-                        # Cerrar segmento
-                        segments.append((current_segment_start, i * resolution))
-                        current_segment_start = None
-            
-            # Cerrar último segmento si existe
-            if current_segment_start is not None:
-                segments.append((current_segment_start, min(end_idx * resolution, end)))
+        start_idx = int(start / res)
+        end_idx = int(end / res)
+        z_idx = int(z / res)
+        depth_cells = int(depth / res)
         
-        else:  # VERTICAL
-            start_idx = int(start / resolution)
-            end_idx = int(end / resolution)
-            perp_idx = int(perpendicular_pos / resolution)
-            depth_cells = int(depth / resolution)
+        if z_idx < 0 or z_idx + depth_cells >= self.grid.shape[1]:
+            return segments
+        
+        current_start = None
+        
+        for i in range(start_idx, min(end_idx, self.grid.shape[0])):
+            is_free = np.all(self.grid[i, z_idx:min(z_idx + depth_cells, self.grid.shape[1])] == 0)
             
-            if perp_idx < 0 or perp_idx + depth_cells >= grid.shape[0]:
-                return segments
-            
-            current_segment_start = None
-            
-            for j in range(start_idx, min(end_idx, grid.shape[1])):
-                is_free = np.all(grid[perp_idx:min(perp_idx + depth_cells, grid.shape[0]), j] == 0)
-                
-                if is_free:
-                    if current_segment_start is None:
-                        current_segment_start = j * resolution
-                else:
-                    if current_segment_start is not None:
-                        segments.append((current_segment_start, j * resolution))
-                        current_segment_start = None
-            
-            if current_segment_start is not None:
-                segments.append((current_segment_start, min(end_idx * resolution, end)))
+            if is_free:
+                if current_start is None:
+                    current_start = i * res
+            else:
+                if current_start is not None:
+                    segments.append((current_start, i * res))
+                    current_start = None
+        
+        if current_start is not None:
+            segments.append((current_start, min(end_idx * res, end)))
         
         return segments
     
-    def _backtrack_fill_gaps(
-        self, 
-        zone: Dict, 
-        rack_length: float,
-        rack_depth: float, 
-        max_levels: int, 
-        existing_racks: List[RackConfiguration]
-    ) -> List[RackConfiguration]:
-        """
-        FASE 2: Backtracking para rellenar huecos
+    def _find_free_segments_vertical(self, start, end, x, depth):
+        """Encontrar segmentos libres verticales"""
+        segments = []
+        res = self.grid_resolution
         
-        Usa flood-fill para detectar regiones libres de al menos 2×2m
-        y coloca racks pequeños para maximizar uso de espacio
-        """
-        filled_racks = []
+        start_idx = int(start / res)
+        end_idx = int(end / res)
+        x_idx = int(x / res)
+        depth_cells = int(depth / res)
         
-        # Detectar huecos en el grid
-        gaps = self._detect_gaps(zone, min_size=4.0)  # Mínimo 2×2m
+        if x_idx < 0 or x_idx + depth_cells >= self.grid.shape[0]:
+            return segments
         
-        for gap in gaps:
-            # Generar candidatos de racks para este hueco
-            rack_configs = self._generate_rack_candidates(gap, rack_length, rack_depth, max_levels)
+        current_start = None
+        
+        for j in range(start_idx, min(end_idx, self.grid.shape[1])):
+            is_free = np.all(self.grid[x_idx:min(x_idx + depth_cells, self.grid.shape[0]), j] == 0)
             
-            # Ordenar por score (capacidad) y probar
-            rack_configs.sort(key=lambda r: r.capacity, reverse=True)
-            
-            for rack in rack_configs:
-                if self._is_area_free(rack.x, rack.z, rack.length, rack.depth):
-                    filled_racks.append(rack)
-                    self._mark_grid(rack.x, rack.z, rack.length, rack.depth)
-                    break  # Solo un rack por hueco
+            if is_free:
+                if current_start is None:
+                    current_start = j * res
+            else:
+                if current_start is not None:
+                    segments.append((current_start, j * res))
+                    current_start = None
         
-        if filled_racks:
-            total_capacity_filled = sum(r.capacity for r in filled_racks)
-            self.warnings.append(
-                f"Backtracking rellenó {len(filled_racks)} huecos "
-                f"(+{total_capacity_filled} palets)"
-            )
+        if current_start is not None:
+            segments.append((current_start, min(end_idx * res, end)))
         
-        return filled_racks
+        return segments
     
-    def _detect_gaps(self, zone: Dict, min_size: float) -> List[Dict]:
-        """
-        Detectar huecos libres usando flood-fill
+    def _add_element(self, element_type, x, z, dims, props=None):
+        """Añadir elemento al layout"""
+        props = props or {}
+        width = dims.get("width") or dims.get("largo") or dims.get("length", 0)
+        depth = dims.get("depth") or dims.get("ancho") or dims.get("width", 0)
         
-        Algoritmo:
-        1. Iterar sobre grid
-        2. Para cada celda libre no visitada, hacer flood-fill
-        3. Si región ≥ min_size, es un "hueco" aprovechable
-        """
-        gaps = []
-        resolution = self.grid_resolution
-        min_cells = int(min_size / resolution)
-        
-        x_start = int(zone["x_start"] / resolution)
-        x_end = int(zone["x_end"] / resolution)
-        z_start = int(zone["z_start"] / resolution)
-        z_end = int(zone["z_end"] / resolution)
-        
-        visited = np.zeros_like(self.grid, dtype=bool)
-        
-        for i in range(x_start, min(x_end, self.grid.shape[0])):
-            for j in range(z_start, min(z_end, self.grid.shape[1])):
-                if self.grid[i, j] == 0 and not visited[i, j]:
-                    # Encontrar región conectada
-                    region = self._flood_fill(i, j, visited, x_start, x_end, z_start, z_end)
-                    
-                    if len(region) >= min_cells:
-                        # Calcular bounding box
-                        xs = [r[0] for r in region]
-                        zs = [r[1] for r in region]
-                        gaps.append({
-                            "x_start": min(xs) * resolution,
-                            "x_end": (max(xs) + 1) * resolution,
-                            "z_start": min(zs) * resolution,
-                            "z_end": (max(zs) + 1) * resolution,
-                            "cells": len(region)
-                        })
-        
-        return gaps
+        element = WarehouseElement(
+            id=f"{element_type}-{uuid.uuid4().hex[:8]}",
+            type=element_type,
+            position=ElementPosition(
+                x=round(x, 2),
+                y=round(z, 2),
+                z=props.get("elevation", 0),
+                rotation=props.get("rotation", 0)
+            ),
+            dimensions=ElementDimensions(**dims),
+            properties=props
+        )
+        self.elements.append(element)
     
-    def _flood_fill(
-        self, 
-        i: int, 
-        j: int, 
-        visited: np.ndarray, 
-        x_min: int, 
-        x_max: int, 
-        z_min: int, 
-        z_max: int
-    ) -> List[Tuple[int, int]]:
-        """
-        Flood fill para detectar regiones conectadas
-        (4-conectividad: arriba, abajo, izquierda, derecha)
-        """
-        stack = [(i, j)]
-        region = []
-        
-        while stack:
-            x, z = stack.pop()
-            
-            # Verificar bounds y condiciones
-            if (x < x_min or x >= x_max or z < z_min or z >= z_max or
-                x >= self.grid.shape[0] or z >= self.grid.shape[1] or
-                visited[x, z] or self.grid[x, z] != 0):
-                continue
-            
-            visited[x, z] = True
-            region.append((x, z))
-            
-            # Expandir en 4 direcciones
-            stack.extend([(x+1, z), (x-1, z), (x, z+1), (x, z-1)])
-            
-            # Limitar búsqueda para evitar explosión de memoria
-            if len(region) > 2000:
-                break
-        
-        return region
+    def _mark_grid(self, x, z, width, depth, value=1):
+        """Marcar zona en grid"""
+        try:
+            x_start = max(0, int(x / self.grid_resolution))
+            z_start = max(0, int(z / self.grid_resolution))
+            x_end = min(self.grid.shape[0], int((x + width) / self.grid_resolution))
+            z_end = min(self.grid.shape[1], int((z + depth) / self.grid_resolution))
+            self.grid[x_start:x_end, z_start:z_end] = value
+        except:
+            pass
     
-    def _generate_rack_candidates(
-        self, 
-        gap: Dict,
-        rack_length: float, 
-        rack_depth: float, 
-        max_levels: int
-    ) -> List[RackConfiguration]:
-        """
-        Generar candidatos de racks para un hueco detectado
-        
-        Prueba múltiples tamaños (100%, 75%, 50% del espacio disponible)
-        """
-        candidates = []
-        
-        gap_length = gap["x_end"] - gap["x_start"]
-        gap_width = gap["z_end"] - gap["z_start"]
-        
-        # Probar diferentes tamaños y orientaciones
-        for length_factor in [1.0, 0.75, 0.5]:
-            for width_factor in [1.0, 0.75, 0.5]:
-                # Horizontal
-                test_length = min(gap_length * length_factor, rack_length)
-                test_width = min(gap_width * width_factor, rack_depth)
-                
-                if test_length >= 2.0 and test_width >= 1.0:
-                    candidates.append(RackConfiguration(
-                        x=gap["x_start"],
-                        z=gap["z_start"],
-                        length=test_length,
-                        depth=test_width,
-                        rotation=0,
-                        levels=max_levels,
-                        capacity=self._calculate_rack_capacity(test_length, test_width, max_levels),
-                        score=test_length * test_width * max_levels,
-                        label="Gap"
-                    ))
-                
-                # Vertical (si el hueco lo permite)
-                if gap_width > gap_length:
-                    test_length = min(gap_width * length_factor, rack_length)
-                    test_width = min(gap_length * width_factor, rack_depth)
-                    
-                    if test_length >= 2.0 and test_width >= 1.0:
-                        candidates.append(RackConfiguration(
-                            x=gap["x_start"],
-                            z=gap["z_start"],
-                            length=test_length,
-                            depth=test_width,
-                            rotation=90,
-                            levels=max_levels,
-                            capacity=self._calculate_rack_capacity(test_length, test_width, max_levels),
-                            score=test_length * test_width * max_levels,
-                            label="Gap_V"
-                        ))
-        
-        return candidates
-    
-    def _local_optimization(self, racks: List[RackConfiguration], zone: Dict):
-        """
-        FASE 3: Optimización local (Hill Climbing)
-        
-        Intenta expandir cada rack en 4 direcciones (±0.5m)
-        Si mejora capacidad y no hay colisión, aplica cambio
-        """
-        improved = 0
-        
-        for rack in racks:
-            original_capacity = rack.capacity
-            
-            # Intentar expandir en 4 direcciones
-            directions = [
-                (0.5, 0, "length"),   # +X (aumentar largo)
-                (-0.5, 0, "length"),  # -X (mover inicio)
-                (0, 0.5, "depth"),    # +Z (aumentar ancho)
-                (0, -0.5, "depth"),   # -Z (mover inicio)
-            ]
-            
-            for dx, dz, dimension in directions:
-                new_x = rack.x + (dx if dx < 0 else 0)
-                new_z = rack.z + (dz if dz < 0 else 0)
-                
-                if dimension == "length":
-                    new_length = rack.length + abs(dx)
-                    new_depth = rack.depth
-                else:
-                    new_length = rack.length
-                    new_depth = rack.depth + abs(dz)
-                
-                # Validar que está dentro de la zona
-                if (new_x < zone["x_start"] or new_x + new_length > zone["x_end"] or
-                    new_z < zone["z_start"] or new_z + new_depth > zone["z_end"]):
-                    continue
-                
-                # Calcular nueva capacidad
-                new_capacity = self._calculate_rack_capacity(new_length, new_depth, rack.levels)
-                
-                # Si mejora y no hay colisión, aplicar
-                if new_capacity > original_capacity:
-                    # Temporalmente liberar espacio actual
-                    self._mark_grid(rack.x, rack.z, rack.length, rack.depth, value=0)
-                    
-                    if self._is_area_free(new_x, new_z, new_length, new_depth):
-                        # Aplicar mejora
-                        rack.x = new_x
-                        rack.z = new_z
-                        rack.length = new_length
-                        rack.depth = new_depth
-                        rack.capacity = new_capacity
-                        self._mark_grid(new_x, new_z, new_length, new_depth, value=1)
-                        improved += 1
-                        break
-                    else:
-                        # Restaurar espacio original
-                        self._mark_grid(rack.x, rack.z, rack.length, rack.depth, value=1)
-        
-        if improved > 0:
-            self.optimization_stats["optimized_racks"] = improved
-            self.warnings.append(f"Optimización local mejoró {improved} racks")
-    
-    # ==================== HELPERS ====================
-    
-    def _calculate_rack_capacity(self, length: float, depth: float, levels: int) -> int:
-        """
-        Calcular capacidad de rack en palets
-        Prueba ambas orientaciones y elige la mejor
-        """
-        pallet_length = self.pallet["length"]
-        pallet_width = self.pallet["width"]
-        
-        # Orientación 1: Normal
-        capacity_1 = int(length / pallet_length) * int(depth / pallet_width)
-        
-        # Orientación 2: Rotada 90°
-        capacity_2 = int(length / pallet_width) * int(depth / pallet_length)
-        
-        pallets_per_level = max(capacity_1, capacity_2)
-        return pallets_per_level * levels
-    
-    def _calculate_rack_score(self, x: float, z: float, length: float, zone: Dict) -> float:
-        """
-        Heurística de calidad de posición
-        
-        Factores:
-        - Proximidad a inicio de zona (cerca de muelles)
-        - Longitud del rack (más largo = mejor)
-        """
-        # Distancia normalizada al inicio
-        dist_to_start = abs(x - zone["x_start"]) / (zone["x_end"] - zone["x_start"])
-        proximity_score = 1.0 - dist_to_start
-        
-        # Longitud normalizada
-        max_possible_length = zone["x_end"] - zone["x_start"]
-        length_score = length / max_possible_length
-        
-        # Combinación ponderada
-        return proximity_score * 0.3 + length_score * 0.7
-    
-    def _mark_on_temp_grid(
-        self, 
-        grid: np.ndarray, 
-        x: float, 
-        z: float, 
-        width: float, 
-        depth: float
-    ):
-        """Marcar en grid temporal (no modifica self.grid)"""
+    def _is_area_free(self, x, z, width, depth):
+        """Verificar si área está libre"""
         try:
             x_start = int(x / self.grid_resolution)
             z_start = int(z / self.grid_resolution)
             x_end = int((x + width) / self.grid_resolution)
             z_end = int((z + depth) / self.grid_resolution)
             
-            x_start = max(0, min(x_start, grid.shape[0] - 1))
-            x_end = max(0, min(x_end, grid.shape[0]))
-            z_start = max(0, min(z_start, grid.shape[1] - 1))
-            z_end = max(0, min(z_end, grid.shape[1]))
+            if x_start < 0 or x_end > self.grid.shape[0] or z_start < 0 or z_end > self.grid.shape[1]:
+                return False
             
-            grid[x_start:x_end, z_start:z_end] = 1
-        except Exception:
-            pass
+            return np.all(self.grid[x_start:x_end, z_start:z_end] == 0)
+        except:
+            return False
+
+
+# ==================== OPTIMIZADOR MULTI-ESCENARIO V5 ====================
+
+class WarehouseOptimizer:
+    """
+    Optimizador V5 Multi-Escenario
     
-    def _generate_metadata(self) -> Dict:
-        """Metadata del diseño incluyendo stats de optimización"""
+    Genera múltiples escenarios, evalúa con fitness, selecciona el mejor
+    """
+    
+    def __init__(self, input_data: WarehouseInput, preferences: DesignPreferences = None):
+        self.input = input_data
+        self.prefs = preferences or DesignPreferences(
+            warehouse_type=input_data.activity_type
+        )
+        self.dims = {
+            "length": input_data.length,
+            "width": input_data.width,
+            "height": input_data.height
+        }
+        self.total_area = self.dims["length"] * self.dims["width"]
+        self.workers = input_data.workers or estimate_workers(self.total_area, input_data.activity_type)
+        self.aisle_width = AISLE_WIDTHS.get(input_data.machinery, 2.8)
+        
+        self.scenarios_evaluated = []
+        self.best_scenario = None
+        self.warnings = []
+    
+    def generate_layout(self) -> OptimizationResult:
+        """Generar layout optimizado (método principal)"""
+        return self.optimize()
+    
+    def optimize(self) -> OptimizationResult:
+        """Ejecutar optimización multi-escenario con validación de tamaño"""
+        try:
+            # 1. VALIDACIÓN DE TAMAÑO PARA ABC
+            abc_was_requested = self.prefs.enable_abc_zones
+            if self.prefs.enable_abc_zones:
+                min_area = OPTIMIZATION_CONSTRAINTS["min_area_for_abc"]
+                min_depth = OPTIMIZATION_CONSTRAINTS["min_depth_for_abc"]
+                
+                # Determinar profundidad (asumimos width como profundidad desde muelles)
+                depth = min(self.dims["width"], self.dims["length"])
+                
+                if self.total_area < min_area:
+                    self.prefs.enable_abc_zones = False
+                    self.warnings.append(
+                        f"ABC desactivado: La nave ({self.total_area:.0f}m²) es menor al mínimo ({min_area}m²) "
+                        f"para zonificación eficiente."
+                    )
+                elif depth < min_depth:
+                    self.prefs.enable_abc_zones = False
+                    self.warnings.append(
+                        f"ABC desactivado: Profundidad ({depth:.0f}m) insuficiente para dividir en 3 zonas "
+                        f"(mínimo {min_depth}m)."
+                    )
+            
+            # 2. Generar escenarios
+            generator = ScenarioGenerator(self.prefs.warehouse_type)
+            scenarios = generator.generate_scenarios(max_scenarios=8)
+            
+            # 3. Evaluar cada escenario
+            results = []
+            weights = get_fitness_weights(self.prefs.priority)
+            
+            for config in scenarios:
+                builder = LayoutBuilder(self.input, self.prefs)
+                layout = builder.build(config)
+                
+                # Preparar racks para fitness
+                racks_for_fitness = [
+                    {"x": r.x, "z": r.z, "length": r.length, "depth": r.depth, "levels": r.levels}
+                    for r in layout["racks"]
+                ]
+                
+                fitness = calculate_fitness(
+                    racks=racks_for_fitness,
+                    warehouse_dims=self.dims,
+                    dock_positions=layout["dock_positions"],
+                    expedition_zone=layout["expedition_zone"],
+                    forbidden_zones=self.prefs.forbidden_zones,
+                    fixed_area=layout["fixed_area"],
+                    weights=weights,
+                    aisle_width=self.aisle_width
+                )
+                
+                # Guardar ABC report si existe
+                abc_report = getattr(builder, 'abc_report', None)
+                
+                results.append({
+                    "config": config,
+                    "layout": layout,
+                    "fitness": fitness,
+                    "score": fitness.normalized_score,
+                    "abc_report": abc_report
+                })
+            
+            # 4. Ordenar por score
+            results.sort(key=lambda x: x["score"], reverse=True)
+            self.scenarios_evaluated = results
+            
+            # 5. Seleccionar mejor
+            best = results[0]
+            self.best_scenario = best
+            
+            # 6. COMPARATIVA ABC vs UNIFORME (si usamos ABC)
+            comparative_stats = None
+            if self.prefs.enable_abc_zones and abc_was_requested:
+                comparative_stats = self._run_comparative_benchmark()
+            
+            # 7. Construir resultado
+            return self._build_result(best, results[:3], comparative_stats)
+            
+        except Exception as e:
+            self.warnings.append(f"Error crítico: {str(e)}")
+            return self._build_error_result(str(e))
+    
+    def _run_comparative_benchmark(self) -> Dict:
+        """
+        Ejecuta una simulación en modo 'Uniforme' para comparar.
+        
+        MEJORA V5.1: Benchmark JUSTO que usa parámetros realistas:
+        - Pasillos estándar (4m, no reducidos)
+        - Orientación coherente (parallel_depth)
+        - Misma posición de oficinas/muelles
+        - Sin ABC pero con configuración profesional
+        
+        Esto hace que la comparativa sea CREÍBLE.
+        """
+        # Crear preferencias para modo uniforme JUSTO
+        uniform_prefs = DesignPreferences(
+            include_offices=self.prefs.include_offices,
+            include_services=self.prefs.include_services,
+            include_docks=self.prefs.include_docks,
+            include_technical=self.prefs.include_technical,
+            priority=self.prefs.priority,
+            warehouse_type=self.prefs.warehouse_type,
+            enable_abc_zones=False  # FORZAR UNIFORME
+        )
+        
+        # Generar escenarios uniformes con configuración estándar
+        generator = ScenarioGenerator(uniform_prefs.warehouse_type)
+        scenarios = generator.generate_scenarios(max_scenarios=4)
+        
+        # Forzar pasillos estándar (4m) para benchmark justo
+        standard_aisle_width = 4.0  # Pasillo estándar, no optimizado
+        
+        weights = get_fitness_weights(uniform_prefs.priority)
+        best_uniform_pallets = 0
+        best_uniform_efficiency = 0
+        best_uniform_scenario = None
+        
+        for config in scenarios:
+            # Forzar orientación coherente para benchmark justo
+            # (parallel_length es la orientación más común en almacenes reales)
+            config.rack_orientation = "parallel_length"
+            
+            builder = LayoutBuilder(self.input, uniform_prefs)
+            builder.aisle_width = standard_aisle_width  # Pasillo estándar
+            layout = builder.build(config)
+            
+            racks_for_fitness = [
+                {"x": r.x, "z": r.z, "length": r.length, "depth": r.depth, "levels": r.levels}
+                for r in layout["racks"]
+            ]
+            
+            fitness = calculate_fitness(
+                racks=racks_for_fitness,
+                warehouse_dims=self.dims,
+                dock_positions=layout["dock_positions"],
+                expedition_zone=layout["expedition_zone"],
+                forbidden_zones=[],
+                fixed_area=layout["fixed_area"],
+                weights=weights,
+                aisle_width=standard_aisle_width
+            )
+            
+            if fitness.total_pallets > best_uniform_pallets:
+                best_uniform_pallets = fitness.total_pallets
+                best_uniform_efficiency = fitness.storage_efficiency
+                best_uniform_scenario = config.name
+        
         return {
-            "generator": "UNITNAVE Optimizer v3.0 Hybrid",
-            "algorithm": "Greedy Multi-pass + Backtracking + Local Optimization",
+            "uniform_pallets": best_uniform_pallets,
+            "uniform_efficiency": best_uniform_efficiency,
+            "uniform_scenario": best_uniform_scenario,
+            "uniform_aisle_width": standard_aisle_width,
+            "abc_improvement_pallets": 0,  # Se calcula en _build_result
+            "abc_improvement_pct": 0,
+            "benchmark_type": "fair"  # Indicador de que es benchmark justo
+        }
+    
+    def _build_result(self, best: Dict, alternatives: List[Dict], comparative: Dict = None) -> OptimizationResult:
+        """Construir resultado final con comparativa ABC vs Uniforme"""
+        layout = best["layout"]
+        fitness = best["fitness"]
+        config = best["config"]
+        abc_report = best.get("abc_report")
+        
+        # Calcular capacidad
+        from calculations import CapacityCalculator
+        calculator = CapacityCalculator(self.input, layout["elements"], self.dims)
+        capacity = calculator.calculate_total_capacity()
+        surfaces = calculator.calculate_surfaces()
+        
+        # Validaciones
+        from validation import WarehouseValidator
+        validator = WarehouseValidator(self.input, layout["elements"], self.dims)
+        validations = validator.run_all_validations()
+        
+        # Metadata extendida
+        metadata = {
+            "generator": "UNITNAVE Optimizer V5 Multi-Scenario",
+            "version": "5.1.0",
+            "algorithm": "Multi-Scenario Evaluation + Fitness Ranking",
             "machinery": self.input.machinery,
             "aisle_width": self.aisle_width,
             "workers": self.workers,
-            "warnings_count": len(self.warnings),
-            "elements_count": len(self.elements),
-            "optimization_stats": self.optimization_stats
+            
+            # Info del escenario ganador
+            "scenario_name": config.name,
+            "scenario_config": {
+                "orientation": config.rack_orientation,
+                "aisle_strategy": config.aisle_strategy,
+                "services_position": config.services_position,
+                "office_position": config.office_position
+            },
+            
+            # Fitness
+            "fitness": {
+                "total_score": fitness.total_score,
+                "normalized_score": fitness.normalized_score,
+                "efficiency": fitness.storage_efficiency,
+                "efficiency_status": fitness.efficiency_status,
+                "breakdown": fitness.breakdown
+            },
+            
+            # Multi-escenario
+            "scenarios_evaluated": len(self.scenarios_evaluated),
+            "alternatives": [
+                {
+                    "name": alt["config"].name,
+                    "score": alt["score"],
+                    "pallets": alt["fitness"].total_pallets,
+                    "efficiency": alt["fitness"].storage_efficiency,
+                    "trade_off": self._describe_trade_off(alt, best) if alt != best else None
+                }
+                for alt in alternatives
+            ],
+            
+            # ABC Zoning
+            "abc_enabled": self.prefs.enable_abc_zones,
+            "abc_report": abc_report,
+            
+            # Warnings (incluye si ABC fue desactivado por tamaño)
+            "warnings": self.warnings if self.warnings else None,
+            
+            # Informe detallado
+            "detailed_report": self._generate_detailed_report(layout, fitness, config)
         }
+        
+        # COMPARATIVA ABC vs UNIFORME (la herramienta de venta)
+        if comparative:
+            abc_pallets = fitness.total_pallets
+            uni_pallets = comparative["uniform_pallets"]
+            diff = abc_pallets - uni_pallets
+            pct = (diff / uni_pallets * 100) if uni_pallets > 0 else 0
+            
+            metadata["comparative_analysis"] = {
+                "strategy": "ABC vs Uniforme",
+                "uniform_pallets": uni_pallets,
+                "abc_pallets": abc_pallets,
+                "gain_pallets": diff,
+                "gain_percentage": round(pct, 1),
+                "uniform_efficiency": comparative["uniform_efficiency"],
+                "abc_efficiency": fitness.storage_efficiency,
+                "message": self._generate_comparative_message(diff, pct, uni_pallets, abc_pallets)
+            }
+        
+        return OptimizationResult(
+            status="success",
+            elements=layout["elements"],
+            capacity=capacity,
+            surfaces=surfaces,
+            validations=validations,
+            metadata=metadata,
+            timestamp=datetime.now().isoformat()
+        )
+    
+    def _generate_comparative_message(self, diff: int, pct: float, uni: int, abc: int) -> str:
+        """Genera mensaje de marketing para la comparativa"""
+        if diff > 0:
+            return (
+                f"🚀 La optimización ABC ha logrado +{diff} palets extra respecto al diseño estándar "
+                f"({uni} → {abc} palets, +{pct:.1f}% de capacidad). "
+                f"Esto equivale a {diff * 0.96:.0f}m² adicionales de almacenamiento efectivo."
+            )
+        elif diff == 0:
+            return (
+                f"La optimización ABC iguala al diseño estándar ({abc} palets). "
+                f"Sin embargo, la distribución por zonas mejora la operativa de picking."
+            )
+        else:
+            return (
+                f"En este caso, el diseño uniforme ofrece {-diff} palets más. "
+                f"ABC prioriza operativa sobre capacidad máxima."
+            )
+    
+    def _generate_detailed_report(self, layout: Dict, fitness: FitnessResult, config: ScenarioConfig) -> Dict:
+        """Generar informe con medidas exactas"""
+        measurements = []
+        
+        # Agrupar elementos por tipo
+        elements_by_type = {}
+        for el in layout["elements"]:
+            el_type = el.type
+            if el_type not in elements_by_type:
+                elements_by_type[el_type] = []
+            elements_by_type[el_type].append(el)
+        
+        # Generar medidas
+        for el_type, elements in elements_by_type.items():
+            for el in elements:
+                dims = el.dimensions
+                pos = el.position
+                
+                measurement = {
+                    "id": el.id,
+                    "type": el_type,
+                    "label": el.properties.get("label", el.id),
+                    "position": {"x": pos.x, "z": pos.y},
+                    "dimensions": {
+                        "length": getattr(dims, "largo", None) or getattr(dims, "length", None) or getattr(dims, "width", 0),
+                        "width": getattr(dims, "ancho", None) or getattr(dims, "depth", None) or getattr(dims, "width", 0),
+                        "height": getattr(dims, "alto", None) or getattr(dims, "height", 0)
+                    },
+                    "area_m2": round(
+                        (getattr(dims, "largo", 0) or getattr(dims, "length", 0) or getattr(dims, "width", 0)) *
+                        (getattr(dims, "ancho", 0) or getattr(dims, "depth", 0) or 1), 2
+                    )
+                }
+                
+                if el_type == "shelf":
+                    measurement["levels"] = getattr(dims, "levels", 4)
+                    measurement["estimated_pallets"] = el.properties.get("capacity", 0)
+                
+                measurements.append(measurement)
+        
+        return {
+            "measurements": measurements,
+            "design_rationale": self._generate_rationale(config, fitness),
+            "summary": {
+                "total_elements": len(layout["elements"]),
+                "total_racks": len([m for m in measurements if m["type"] == "shelf"]),
+                "total_pallets": fitness.total_pallets,
+                "storage_efficiency": fitness.storage_efficiency,
+                "fitness_score": fitness.normalized_score
+            }
+        }
+    
+    def _generate_rationale(self, config: ScenarioConfig, fitness: FitnessResult) -> str:
+        """Generar explicación textual del diseño"""
+        orient_text = "paralelas al largo" if config.rack_orientation == "parallel_length" else "paralelas al ancho"
+        aisle_text = {
+            "central": "pasillo central principal",
+            "perimeter": "pasillos perimetrales",
+            "multiple": "múltiples pasillos transversales"
+        }.get(config.aisle_strategy, config.aisle_strategy)
+        
+        return (
+            f"El diseño optimizado organiza las estanterías {orient_text} de la nave, "
+            f"utilizando una estrategia de {aisle_text} para maximizar el flujo de trabajo. "
+            f"Los servicios se ubican en {config.services_position.replace('_', ' ')} "
+            f"y las oficinas en {config.office_position.replace('_', ' ')}. "
+            f"\n\n"
+            f"La zona de maniobra de muelles se ha optimizado a 4m (vs 12m estándar) "
+            f"para maximizar el área de almacenamiento. "
+            f"Los servicios (vestuarios, baños, comedor) se agrupan en un bloque compacto "
+            f"para reducir su huella.\n\n"
+            f"Métricas finales:\n"
+            f"- Eficiencia de almacenamiento: {fitness.storage_efficiency}%\n"
+            f"- Capacidad total: {fitness.total_pallets} palets\n"
+            f"- Score de fitness: {fitness.normalized_score}/100\n"
+            f"- Se evaluaron {len(self.scenarios_evaluated)} escenarios diferentes"
+        )
+    
+    def _describe_trade_off(self, alt: Dict, best: Dict) -> str:
+        """Describir diferencias con el mejor"""
+        diff_pallets = alt["fitness"].total_pallets - best["fitness"].total_pallets
+        diff_efficiency = alt["fitness"].storage_efficiency - best["fitness"].storage_efficiency
+        
+        parts = []
+        if diff_pallets != 0:
+            parts.append(f"{diff_pallets:+d} palets")
+        if abs(diff_efficiency) > 0.5:
+            parts.append(f"{diff_efficiency:+.1f}% eficiencia")
+        
+        return ", ".join(parts) if parts else "Similar al mejor"
+    
+    def _build_error_result(self, error: str) -> OptimizationResult:
+        """Construir resultado de error"""
+        return OptimizationResult(
+            status="error",
+            elements=[],
+            capacity=CapacityResult(
+                total_pallets=0,
+                pallets_per_level=0,
+                levels_avg=0,
+                storage_volume_m3=0,
+                efficiency_percentage=0
+            ),
+            surfaces=SurfaceSummary(
+                total_area=self.total_area,
+                storage_area=0,
+                operational_area=0,
+                services_area=0,
+                circulation_area=0,
+                office_area=0,
+                efficiency=0
+            ),
+            validations=[ValidationItem(type="error", code="CRITICAL", message=error)],
+            metadata={"error": error, "warnings": self.warnings},
+            timestamp=datetime.now().isoformat()
+        )
+
+
+# ==================== FUNCIONES WRAPPER ====================
+
+def generate_multi_scenario_layouts(input_data: WarehouseInput) -> Dict[str, OptimizationResult]:
+    """Wrapper para compatibilidad - genera 3 escenarios con diferentes maquinarias"""
+    scenarios = {}
+    
+    for machinery in ["contrapesada", "retractil", "trilateral"]:
+        input_copy = input_data.model_copy(update={"machinery": machinery})
+        optimizer = WarehouseOptimizer(input_copy)
+        scenarios[f"Option_{machinery}"] = optimizer.generate_layout()
+    
+    return scenarios

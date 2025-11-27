@@ -1,6 +1,9 @@
 """
-UNITNAVE API v4.1 - Definitivo
-Backend con Optimizador V4 + Algoritmo Genético (Experimental)
+UNITNAVE API v5.0 - Multi-Escenario
+Backend con Optimizador V5 + Evaluación Fitness + Informes Detallados
+
+ARCHIVO: backend/main.py
+ACCIÓN: REEMPLAZAR contenido completo
 """
 
 import os
@@ -27,9 +30,10 @@ from models import (
     SurfaceSummary, ValidationItem
 )
 
-from optimizer import WarehouseOptimizer
+from optimizer import WarehouseOptimizer, DesignPreferences, ScenarioGenerator
 from calculations import CapacityCalculator
 from validation import WarehouseValidator
+from constants import get_fitness_weights, get_macro_config
 
 # Importar GA (opcional)
 try:
@@ -45,8 +49,8 @@ except ImportError as e:
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="UNITNAVE Designer API",
-    description="API para diseño y optimización de naves industriales",
-    version="4.1.0",
+    description="API para diseño y optimización de naves industriales - V5 Multi-Escenario",
+    version="5.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -54,7 +58,7 @@ app = FastAPI(
 # ==================== CORS ====================
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080"
+    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com"
 ).split(",")
 
 app.add_middleware(
@@ -65,7 +69,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== MODELOS ====================
+# ==================== MODELOS REQUEST ====================
+
+class OfficeConfigRequest(BaseModel):
+    """Configuración de oficinas"""
+    area: float = Field(default=40, ge=20, le=500)
+    floor: str = Field(default="mezzanine")  # ground, mezzanine, both
+    mezzanine_height: float = Field(default=3.5, ge=2.5, le=5.0)
+    has_elevator: bool = Field(default=True)
+    has_stairs: bool = Field(default=True)
+
+
+class DockConfigRequest(BaseModel):
+    """Configuración de muelles"""
+    count: int = Field(default=4, ge=1, le=20)
+    position: str = Field(default="center")  # center, left, right, distributed
+    maneuver_zone: float = Field(default=4.0, ge=3.0, le=12.0)
+    dock_width: float = Field(default=3.5, ge=3.0, le=5.0)
+    dock_depth: float = Field(default=4.0, ge=3.0, le=6.0)
+
+
+class PreferencesRequest(BaseModel):
+    """Preferencias de diseño"""
+    include_offices: bool = Field(default=True)
+    include_services: bool = Field(default=True)
+    include_docks: bool = Field(default=True)
+    include_technical: bool = Field(default=True)
+    
+    priority: str = Field(default="balance")  # capacity, balance, operations
+    warehouse_type: str = Field(default="industrial")
+    layout_complexity: str = Field(default="medio")
+    
+    # ABC Zoning (NUEVO)
+    enable_abc_zones: bool = Field(default=False)
+    abc_zone_a_pct: float = Field(default=0.20, ge=0.1, le=0.4)
+    abc_zone_b_pct: float = Field(default=0.40, ge=0.2, le=0.6)
+    abc_zone_c_pct: float = Field(default=0.40, ge=0.1, le=0.6)
+    
+    forbidden_zones: List[Dict] = Field(default=[])
+    min_free_area_center: float = Field(default=0)
+    high_rotation_pct: float = Field(default=0.20, ge=0, le=1)
+
 
 class GAConfigRequest(BaseModel):
     """Configuración opcional para GA"""
@@ -79,9 +123,12 @@ class GAConfigRequest(BaseModel):
 
 class OptimizeRequest(BaseModel):
     """Request para optimización"""
+    # Dimensiones
     length: float = Field(..., gt=10, le=500)
     width: float = Field(..., gt=10, le=500)
     height: float = Field(..., gt=3, le=20)
+    
+    # Operativa
     n_docks: int = Field(default=4, ge=1, le=50)
     machinery: str = Field(default="retractil")
     pallet_type: str = Field(default="EUR")
@@ -90,12 +137,17 @@ class OptimizeRequest(BaseModel):
     activity_type: str = Field(default="industrial")
     workers: Optional[int] = Field(default=None, ge=1, le=500)
     
-    # Configuración de oficinas
+    # Configuración oficinas (legacy)
     office_floor: str = Field(default="mezzanine")
     office_height: float = Field(default=3.5, ge=2.5, le=5)
     has_elevator: bool = Field(default=True)
     
-    # Config GA opcional
+    # Nuevas configs V5 (opcionales)
+    office_config: Optional[OfficeConfigRequest] = None
+    dock_config: Optional[DockConfigRequest] = None
+    preferences: Optional[PreferencesRequest] = None
+    
+    # GA (opcional)
     ga_config: Optional[GAConfigRequest] = None
 
 
@@ -115,12 +167,19 @@ designs_db: Dict[str, Dict] = {}
 async def root():
     return {
         "name": "UNITNAVE Designer API",
-        "version": "4.1.0",
+        "version": "5.0.0",
         "status": "running",
+        "features": {
+            "multi_scenario": True,
+            "fitness_evaluation": True,
+            "detailed_report": True,
+            "reduced_maneuver_zone": True
+        },
         "endpoints": {
             "optimize": "/api/optimize",
+            "scenarios": "/api/scenarios",
+            "compare": "/api/optimize/compare",
             "optimize_ga": "/api/optimize/ga",
-            "scenarios": "/api/optimize/scenarios",
             "calculate": "/api/calculate",
             "docs": "/api/docs"
         }
@@ -132,8 +191,9 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
+        "version": "5.0.0",
         "optimizers": {
-            "standard": True,
+            "v5_multi_scenario": True,
             "ga": GA_AVAILABLE
         }
     }
@@ -142,8 +202,76 @@ async def health():
 @app.post("/api/optimize")
 async def optimize_layout(request: OptimizeRequest):
     """
-    Optimización estándar (Sistema de Calles)
-    Rápido (~1 segundo), predecible, eficiente
+    🚀 Optimización V5 Multi-Escenario
+    
+    - Genera 5-8 escenarios según tipo de almacén (15-20 con ABC)
+    - Evalúa con fitness multi-criterio
+    - Selecciona el mejor + alternativas
+    - Incluye informe detallado con medidas
+    - Soporta optimización ABC por zonas
+    """
+    try:
+        # Construir input
+        input_data = WarehouseInput(
+            length=request.length,
+            width=request.width,
+            height=request.height,
+            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
+            machinery=request.machinery,
+            pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
+            activity_type=request.activity_type,
+            workers=request.workers,
+            office_floor=request.office_config.floor if request.office_config else request.office_floor,
+            office_height=request.office_config.mezzanine_height if request.office_config else request.office_height,
+            has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
+        )
+        
+        # Construir preferencias
+        prefs = None
+        if request.preferences:
+            prefs = DesignPreferences(
+                include_offices=request.preferences.include_offices,
+                include_services=request.preferences.include_services,
+                include_docks=request.preferences.include_docks,
+                include_technical=request.preferences.include_technical,
+                priority=request.preferences.priority,
+                warehouse_type=request.preferences.warehouse_type,
+                layout_complexity=request.preferences.layout_complexity,
+                # ABC Zoning
+                enable_abc_zones=request.preferences.enable_abc_zones,
+                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
+                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
+                abc_zone_c_pct=request.preferences.abc_zone_c_pct,
+                # Resto
+                forbidden_zones=request.preferences.forbidden_zones,
+                high_rotation_pct=request.preferences.high_rotation_pct
+            )
+        
+        # Optimizar
+        optimizer = WarehouseOptimizer(input_data, prefs)
+        result = optimizer.optimize()
+        
+        abc_status = "ABC activo" if (prefs and prefs.enable_abc_zones) else "uniforme"
+        logger.info(
+            f"✅ Optimización V5 completada ({abc_status}): {result.capacity.total_pallets} palets, "
+            f"{result.metadata.get('scenarios_evaluated', 1)} escenarios evaluados"
+        )
+        
+        return result.model_dump() if hasattr(result, 'model_dump') else result.__dict__
+        
+    except Exception as e:
+        logger.error(f"❌ Error en optimización: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/scenarios")
+async def get_all_scenarios(request: OptimizeRequest):
+    """
+    📊 Obtener TODOS los escenarios evaluados
+    
+    Útil para mostrar comparativa completa en frontend
     """
     try:
         input_data = WarehouseInput(
@@ -154,34 +282,106 @@ async def optimize_layout(request: OptimizeRequest):
             machinery=request.machinery,
             pallet_type=request.pallet_type,
             pallet_height=request.pallet_height,
-            custom_pallet=request.custom_pallet,
             activity_type=request.activity_type,
-            workers=request.workers,
-            office_floor=request.office_floor,
-            office_height=request.office_height,
-            has_elevator=request.has_elevator
+            workers=request.workers
         )
         
-        optimizer = WarehouseOptimizer(input_data)
-        result = optimizer.generate_layout()
+        prefs = DesignPreferences(
+            warehouse_type=request.preferences.warehouse_type if request.preferences else request.activity_type,
+            priority=request.preferences.priority if request.preferences else "balance"
+        )
         
-        logger.info(f"✅ Layout estándar generado: {result.capacity.total_pallets} palets")
+        optimizer = WarehouseOptimizer(input_data, prefs)
+        optimizer.optimize()
         
-        return result.model_dump() if hasattr(result, 'model_dump') else result.__dict__
+        all_scenarios = []
+        for i, scenario in enumerate(optimizer.scenarios_evaluated):
+            all_scenarios.append({
+                "rank": i + 1,
+                "name": scenario["config"].name,
+                "score": scenario["score"],
+                "pallets": scenario["fitness"].total_pallets,
+                "efficiency": scenario["fitness"].storage_efficiency,
+                "is_best": i == 0,
+                "config": {
+                    "orientation": scenario["config"].rack_orientation,
+                    "aisle_strategy": scenario["config"].aisle_strategy
+                }
+            })
+        
+        return {
+            "total_evaluated": len(all_scenarios),
+            "best": all_scenarios[0] if all_scenarios else None,
+            "all_scenarios": all_scenarios
+        }
         
     except Exception as e:
-        logger.error(f"❌ Error en optimización: {e}")
+        logger.error(f"❌ Error obteniendo escenarios: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimize/compare")
+async def compare_priorities(request: OptimizeRequest):
+    """
+    ⚖️ Comparar mismo layout con diferentes prioridades
+    
+    Ejecuta optimización con capacity, balance y operations
+    para mostrar trade-offs
+    """
+    try:
+        input_data = WarehouseInput(
+            length=request.length,
+            width=request.width,
+            height=request.height,
+            n_docks=request.n_docks,
+            machinery=request.machinery,
+            pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            activity_type=request.activity_type,
+            workers=request.workers
+        )
+        
+        comparison = {}
+        
+        for priority in ["capacity", "balance", "operations"]:
+            prefs = DesignPreferences(
+                warehouse_type=request.activity_type,
+                priority=priority
+            )
+            
+            optimizer = WarehouseOptimizer(input_data, prefs)
+            result = optimizer.optimize()
+            
+            comparison[priority] = {
+                "pallets": result.capacity.total_pallets,
+                "efficiency": result.capacity.efficiency_percentage,
+                "score": result.metadata.get("fitness", {}).get("normalized_score", 0),
+                "scenario": result.metadata.get("scenario_name", "")
+            }
+        
+        # Determinar recomendación
+        scores = {k: v["score"] for k, v in comparison.items()}
+        recommended = max(scores, key=scores.get)
+        
+        return {
+            "comparison": comparison,
+            "recommendation": recommended,
+            "explanation": {
+                "capacity": "Maximiza palets, puede sacrificar accesibilidad",
+                "balance": "Equilibrio óptimo entre capacidad y operativa",
+                "operations": "Minimiza distancias, ideal para alto picking"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error en comparación: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/optimize/ga")
 async def optimize_genetic(request: OptimizeRequest):
     """
-    Optimización con Algoritmo Genético (Experimental)
-    
-    Maximiza: Capacidad de palets
-    Minimiza: Distancia de recorridos
-    Tiempo: ~30-60 segundos
+    🧬 Optimización con Algoritmo Genético (Experimental)
     """
     if not GA_AVAILABLE:
         raise HTTPException(
@@ -232,13 +432,11 @@ async def optimize_genetic(request: OptimizeRequest):
 @app.post("/api/optimize/scenarios")
 async def optimize_scenarios(request: OptimizeRequest):
     """
-    Comparador de escenarios
+    📊 Comparador de escenarios por maquinaria
     Genera 3 variantes con diferentes maquinarias
     """
     try:
         scenarios = {}
-        
-        # Maquinarias a comparar
         machinery_types = ["retractil", "trilateral", "contrapesada"]
         
         for machinery in machinery_types:
@@ -250,16 +448,12 @@ async def optimize_scenarios(request: OptimizeRequest):
                 machinery=machinery,
                 pallet_type=request.pallet_type,
                 pallet_height=request.pallet_height,
-                custom_pallet=request.custom_pallet,
                 activity_type=request.activity_type,
-                workers=request.workers,
-                office_floor=request.office_floor,
-                office_height=request.office_height,
-                has_elevator=request.has_elevator
+                workers=request.workers
             )
             
             optimizer = WarehouseOptimizer(input_data)
-            result = optimizer.generate_layout()
+            result = optimizer.optimize()
             
             scenarios[machinery] = {
                 "total_pallets": result.capacity.total_pallets,
@@ -279,11 +473,8 @@ async def optimize_scenarios(request: OptimizeRequest):
 
 @app.post("/api/calculate")
 async def calculate_capacity(request: CalculateRequest):
-    """
-    Calcular capacidad y métricas de un diseño existente
-    """
+    """Calcular capacidad y métricas de un diseño existente"""
     try:
-        # Convertir elementos
         elements = []
         for el in request.elements:
             elements.append(WarehouseElement(
@@ -294,7 +485,6 @@ async def calculate_capacity(request: CalculateRequest):
                 properties=el.get("properties", {})
             ))
         
-        # Crear input temporal
         dims = request.dimensions
         input_data = WarehouseInput(
             length=dims.get("length", 50),
@@ -305,7 +495,6 @@ async def calculate_capacity(request: CalculateRequest):
             pallet_type="EUR"
         )
         
-        # Calcular
         calculator = CapacityCalculator(input_data, elements, dims)
         capacity = calculator.calculate_total_capacity()
         surfaces = calculator.calculate_surfaces()
@@ -360,77 +549,18 @@ async def delete_design(design_id: str):
     return {"message": "Diseño eliminado"}
 
 
-# ==================== COMPARACIÓN ====================
-
-@app.post("/api/compare")
-async def compare_scenarios(request: OptimizeRequest):
-    """
-    Comparar optimización estándar vs GA
-    """
-    try:
-        scenarios = {}
-        
-        input_data = WarehouseInput(
-            length=request.length,
-            width=request.width,
-            height=request.height,
-            n_docks=request.n_docks,
-            machinery=request.machinery,
-            pallet_type=request.pallet_type,
-            pallet_height=request.pallet_height,
-            custom_pallet=request.custom_pallet,
-            activity_type=request.activity_type,
-            workers=request.workers,
-            office_floor=request.office_floor,
-            office_height=request.office_height,
-            has_elevator=request.has_elevator
-        )
-        
-        # Escenario 1: Estándar
-        optimizer = WarehouseOptimizer(input_data)
-        scenarios["standard"] = optimizer.generate_layout()
-        
-        # Escenario 2: GA (si disponible)
-        if GA_AVAILABLE:
-            config_balanced = GAConfig(
-                generations=80,
-                weight_pallets=0.6,
-                weight_distance=0.4
-            )
-            scenarios["ga_balanced"] = optimize_with_ga(input_data, config_balanced)
-        
-        # Formatear comparación
-        comparison = {}
-        for name, result in scenarios.items():
-            comparison[name] = {
-                "total_pallets": result.capacity.total_pallets,
-                "efficiency": result.capacity.efficiency_percentage,
-                "elements_count": len(result.elements)
-            }
-        
-        return {
-            "comparison": comparison,
-            "scenarios": {
-                k: v.model_dump() if hasattr(v, 'model_dump') else v.__dict__
-                for k, v in scenarios.items()
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error en comparación: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # ==================== STARTUP ====================
 
 @app.on_event("startup")
 async def startup():
-    logger.info("=" * 50)
-    logger.info("🏭 UNITNAVE Designer API v4.1")
-    logger.info("=" * 50)
+    logger.info("=" * 60)
+    logger.info("🏭 UNITNAVE Designer API v5.0 - Multi-Escenario")
+    logger.info("=" * 60)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
+    logger.info(f"🎯 Multi-Escenario: Activo")
+    logger.info(f"📊 Fitness Evaluation: Activo")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
-    logger.info("=" * 50)
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
