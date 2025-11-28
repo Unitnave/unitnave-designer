@@ -68,6 +68,25 @@ AISLE_TYPES = {
     "emergency": 1.2
 }
 
+# ==================== AISLE_STANDARDS (para ABC Zoning) ====================
+# Estructura compatible con optimizer.py ABCZoneBuilder
+AISLE_STANDARDS = {
+    "transpaleta": {"width": 1.8},
+    "apilador": {"width": 2.4},
+    "retractil": {"width": 2.8},
+    "contrapesada": {"width": 3.6},
+    "trilateral": {"width": 1.9},
+    "recogepedidos": {"width": 2.5},
+    "main_aisle": {"width": 4.5}  # Pasillo principal/vertebral
+}
+
+# ==================== PALLET_SIZES (para ABC Zoning) ====================
+# Dimensiones de palets para cálculos de profundidad de rack
+PALLET_SIZES = {
+    "EUR": {"length": 1.2, "width": 0.8, "depth": 1.1},  # depth = profundidad rack estándar
+    "US": {"length": 1.2, "width": 1.0, "depth": 1.2}
+}
+
 # ==================== MUELLES (OPTIMIZADO V5) ====================
 DOCK_STANDARDS = {
     "width": 3.5,

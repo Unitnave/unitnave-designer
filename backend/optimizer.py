@@ -644,11 +644,14 @@ class LayoutBuilder:
         rack_depth = RACK_STANDARDS["conventional"]["depth"]
         max_levels = calculate_rack_levels(self.dims["height"], self.input.pallet_height or 1.5)
         
-        # Zona de almacenamiento
-        storage_start_z = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 12
-        storage_end_z = self.dims["width"] - 12
-        storage_start_x = 12
-        storage_end_x = self.dims["length"] - 12
+        # Zona de almacenamiento - MÁRGENES OPTIMIZADOS
+        # Margen desde muelles: zona maniobra + 2m buffer
+        storage_start_z = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 2
+        # Margen trasero: 3m para circulación perimetral
+        storage_end_z = self.dims["width"] - 3
+        # Márgenes laterales: 2m para acceso
+        storage_start_x = 2
+        storage_end_x = self.dims["length"] - 2
         
         storage_rect = {
             "x_start": storage_start_x,
