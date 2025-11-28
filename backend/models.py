@@ -28,6 +28,19 @@ class WarehouseInput(BaseModel):
     class Config:
         extra = "allow"
     
+    @validator('pallet_type', pre=True)
+    def normalize_pallet_type(cls, v):
+        """Convertir nombres frontend a códigos backend"""
+        mapping = {
+            'europalet': 'EUR',
+            'universal': 'US',
+            'medio': 'EUR',
+            'americano': 'US'
+        }
+        if isinstance(v, str):
+            return mapping.get(v.lower(), v)
+        return v
+    
     @validator('custom_pallet')
     def validate_custom_pallet(cls, v, values):
         if values.get('pallet_type') == 'CUSTOM' and not v:
