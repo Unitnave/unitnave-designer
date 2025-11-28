@@ -16,30 +16,38 @@ import useOptimizer from '../hooks/useOptimizer';
 import useWarehouseDesign from '../hooks/useWarehouseDesign';
 
 export default function DesignPage() {
-  const { optimize, optimizeScenarios, loading, error } = useOptimizer();
+  const { optimizeScenarios, loading, error } = useOptimizer();
   const { designState, updateFormData, startOptimization, setOptimizationResult, selectScenario } = useWarehouseDesign();
   
   const [showScenarios, setShowScenarios] = useState(false);
   const [scenarios, setScenarios] = useState(null);
   const canvasRef = useRef(null);
 
-  const handleComplete = async (formData) => {
-    updateFormData(formData);
-    startOptimization();
-
-    try {
-      // Generar escenario único primero
-      const result = await optimize(formData);
-      // Aceptamos 'inputData' como segundo parámetro opcional
-  
-      setOptimizationResult(result, formData);
-      // Generar multi-escenario en background
-      const scenariosData = await optimizeScenarios(formData);
-      setScenarios(scenariosData);
-      setShowScenarios(true);
+  /**
+   * handleComplete recibe el resultado de la optimización del WizardStepper
+   * @param {Object} result - Resultado de la API (con status, elements, capacity, etc.)
+   * @param {Object} apiPayload - Payload que se envió a la API (ya transformado)
+   */
+  const handleComplete = async (result, apiPayload) => {
+    // El wizard YA hizo la optimización, recibimos el resultado directamente
+    if (result && result.status === 'success') {
+      updateFormData(apiPayload || {});
+      startOptimization();
+      setOptimizationResult(result, apiPayload || {});
       
-    } catch (err) {
-      console.error('Error:', err);
+      // Generar multi-escenario en background usando el payload ya transformado
+      if (apiPayload) {
+        try {
+          const scenariosData = await optimizeScenarios(apiPayload);
+          setScenarios(scenariosData);
+          setShowScenarios(true);
+        } catch (err) {
+          console.error('Error generando escenarios:', err);
+          // No bloqueamos si falla, el resultado principal ya está
+        }
+      }
+    } else {
+      console.error('Optimización fallida:', result);
     }
   };
 

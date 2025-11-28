@@ -224,9 +224,9 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
       const data = await response.json();
       setResult(data);
       
-      // Callback al padre
+      // Callback al padre - pasar RESULTADO y PAYLOAD (ya transformado para API)
       if (onComplete) {
-        onComplete(data);
+        onComplete(data, payload);
       }
       
     } catch (err) {
