@@ -1,6 +1,6 @@
 /**
  * UNITNAVE Designer - Visualizador 3D Profesional
- * FINAL: Paredes transparentes, colores claros, funcionalidad completa + columnas corregidas
+ * FINAL: Paredes transparentes, colores claros, funcionalidad completa
  */
 
 import { useRef, useMemo } from 'react'
@@ -21,12 +21,12 @@ import IndustrialFloor from './3d/IndustrialFloor'
 
 // Colores CLAROS y profesionales
 const STRUCTURE_COLORS = {
-  wallExterior: '#e2e8f0',
-  wallInterior: '#f8fafc',
-  wallCut: '#fca5a5',
-  column: '#cbd5e1',
-  beam: '#94a3b8',
-  roofFrame: '#64748b'
+  wallExterior: '#e2e8f0', // Gris muy claro
+  wallInterior: '#f8fafc', // Casi blanco
+  wallCut: '#fca5a5',      // Rojo suave para corte
+  column: '#cbd5e1',       // Columnas claras
+  beam: '#94a3b8',         // Vigas claras
+  roofFrame: '#64748b',    // Cerchas claras
 }
 
 export default function Warehouse3DPro() {
@@ -56,28 +56,12 @@ export default function Warehouse3DPro() {
       }))
   }, [elements])
 
-  // ====== CÁLCULO DE COLUMNAS INTERIORES: NUEVA LÓGICA ======
-  const MIN_SPACING = 25 // mínimo 25 metros
-  const percentX = dimensions.length * 0.20
-  const percentZ = dimensions.width * 0.20
-
-  const colSpacingX = Math.max(percentX, MIN_SPACING)
-  const colSpacingZ = Math.max(percentZ, MIN_SPACING)
-
-  const interiorColumns = useMemo(() => {
-    const cols = []
-
-    for (let x = colSpacingX; x < dimensions.length; x += colSpacingX) {
-      for (let z = colSpacingZ; z < dimensions.width; z += colSpacingZ) {
-        cols.push({ x, z })
-      }
-    }
-    return cols
-  }, [dimensions.length, dimensions.width, colSpacingX, colSpacingZ])
+  const aisleWidth = useCalculationsStore(state => state.aisleWidth) || 2.8
 
   // Handlers de interacción
   const handlePointerDown = (e, element) => {
     if (viewMode !== 'Planta' && viewMode !== '3D') return
+
     e.stopPropagation()
     selectElement(element)
 
@@ -103,7 +87,8 @@ export default function Warehouse3DPro() {
   }
 
   const handlePointerMove = (e) => {
-    if (!dragState.current.isDragging) return
+    if (!dragState.current.isDragging || !dragState.current.draggedElement) return
+
     e.stopPropagation()
 
     const newX = e.point.x + dragState.current.offset.x
@@ -118,9 +103,30 @@ export default function Warehouse3DPro() {
   }
 
   const cutHeight = dimensions.height * 0.85
+  // ⚠️ Forzamos SIN leyendas en todo el 3D (y planta)
+  const showLabels = false
+
+  // columnas cada 20% de la longitud/anchura,
+  // pero mínimo 25 metros para no llenar naves pequeñas de pilares
+  const colSpacingX = Math.max(dimensions.length * 0.2, 25)
+  const colSpacingZ = Math.max(dimensions.width * 0.2, 25)
 
   return (
     <group ref={groupRef}>
+
+      {/* 🔆 LUCES BÁSICAS PARA QUE TODO SE VEA */}
+      <ambientLight intensity={0.5} />
+      <directionalLight
+        position={[20, 30, 20]}
+        intensity={1.2}
+        castShadow
+      />
+      <hemisphereLight
+        skyColor={'#dbeafe'}
+        groundColor={'#cbd5e1'}
+        intensity={0.8}
+      />
+
       {/* Plano interactivo para drag & drop */}
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
@@ -133,14 +139,26 @@ export default function Warehouse3DPro() {
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* ====== SUELO ====== */}
+      {/* 🔳 SUELO CLARO BASE, para evitar “todo negro” */}
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[dimensions.length / 2, -0.01, dimensions.width / 2]}
+        receiveShadow
+      >
+        <planeGeometry args={[dimensions.length, dimensions.width]} />
+        <meshStandardMaterial color="#e5e5e5" roughness={0.9} />
+      </mesh>
+
+      {/* ========== SUELO INDUSTRIAL ========== */}
       <IndustrialFloor
         dimensions={dimensions}
         dockPositions={dockPositions}
-        aisleWidth={2.8}
+        aisleWidth={aisleWidth}
       />
 
-      {/* ====== ESTRUCTURA DE PAREDES ====== */}
+      {/* ========== ESTRUCTURA DE LA NAVE ========== */}
+
+      {/* Paredes - TRANSPARENTES Y CLARAS */}
       <group>
         {/* Pared norte */}
         <mesh position={[dimensions.length / 2, cutHeight / 2, 0]}>
@@ -190,41 +208,61 @@ export default function Warehouse3DPro() {
           />
         </mesh>
 
-        {/* Líneas de corte superior */}
-        <mesh position={[dimensions.length / 2, cutHeight, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        {/* Líneas de corte superior (efecto maqueta) */}
+        <mesh
+          position={[dimensions.length / 2, cutHeight, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
           <planeGeometry args={[dimensions.length + 0.4, 0.1]} />
           <meshStandardMaterial color={STRUCTURE_COLORS.wallCut} />
         </mesh>
-        <mesh position={[dimensions.length / 2, cutHeight, dimensions.width]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh
+          position={[dimensions.length / 2, cutHeight, dimensions.width]}
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
           <planeGeometry args={[dimensions.length + 0.4, 0.1]} />
           <meshStandardMaterial color={STRUCTURE_COLORS.wallCut} />
         </mesh>
-        <mesh position={[0, cutHeight, dimensions.width / 2]} rotation={[-Math.PI / 2, 0, Math.PI / 2]}>
+        <mesh
+          position={[0, cutHeight, dimensions.width / 2]}
+          rotation={[-Math.PI / 2, 0, Math.PI / 2]}
+        >
           <planeGeometry args={[dimensions.width + 0.4, 0.1]} />
           <meshStandardMaterial color={STRUCTURE_COLORS.wallCut} />
         </mesh>
-        <mesh position={[dimensions.length, cutHeight, dimensions.width / 2]} rotation={[-Math.PI / 2, 0, Math.PI / 2]}>
+        <mesh
+          position={[dimensions.length, cutHeight, dimensions.width / 2]}
+          rotation={[-Math.PI / 2, 0, Math.PI / 2]}
+        >
           <planeGeometry args={[dimensions.width + 0.4, 0.1]} />
           <meshStandardMaterial color={STRUCTURE_COLORS.wallCut} />
         </mesh>
       </group>
 
-      {/* ====== COLUMNAS INTERIORES (nueva lógica) ====== */}
+      {/* Columnas estructurales - cada 20% (pero mín. 25m) */}
       <group>
-        {interiorColumns.map((col, i) => (
-          <mesh key={`icol-${i}`} position={[col.x, dimensions.height / 2, col.z]}>
-            <boxGeometry args={[0.4, dimensions.height, 0.4]} />
-            <meshStandardMaterial
-              color={STRUCTURE_COLORS.column}
-              roughness={0.6}
-              transparent
-              opacity={0.45}
-            />
-          </mesh>
-        ))}
+        {(() => {
+          const columnas = []
+          for (let x = 0; x <= dimensions.length; x += colSpacingX) {
+            for (let z = 0; z <= dimensions.width; z += colSpacingZ) {
+              columnas.push(
+                <mesh key={`col-${x}-${z}`} position={[x, dimensions.height / 2, z]}>
+                  <boxGeometry args={[0.4, dimensions.height, 0.4]} />
+                  <meshStandardMaterial
+                    color={STRUCTURE_COLORS.column}
+                    roughness={0.6}
+                    transparent
+                    opacity={0.5}
+                  />
+                </mesh>
+              )
+            }
+          }
+          return columnas
+        })()}
       </group>
 
-      {/* ====== CERCHAS DE CUBIERTA ====== */}
+      {/* Cerchas de cubierta */}
       <group position={[0, dimensions.height - 0.3, 0]}>
         {Array.from({ length: Math.floor(dimensions.length / 8) }).map((_, i) => (
           <mesh key={`truss-${i}`} position={[(i + 1) * 8, 0, dimensions.width / 2]}>
@@ -239,30 +277,37 @@ export default function Warehouse3DPro() {
         ))}
       </group>
 
-      {/* ====== ELEMENTOS 3D ====== */}
+      {/* ========== ELEMENTOS 3D ========== */}
       <group>
         {elements.map(element => {
+          const isSelected = selectedElement?.id === element.id
           const commonProps = {
             key: element.id,
             element,
-            isSelected: selectedElement?.id === element.id,
-            showLabels: false, // 🔥 ELIMINAMOS TODAS LAS ETIQUETAS
+            isSelected,
+            showLabels, // ahora siempre false
             viewMode,
             onPointerDown: (e) => handlePointerDown(e, element)
           }
 
           switch (element.type) {
-            case 'shelf': return <DetailedShelf {...commonProps} />
-            case 'office': return <DetailedOffice {...commonProps} />
-            case 'dock': return <DetailedDock {...commonProps} />
-            case 'service_room': return <DetailedServiceRooms {...commonProps} />
-            case 'operational_zone': return <DetailedOperationalZone {...commonProps} />
-            default: return null
+            case 'shelf':
+              return <DetailedShelf {...commonProps} />
+            case 'office':
+              return <DetailedOffice {...commonProps} />
+            case 'dock':
+              return <DetailedDock {...commonProps} />
+            case 'service_room':
+              return <DetailedServiceRooms {...commonProps} />
+            case 'operational_zone':
+              return <DetailedOperationalZone {...commonProps} />
+            default:
+              return null
           }
         })}
       </group>
 
-      {/* Preview de elemento al añadir */}
+      {/* Elemento en preview (cuando se está añadiendo) */}
       {previewElement && (
         <group position={[previewElement.position.x, 0, previewElement.position.y]}>
           <mesh position={[0, 0.5, 0]}>
@@ -273,12 +318,17 @@ export default function Warehouse3DPro() {
                 previewElement.dimensions?.width || 5
               ]}
             />
-            <meshStandardMaterial color="#3b82f6" transparent opacity={0.5} wireframe />
+            <meshStandardMaterial
+              color="#3b82f6"
+              transparent
+              opacity={0.5}
+              wireframe
+            />
           </mesh>
         </group>
       )}
 
-      {/* Grid de referencia */}
+      {/* Grid de referencia (solo en vista planta) */}
       {viewMode === 'Planta' && (
         <gridHelper
           args={[Math.max(dimensions.length, dimensions.width), 20, '#cbd5e1', '#e2e8f0']}
