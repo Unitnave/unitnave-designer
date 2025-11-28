@@ -15,6 +15,9 @@ import {
   Straighten, Settings, Business, LocalShipping, Tune, PlayArrow
 } from '@mui/icons-material';
 
+// Importar configuración de API
+import { API_URL } from '../../config';
+
 // Importar pasos
 import Step1Dimensions from './Step1Dimensions';
 import Step2Configuration from './Step2Configuration';
@@ -199,8 +202,8 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
         }
       };
 
-      // Llamar a API
-      const response = await fetch('/api/optimize', {
+      // Llamar a API con URL completa
+      const response = await fetch(`${API_URL}/api/optimize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
