@@ -745,16 +745,55 @@ class LayoutBuilder:
             )
     
     def _place_racks_parallel_length(self, x_start, x_end, z_start, z_end, rack_depth, max_levels, strategy, zone_label: str = "", aisle_width_override: float = None):
-        """Racks paralelos al largo de la nave"""
+        """
+        Racks paralelos al largo de la nave con estanterías perimetrales inteligentes.
+        
+        Estrategia:
+        1. Verificar si cabe estantería simple en pared trasera (z_end)
+        2. Colocar back-to-back desde z_start hacia el centro
+        3. Si queda hueco >= rack+pasillo, añadir perimetral trasera
+        """
         available_width = z_end - z_start
         aisle = aisle_width_override or self.aisle_width
         rack_module = rack_depth * 2 + aisle  # Back-to-back + pasillo
         
-        num_rows = int(available_width / rack_module)
+        # Espacio mínimo para estantería perimetral: rack simple + pasillo
+        min_perimeter_space = rack_depth + aisle
+        
+        # ===== CALCULAR DISTRIBUCIÓN ÓPTIMA =====
+        # Opción A: Solo back-to-back
+        num_rows_only_bb = int(available_width / rack_module)
+        
+        # Opción B: Back-to-back + perimetral trasera
+        # Reservar espacio para perimetral trasera y ver cuántos BB caben
+        space_for_bb_with_perimeter = available_width - min_perimeter_space
+        num_rows_with_perimeter = int(space_for_bb_with_perimeter / rack_module)
+        
+        # Calcular capacidad de cada opción
+        # BB: 2 racks por módulo, Perimetral: 1 rack
+        capacity_only_bb = num_rows_only_bb * 2
+        capacity_with_perimeter = num_rows_with_perimeter * 2 + 1
+        
+        # Elegir la opción que da más capacidad
+        use_perimeter = capacity_with_perimeter > capacity_only_bb and num_rows_with_perimeter > 0
+        
+        if use_perimeter:
+            num_rows = num_rows_with_perimeter
+            # ===== ESTANTERÍA PERIMETRAL TRASERA =====
+            rear_rack_z = z_end - rack_depth
+            segments = self._find_free_segments(x_start, x_end, rear_rack_z, rack_depth)
+            for seg_start, seg_end in segments:
+                seg_length = seg_end - seg_start
+                if seg_length >= 5.0:
+                    label_prefix = f"{zone_label}-P" if zone_label else "P"
+                    self._add_single_rack(seg_start, rear_rack_z, seg_length, rack_depth, max_levels, f"{label_prefix}-REAR")
+        else:
+            num_rows = num_rows_only_bb
+        
+        # ===== ESTANTERÍAS BACK-TO-BACK CENTRALES =====
         current_z = z_start
         
         for row in range(num_rows):
-            # Encontrar segmentos libres en esta línea
             segments = self._find_free_segments(x_start, x_end, current_z, rack_depth * 2)
             
             for seg_start, seg_end in segments:
@@ -765,13 +804,60 @@ class LayoutBuilder:
             
             current_z += rack_module
     
+    def _add_single_rack(self, x, z, length, depth, levels, label: str = ""):
+        """Añadir estantería simple (single-deep) para bordes/perímetro"""
+        capacity = self._calc_capacity(length, depth, levels)
+        
+        rack = RackConfiguration(
+            x=x, z=z, length=length, depth=depth,
+            rotation=0, levels=levels, capacity=capacity,
+            score=1.0, label=label
+        )
+        self.racks.append(rack)
+        self._add_element("shelf", x, z, rack.to_dict(), rack.to_properties())
+        self._mark_grid(x, z, length, depth)
+    
     def _place_racks_parallel_width(self, x_start, x_end, z_start, z_end, rack_depth, max_levels, strategy, zone_label: str = "", aisle_width_override: float = None):
-        """Racks paralelos al ancho de la nave"""
+        """
+        Racks paralelos al ancho de la nave con estanterías perimetrales inteligentes.
+        
+        Estrategia:
+        1. Verificar si cabe estantería simple en pared lateral (x_end)
+        2. Colocar back-to-back desde x_start hacia el centro
+        3. Si añadir perimetral da más capacidad, usarla
+        """
         available_length = x_end - x_start
         aisle = aisle_width_override or self.aisle_width
         rack_module = rack_depth * 2 + aisle
         
-        num_cols = int(available_length / rack_module)
+        # Espacio mínimo para estantería perimetral
+        min_perimeter_space = rack_depth + aisle
+        
+        # ===== CALCULAR DISTRIBUCIÓN ÓPTIMA =====
+        num_cols_only_bb = int(available_length / rack_module)
+        
+        space_for_bb_with_perimeter = available_length - min_perimeter_space
+        num_cols_with_perimeter = int(space_for_bb_with_perimeter / rack_module)
+        
+        capacity_only_bb = num_cols_only_bb * 2
+        capacity_with_perimeter = num_cols_with_perimeter * 2 + 1
+        
+        use_perimeter = capacity_with_perimeter > capacity_only_bb and num_cols_with_perimeter > 0
+        
+        if use_perimeter:
+            num_cols = num_cols_with_perimeter
+            # ===== ESTANTERÍA PERIMETRAL LATERAL DERECHA =====
+            right_rack_x = x_end - rack_depth
+            segments = self._find_free_segments_vertical(z_start, z_end, right_rack_x, rack_depth)
+            for seg_start, seg_end in segments:
+                seg_length = seg_end - seg_start
+                if seg_length >= 5.0:
+                    label_prefix = f"{zone_label}-P" if zone_label else "P"
+                    self._add_single_rack_vertical(right_rack_x, seg_start, seg_length, rack_depth, max_levels, f"{label_prefix}-RIGHT")
+        else:
+            num_cols = num_cols_only_bb
+        
+        # ===== ESTANTERÍAS BACK-TO-BACK CENTRALES =====
         current_x = x_start
         
         for col in range(num_cols):
@@ -784,6 +870,20 @@ class LayoutBuilder:
                     self._add_rack_pair_vertical(current_x, seg_start, seg_length, rack_depth, max_levels, col, label_prefix)
             
             current_x += rack_module
+    
+    def _add_single_rack_vertical(self, x, z, length, depth, levels, label: str = ""):
+        """Añadir estantería simple vertical (single-deep) para bordes/perímetro"""
+        capacity = self._calc_capacity(depth, length, levels)
+        
+        rack = RackConfiguration(
+            x=x, z=z, length=depth, depth=length,
+            rotation=90, levels=levels, capacity=capacity,
+            score=1.0, label=label
+        )
+        self.racks.append(rack)
+        self._add_element("shelf", x, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
+                         {"rotation": 90, "capacity": capacity, "label": label})
+        self._mark_grid(x, z, depth, length)
     
     def _add_rack_pair(self, x, z, length, depth, levels, row, label_prefix: str = ""):
         """Añadir par de racks back-to-back horizontal"""
