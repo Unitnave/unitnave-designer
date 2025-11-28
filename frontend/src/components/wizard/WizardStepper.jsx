@@ -156,6 +156,14 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
     setError(null);
     
     try {
+      // Mapeo de tipos de palet (frontend → backend)
+      const palletTypeMap = {
+        'europalet': 'EUR',
+        'universal': 'US',
+        'medio': 'EUR',
+        'americano': 'US'
+      };
+      
       // Construir payload para API
       const payload = {
         length: wizardData.length,
@@ -163,7 +171,7 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
         height: wizardData.height,
         activity_type: wizardData.activityType,
         machinery: wizardData.machinery,
-        pallet_type: wizardData.palletType,
+        pallet_type: palletTypeMap[wizardData.palletType] || 'EUR',
         workers: wizardData.workers,
         n_docks: wizardData.dockConfig?.count || 4,
         
