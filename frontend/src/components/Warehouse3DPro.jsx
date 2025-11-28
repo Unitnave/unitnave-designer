@@ -103,7 +103,7 @@ export default function Warehouse3DPro() {
   }
 
   const cutHeight = dimensions.height * 0.85
-  // ⚠️ Forzamos SIN leyendas en todo el 3D (y planta)
+  // Forzamos SIN leyendas en todo el 3D (y planta)
   const showLabels = false
 
   // columnas cada 20% de la longitud/anchura,
@@ -239,25 +239,62 @@ export default function Warehouse3DPro() {
         </mesh>
       </group>
 
-      {/* Columnas estructurales - cada 20% (pero mín. 25m) */}
+      {/* Columnas estructurales - PERÍMETRO COMPLETO + INTERIOR con spacing adaptado */}
       <group>
         {(() => {
           const columnas = []
-          for (let x = 0; x <= dimensions.length; x += colSpacingX) {
-            for (let z = 0; z <= dimensions.width; z += colSpacingZ) {
-              columnas.push(
-                <mesh key={`col-${x}-${z}`} position={[x, dimensions.height / 2, z]}>
-                  <boxGeometry args={[0.4, dimensions.height, 0.4]} />
-                  <meshStandardMaterial
-                    color={STRUCTURE_COLORS.column}
-                    roughness={0.6}
-                    transparent
-                    opacity={0.5}
-                  />
-                </mesh>
-              )
+          const used = new Set()
+
+          const addColumn = (x, z) => {
+            const key = `${x.toFixed(3)}-${z.toFixed(3)}`
+            if (used.has(key)) return
+            used.add(key)
+            columnas.push(
+              <mesh key={`col-${key}`} position={[x, dimensions.height / 2, z]}>
+                <boxGeometry args={[0.4, dimensions.height, 0.4]} />
+                <meshStandardMaterial
+                  color={STRUCTURE_COLORS.column}
+                  roughness={0.6}
+                  transparent
+                  opacity={0.5}
+                />
+              </mesh>
+            )
+          }
+
+          // Posiciones en X
+          const xPositions = []
+          if (dimensions.length <= colSpacingX) {
+            xPositions.push(0, dimensions.length)
+          } else {
+            for (let x = 0; x <= dimensions.length; x += colSpacingX) {
+              xPositions.push(x)
+            }
+            if (xPositions[xPositions.length - 1] !== dimensions.length) {
+              xPositions.push(dimensions.length)
             }
           }
+
+          // Posiciones en Z
+          const zPositions = []
+          if (dimensions.width <= colSpacingZ) {
+            zPositions.push(0, dimensions.width)
+          } else {
+            for (let z = 0; z <= dimensions.width; z += colSpacingZ) {
+              zPositions.push(z)
+            }
+            if (zPositions[zPositions.length - 1] !== dimensions.width) {
+              zPositions.push(dimensions.width)
+            }
+          }
+
+          // Generar columnas en todas las combinaciones (perímetro + interior)
+          for (const x of xPositions) {
+            for (const z of zPositions) {
+              addColumn(x, z)
+            }
+          }
+
           return columnas
         })()}
       </group>
