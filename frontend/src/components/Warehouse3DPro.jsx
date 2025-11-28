@@ -109,6 +109,25 @@ export default function Warehouse3DPro() {
 
   return (
     <group ref={groupRef}>
+      {/* ========== LUCES PARA QUE TODO SE VEA (NO MÁS NEGRO) ========== */}
+      <ambientLight intensity={0.55} />
+      <directionalLight
+        position={[20, 30, 20]}
+        intensity={1.3}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <directionalLight
+        position={[-15, 18, -5]}
+        intensity={0.6}
+      />
+      <hemisphereLight
+        skyColor={'#dbeafe'}
+        groundColor={'#cbd5e1'}
+        intensity={0.9}
+      />
+
       {/* Plano interactivo para drag & drop */}
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
@@ -121,7 +140,17 @@ export default function Warehouse3DPro() {
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* ========== SUELO INDUSTRIAL ========== */}
+      {/* ========== SUELO CLARO BASE (para evitar suelo negro) ========== */}
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[dimensions.length / 2, -0.01, dimensions.width / 2]}
+        receiveShadow
+      >
+        <planeGeometry args={[dimensions.length, dimensions.width]} />
+        <meshStandardMaterial color="#d9d9d9" roughness={0.9} />
+      </mesh>
+
+      {/* ========== SUELO INDUSTRIAL ORIGINAL ========== */}
       <IndustrialFloor
         dimensions={dimensions}
         dockPositions={dockPositions}
