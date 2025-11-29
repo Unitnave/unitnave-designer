@@ -549,6 +549,149 @@ async def delete_design(design_id: str):
     return {"message": "Diseño eliminado"}
 
 
+# ==================== ENDPOINT DE INFORME DETALLADO ====================
+
+@app.post("/api/report")
+async def generate_detailed_report(request: OptimizeRequest):
+    """
+    📋 Genera informe detallado con todas las mediciones (en cm)
+    
+    Incluye:
+    - Detalle de cada estantería (posición, dimensiones, palets)
+    - Distancias a paredes
+    - Desglose por zona ABC
+    - Palets por nivel
+    - Resumen de distancias
+    """
+    try:
+        from report_generator import ReportGenerator
+        
+        # Construir input
+        input_data = WarehouseInput(
+            length=request.length,
+            width=request.width,
+            height=request.height,
+            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
+            machinery=request.machinery,
+            pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
+            activity_type=request.activity_type,
+            workers=request.workers,
+            office_floor=request.office_config.floor if request.office_config else request.office_floor,
+            office_height=request.office_config.mezzanine_height if request.office_config else request.office_height,
+            has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
+        )
+        
+        # Construir preferencias
+        prefs = None
+        if request.preferences:
+            prefs = DesignPreferences(
+                include_offices=request.preferences.include_offices,
+                include_services=request.preferences.include_services,
+                include_docks=request.preferences.include_docks,
+                include_technical=request.preferences.include_technical,
+                priority=request.preferences.priority,
+                warehouse_type=request.preferences.warehouse_type,
+                layout_complexity=request.preferences.layout_complexity,
+                enable_abc_zones=request.preferences.enable_abc_zones,
+                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
+                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
+                abc_zone_c_pct=request.preferences.abc_zone_c_pct,
+                forbidden_zones=request.preferences.forbidden_zones,
+                high_rotation_pct=request.preferences.high_rotation_pct
+            )
+        
+        # Optimizar
+        optimizer = WarehouseOptimizer(input_data, prefs)
+        result = optimizer.optimize()
+        
+        # Generar informe
+        generator = ReportGenerator(result, input_data, prefs)
+        report = generator.generate()
+        
+        # Convertir a diccionario
+        report_dict = generator.to_dict()
+        
+        logger.info(f"📋 Informe generado: {report_dict.get('resumen_palets', {}).get('total_palets', 0)} palets")
+        
+        return report_dict
+        
+    except Exception as e:
+        logger.error(f"❌ Error generando informe: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/report/pdf")
+async def generate_pdf_report(request: OptimizeRequest):
+    """
+    📄 Genera informe en PDF
+    
+    Devuelve el PDF como descarga
+    """
+    try:
+        from report_generator import generate_pdf_report as gen_pdf
+        from fastapi.responses import FileResponse
+        import tempfile
+        import os
+        
+        # Construir input
+        input_data = WarehouseInput(
+            length=request.length,
+            width=request.width,
+            height=request.height,
+            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
+            machinery=request.machinery,
+            pallet_type=request.pallet_type,
+            pallet_height=request.pallet_height,
+            custom_pallet=request.custom_pallet,
+            activity_type=request.activity_type,
+            workers=request.workers
+        )
+        
+        # Construir preferencias
+        prefs = None
+        if request.preferences:
+            prefs = DesignPreferences(
+                include_offices=request.preferences.include_offices,
+                include_services=request.preferences.include_services,
+                include_docks=request.preferences.include_docks,
+                include_technical=request.preferences.include_technical,
+                priority=request.preferences.priority,
+                warehouse_type=request.preferences.warehouse_type,
+                enable_abc_zones=request.preferences.enable_abc_zones,
+                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
+                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
+                abc_zone_c_pct=request.preferences.abc_zone_c_pct
+            )
+        
+        # Optimizar
+        optimizer = WarehouseOptimizer(input_data, prefs)
+        result = optimizer.optimize()
+        
+        # Generar PDF
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            pdf_path = tmp.name
+        
+        gen_pdf(result, input_data, prefs, pdf_path)
+        
+        logger.info(f"📄 PDF generado: {pdf_path}")
+        
+        return FileResponse(
+            pdf_path,
+            media_type='application/pdf',
+            filename=f'informe_nave_{int(request.length)}x{int(request.width)}.pdf'
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error generando PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== STARTUP ====================
 
 @app.on_event("startup")

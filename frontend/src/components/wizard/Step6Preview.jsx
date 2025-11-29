@@ -12,11 +12,14 @@ import {
 } from '@mui/material';
 import { 
   PlayArrow, CheckCircle, Warning, Info,
-  Inventory, Speed, Layers, LocalShipping
+  Inventory, Speed, Layers, LocalShipping,
+  Assessment, PictureAsPdf
 } from '@mui/icons-material';
+import DetailedReport from '../DetailedReport';
 
 export default function Step6Preview({ data, onOptimize, isLoading, result }) {
   const [showDetails, setShowDetails] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   // Extraer datos de configuración
   const {
@@ -376,10 +379,48 @@ export default function Step6Preview({ data, onOptimize, isLoading, result }) {
                   </Box>
                 </Box>
               )}
+
+              {/* BOTÓN DE INFORME DETALLADO */}
+              <Box sx={{ mt: 3, display: 'flex', gap: 2, justifyContent: 'center' }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="large"
+                  startIcon={<Assessment />}
+                  onClick={() => setShowReport(true)}
+                  sx={{ fontWeight: 600 }}
+                >
+                  📋 Ver Informe Detallado
+                </Button>
+              </Box>
             </Paper>
           </Grid>
         )}
       </Grid>
+
+      {/* MODAL DE INFORME DETALLADO */}
+      {showReport && (
+        <DetailedReport 
+          warehouseData={{
+            length: data.length,
+            width: data.width,
+            height: data.height,
+            n_docks: data.dockConfig?.count || 4,
+            machinery: data.machinery,
+            pallet_type: data.palletType,
+            activity_type: data.activityType,
+            preferences: {
+              enable_abc_zones: data.preferences?.enable_abc_zones || false,
+              abc_zone_a_pct: data.preferences?.abc_zone_a_pct || 0.2,
+              abc_zone_b_pct: data.preferences?.abc_zone_b_pct || 0.3,
+              abc_zone_c_pct: data.preferences?.abc_zone_c_pct || 0.5,
+              priority: data.preferences?.priority || 'balance',
+              warehouse_type: data.preferences?.warehouse_type || data.activityType
+            }
+          }}
+          onClose={() => setShowReport(false)}
+        />
+      )}
     </Box>
   );
 }
