@@ -126,16 +126,48 @@ OPERATIONAL_ZONES = {
 
 # ==================== INSTALACIONES TÉCNICAS ====================
 TECHNICAL_ROOMS = {
-    "electrical": {"width": 4, "depth": 2, "mandatory": True},
+    "electrical": {"width": 4, "depth": 2, "height": 3.0, "mandatory": True},
     "battery_charging": {
         "width": 8, 
-        "depth": 6, 
+        "depth": 6,
+        "height": 3.5,
         "per_vehicles": 4,
         "distance_from_offices": 10
     }
 }
 
-# ==================== SEGURIDAD ====================
+# ==================== SERVICIOS (BAÑOS, VESTUARIOS, COMEDOR) ====================
+SERVICE_STANDARDS = {
+    "height": 3.0,  # Altura estándar de servicios
+    "bathroom": {
+        "width": 4,
+        "depth": 3,
+        "height": 3.0,
+        "min_per_workers": 10  # 1 baño por cada 10 trabajadores
+    },
+    "changing_room": {
+        "width": 6,
+        "depth": 4,
+        "height": 3.0,
+        "locker_space": 0.5  # m² por taquilla
+    },
+    "canteen": {
+        "width": 8,
+        "depth": 6,
+        "height": 3.0,
+        "m2_per_worker": 1.5
+    }
+}
+
+# ==================== SEGURIDAD Y NORMATIVA ====================
+SAFETY_STANDARDS = {
+    "min_aisle_width": 1.2,  # Ancho mínimo pasillo evacuación (m)
+    "max_evacuation_distance": 50,  # Distancia máxima a salida (m)
+    "min_exit_width": 0.8,  # Ancho mínimo puerta evacuación (m)
+    "exits_per_1000m2": 1,  # Salidas por cada 1000m²
+    "fire_resistance_minutes": 60  # Resistencia al fuego mínima
+}
+
 FIRE_SAFETY = {
     "extinguisher_distance": 15,
     "bie_distance": 25,
