@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
-import { Container, Box, CircularProgress, Alert, Snackbar, Typography } from '@mui/material';
+import { Container, Box, CircularProgress, Alert, Snackbar, Typography, Button } from '@mui/material';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Assessment } from '@mui/icons-material';
 
 import Header from '../components/layout/Header';
 import WizardStepper from '../components/wizard/WizardStepper';
@@ -11,6 +12,7 @@ import ValidationPanel from '../components/dashboard/ValidationPanel';
 import ScenarioComparator from '../components/scenarios/ScenarioComparator';
 import Warehouse3DViewer from '../components/viewer/Warehouse3DViewer';
 import ExportButton from '../components/export/ExportButton';
+import DetailedReport from '../components/DetailedReport';
 
 import useOptimizer from '../hooks/useOptimizer';
 import useWarehouseDesign from '../hooks/useWarehouseDesign';
@@ -21,6 +23,7 @@ export default function DesignPage() {
   
   const [showScenarios, setShowScenarios] = useState(false);
   const [scenarios, setScenarios] = useState(null);
+  const [showReport, setShowReport] = useState(false);
   const canvasRef = useRef(null);
 
   /**
@@ -139,8 +142,18 @@ export default function DesignPage() {
 
               <ValidationPanel validations={designState.optimizationResult.validations} />
 
-              {/* Botón Export */}
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+              {/* Botones de acción */}
+              <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mt: 4 }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="large"
+                  startIcon={<Assessment />}
+                  onClick={() => setShowReport(true)}
+                  sx={{ fontWeight: 600, py: 1.5, px: 4 }}
+                >
+                  📋 Ver Informe Detallado
+                </Button>
                 <ExportButton 
                   warehouseData={{
                     dimensions: designState.formData,
@@ -151,6 +164,30 @@ export default function DesignPage() {
                   canvasElement={canvasRef.current}
                 />
               </Box>
+
+              {/* Modal de Informe Detallado */}
+              {showReport && (
+                <DetailedReport 
+                  warehouseData={{
+                    length: designState.formData.length || designState.formData.dimensions?.length || 60,
+                    width: designState.formData.width || designState.formData.dimensions?.width || 40,
+                    height: designState.formData.height || designState.formData.dimensions?.height || 12,
+                    n_docks: designState.formData.dockConfig?.count || designState.formData.n_docks || 4,
+                    machinery: designState.formData.machinery || 'retractil',
+                    pallet_type: designState.formData.palletType || designState.formData.pallet_type || 'EUR',
+                    activity_type: designState.formData.activityType || designState.formData.activity_type || 'industrial',
+                    preferences: {
+                      enable_abc_zones: designState.formData.preferences?.enable_abc_zones || false,
+                      abc_zone_a_pct: designState.formData.preferences?.abc_zone_a_pct || 0.2,
+                      abc_zone_b_pct: designState.formData.preferences?.abc_zone_b_pct || 0.3,
+                      abc_zone_c_pct: designState.formData.preferences?.abc_zone_c_pct || 0.5,
+                      priority: designState.formData.preferences?.priority || 'balance',
+                      warehouse_type: designState.formData.preferences?.warehouse_type || designState.formData.activityType || 'industrial'
+                    }
+                  }}
+                  onClose={() => setShowReport(false)}
+                />
+              )}
             </motion.div>
           )}
         </AnimatePresence>
