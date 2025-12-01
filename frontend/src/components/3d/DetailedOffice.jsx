@@ -118,26 +118,31 @@ export default function DetailedOffice({
     return items
   }, [largo, ancho, elevation, showInterior, isMezzanine])
 
-  // V5.3: Escalera PEGADA A LA PARED del mismo lado que la oficina
+  // V5.4: Número de plantas
+  const numFloors = element.properties?.num_floors || 1
+  const floorHeight = element.properties?.floor_height || 3.0
+
+  // V5.4: Escalera DENTRO del footprint de la oficina
   const staircase = useMemo(() => {
     if (!isMezzanine || !hasStairs) return null
     
     const stairWidth = 1.2
-    const stairDepth = 3.5
+    const stairDepth = 3.0
     const numSteps = Math.ceil(elevation / 0.18)
     const stepHeight = elevation / numSteps
     const stepDepth = stairDepth / numSteps
     
-    // V5.3: Posición X según lado de la oficina
-    // Si oficina a la derecha → escalera a la derecha (X = largo + offset)
-    // Si oficina a la izquierda → escalera a la izquierda (X = -offset)
-    const xBase = isRightSide ? largo + stairWidth / 2 + 0.1 : -stairWidth / 2 - 0.1
+    // V5.4: Escalera DENTRO de la oficina, en una esquina
+    // Si oficina a la izquierda → escalera en esquina inferior izquierda (X cerca de 0)
+    // Si oficina a la derecha → escalera en esquina inferior derecha (X cerca de largo)
+    const xBase = isRightSide ? largo - stairWidth - 0.3 : 0.3
+    const zBase = 0.3  // Cerca del frente de la oficina
     
     const steps = []
     for (let i = 0; i < numSteps; i++) {
       steps.push({
         key: `step-${i}`,
-        position: [xBase, (i + 0.5) * stepHeight, ancho / 2 - stairDepth / 2 + i * stepDepth],
+        position: [xBase + stairWidth / 2, (i + 0.5) * stepHeight, zBase + i * stepDepth],
         size: [stairWidth, stepHeight * 0.95, stepDepth * 0.9]
       })
     }
@@ -148,23 +153,29 @@ export default function DetailedOffice({
       depth: stairDepth,
       handrailHeight: 1.0,
       xPosition: xBase,
+      zPosition: zBase,
       isRight: isRightSide
     }
   }, [largo, ancho, elevation, isMezzanine, hasStairs, isRightSide])
 
-  // V5.3: Ascensor en el mismo lado que la escalera
+  // V5.4: Ascensor DENTRO del footprint, junto a la escalera
   const elevator = useMemo(() => {
     if (!isMezzanine || !hasElevator) return null
     
-    // V5.3: Al lado de la escalera, en el mismo lado que la oficina
-    const xPos = isRightSide ? largo + 2.5 : -2.5
+    const elevatorWidth = 1.6
+    const elevatorDepth = 1.8
+    
+    // V5.4: Al lado de la escalera, dentro de la oficina
+    const xPos = isRightSide 
+      ? largo - elevatorWidth - 1.8  // A la izquierda de la escalera
+      : 1.8  // A la derecha de la escalera
     
     return {
-      position: [xPos, 0, ancho / 2 + 2.5],
-      size: [1.6, elevation + alto, 1.8],
+      position: [xPos, 0, 0.3],  // Cerca del frente
+      size: [elevatorWidth, elevation + alto * numFloors, elevatorDepth],
       isRight: isRightSide
     }
-  }, [largo, ancho, elevation, alto, isMezzanine, hasElevator, isRightSide])
+  }, [largo, ancho, elevation, alto, numFloors, isMezzanine, hasElevator, isRightSide])
 
   return (
     <group>
@@ -217,52 +228,73 @@ export default function DetailedOffice({
         </group>
       )}
 
-      {/* === SUELO DE OFICINA === */}
-      <mesh 
-        position={[largo / 2, isMezzanine ? elevation : 0.08, ancho / 2]} 
-        receiveShadow
-      >
-        <boxGeometry args={[largo, 0.15, ancho]} />
-        <meshStandardMaterial color={COLORS.floor} roughness={0.8} />
-      </mesh>
+      {/* === SUELOS DE OFICINA (V5.4: Múltiples plantas) === */}
+      {Array.from({ length: numFloors }).map((_, floorIndex) => {
+        const floorY = isMezzanine 
+          ? elevation + (floorIndex * floorHeight) 
+          : floorIndex * floorHeight + 0.08
+        
+        return (
+          <mesh 
+            key={`floor-${floorIndex}`}
+            position={[largo / 2, floorY, ancho / 2]} 
+            receiveShadow
+          >
+            <boxGeometry args={[largo, 0.15, ancho]} />
+            <meshStandardMaterial 
+              color={floorIndex === 0 ? COLORS.floor : '#d1d5db'} 
+              roughness={0.8} 
+            />
+          </mesh>
+        )
+      })}
 
-      {/* === PAREDES === */}
-      {/* Pared frontal (cristal) */}
-      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + alto / 2, 0.06]} castShadow>
-        <boxGeometry args={[largo, alto, 0.12]} />
-        <meshPhysicalMaterial
-          color={COLORS.glass}
-          transparent
-          opacity={0.3}
-          roughness={0.05}
-          metalness={0.1}
-          transmission={0.7}
-        />
-      </mesh>
+      {/* === PAREDES (altura total de todas las plantas) === */}
+      {(() => {
+        const totalHeight = alto * numFloors
+        const baseY = isMezzanine ? elevation : 0
+        
+        return (
+          <>
+            {/* Pared frontal (cristal) */}
+            <mesh position={[largo / 2, baseY + totalHeight / 2, 0.06]} castShadow>
+              <boxGeometry args={[largo, totalHeight, 0.12]} />
+              <meshPhysicalMaterial
+                color={COLORS.glass}
+                transparent
+                opacity={0.3}
+                roughness={0.05}
+                metalness={0.1}
+                transmission={0.7}
+              />
+            </mesh>
 
-      {/* Pared trasera (sólida) */}
-      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + alto / 2, ancho - 0.08]}>
-        <boxGeometry args={[largo, alto, 0.15]} />
-        <meshStandardMaterial color={COLORS.wall} roughness={0.9} />
-      </mesh>
+            {/* Pared trasera (sólida) */}
+            <mesh position={[largo / 2, baseY + totalHeight / 2, ancho - 0.08]}>
+              <boxGeometry args={[largo, totalHeight, 0.15]} />
+              <meshStandardMaterial color={COLORS.wall} roughness={0.9} />
+            </mesh>
 
-      {/* Pared lateral derecha (cristal parcial) */}
-      <mesh position={[largo - 0.06, (isMezzanine ? elevation : 0) + alto / 2, ancho / 2]} castShadow>
-        <boxGeometry args={[0.12, alto, ancho]} />
-        <meshPhysicalMaterial
-          color={COLORS.glassTint}
-          transparent
-          opacity={0.35}
-          roughness={0.05}
-          transmission={0.6}
-        />
-      </mesh>
+            {/* Pared lateral derecha (cristal parcial) */}
+            <mesh position={[largo - 0.06, baseY + totalHeight / 2, ancho / 2]} castShadow>
+              <boxGeometry args={[0.12, totalHeight, ancho]} />
+              <meshPhysicalMaterial
+                color={COLORS.glassTint}
+                transparent
+                opacity={0.35}
+                roughness={0.05}
+                transmission={0.6}
+              />
+            </mesh>
 
-      {/* Pared lateral izquierda (contra nave - sólida) */}
-      <mesh position={[0.08, (isMezzanine ? elevation : 0) + alto / 2, ancho / 2]}>
-        <boxGeometry args={[0.15, alto, ancho]} />
-        <meshStandardMaterial color={COLORS.wall} roughness={0.9} />
-      </mesh>
+            {/* Pared lateral izquierda (contra nave - sólida) */}
+            <mesh position={[0.08, baseY + totalHeight / 2, ancho / 2]}>
+              <boxGeometry args={[0.15, totalHeight, ancho]} />
+              <meshStandardMaterial color={COLORS.wall} roughness={0.9} />
+            </mesh>
+          </>
+        )
+      })()}
 
       {/* === VENTANAS === */}
       {windows.map(win => (
@@ -279,8 +311,8 @@ export default function DetailedOffice({
         </mesh>
       ))}
 
-      {/* === TECHO === */}
-      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + alto, ancho / 2]} receiveShadow>
+      {/* === TECHO (V5.4: Ajustado a múltiples plantas) === */}
+      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + alto * numFloors, ancho / 2]} receiveShadow>
         <boxGeometry args={[largo + 0.3, 0.12, ancho + 0.3]} />
         <meshStandardMaterial color={COLORS.structure} metalness={0.5} roughness={0.5} />
       </mesh>

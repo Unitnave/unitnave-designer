@@ -81,6 +81,7 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
     length: initialData.length || 80,
     width: initialData.width || 40,
     height: initialData.height || 10,
+    palletHeight: initialData.palletHeight || 1.5,  // V5.4: Cubicaje del palet
     
     // Step 2: Configuración
     activityType: initialData.activityType || 'industrial',
@@ -172,6 +173,7 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
         length: wizardData.length,
         width: wizardData.width,
         height: wizardData.height,
+        pallet_height: wizardData.palletHeight || 1.5,  // V5.4: Cubicaje del palet
         activity_type: wizardData.activityType,
         machinery: wizardData.machinery,
         pallet_type: palletTypeMap[wizardData.palletType] || 'EUR',

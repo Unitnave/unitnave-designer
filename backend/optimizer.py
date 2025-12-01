@@ -1203,17 +1203,22 @@ class LayoutBuilder:
                     self._add_single_rack_vertical(single_x, seg_start, seg_length, rack_depth, max_levels, label_prefix)
     
     def _add_single_rack_vertical(self, x, z, length, depth, levels, label: str = ""):
-        """Añadir estantería simple vertical (single-deep)"""
+        """
+        Añadir estantería simple PERPENDICULAR a muelles.
+        
+        V5.4: Sin rotación, dimensiones orientadas correctamente.
+        """
         capacity = self._calc_capacity(depth, length, levels)
         
         rack = RackConfiguration(
-            x=x, z=z, length=depth, depth=length,
-            rotation=90, levels=levels, capacity=capacity,
+            x=x, z=z, length=depth, depth=length,  # depth=ancho en X, length=largo en Z
+            rotation=0, levels=levels, capacity=capacity,
             score=1.0, label=label
         )
         self.racks.append(rack)
-        self._add_element("shelf", x, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
-                         {"rotation": 90, "capacity": capacity, "label": label})
+        self._add_element("shelf", x, z, 
+            {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
+            {"rotation": 0, "capacity": capacity, "label": label})
         self._mark_grid(x, z, depth, length)
     
     def _add_rack_pair(self, x, z, length, depth, levels, row, label_prefix: str = ""):
@@ -1242,27 +1247,40 @@ class LayoutBuilder:
         self._mark_grid(x, z, length, depth * 2)
     
     def _add_rack_pair_vertical(self, x, z, length, depth, levels, col, label_prefix: str = ""):
-        """Añadir par de racks back-to-back vertical"""
-        capacity = self._calc_capacity(length, depth, levels)
+        """
+        Añadir par de racks back-to-back PERPENDICULARES a muelles.
+        
+        V5.4: Sin rotación en frontend - enviamos dimensiones ya orientadas:
+        - length = dimensión en X (ancho del rack, ~1.1m)
+        - depth = dimensión en Z (largo del rack hacia el fondo)
+        
+        Los racks van de muelles hacia el fondo de la nave.
+        """
+        capacity = self._calc_capacity(depth, depth, levels)  # depth es la dimensión larga
         prefix = f"{label_prefix}-" if label_prefix else ""
         
+        # Rack A: ancho en X, largo en Z
         rack_a = RackConfiguration(
-            x=x, z=z, length=depth, depth=length,
-            rotation=90, levels=levels, capacity=capacity,
+            x=x, z=z, length=depth, depth=length,  # depth=largo en Z, length=ancho en X
+            rotation=0, levels=levels, capacity=capacity,
             score=1.0, label=f"{prefix}V{col+1}A"
         )
         self.racks.append(rack_a)
-        self._add_element("shelf", x, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels}, 
-                         {"rotation": 90, "capacity": capacity, "label": f"{prefix}V{col+1}A"})
+        # V5.4: Enviamos length=ancho(X), depth=largo(Z), sin rotación
+        self._add_element("shelf", x, z, 
+            {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels}, 
+            {"rotation": 0, "capacity": capacity, "label": f"{prefix}V{col+1}A"})
         
+        # Rack B (back-to-back en X)
         rack_b = RackConfiguration(
             x=x + depth, z=z, length=depth, depth=length,
-            rotation=90, levels=levels, capacity=capacity,
+            rotation=0, levels=levels, capacity=capacity,
             score=1.0, label=f"{prefix}V{col+1}B"
         )
         self.racks.append(rack_b)
-        self._add_element("shelf", x + depth, z, {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
-                         {"rotation": 90, "capacity": capacity, "label": f"{prefix}V{col+1}B"})
+        self._add_element("shelf", x + depth, z, 
+            {"length": depth, "depth": length, "height": levels * 1.75, "levels": levels},
+            {"rotation": 0, "capacity": capacity, "label": f"{prefix}V{col+1}B"})
         
         self._mark_grid(x, z, depth * 2, length)
     

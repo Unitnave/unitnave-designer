@@ -215,20 +215,10 @@ export default function DetailedShelf({
 }) {
   const { position, dimensions, properties } = element
   
-  // V5.4: Obtener rotación (0 = horizontal, 90 = vertical/perpendicular)
-  const rotation = properties?.rotation || 0
-  const isVertical = rotation === 90
-  
-  // V5.4: Usar dimensiones tal como vienen del backend
-  // Para racks verticales: length es pequeño (~1.1), depth es la longitud real
-  // Para racks horizontales: length es la longitud real, depth es pequeño (~1.1)
-  const rawLength = dimensions?.length || 10
-  const rawDepth = dimensions?.depth || 1.1
-  
-  // Para el cálculo de estructura, usamos la dimensión más larga como "longitud"
-  const length = isVertical ? rawDepth : rawLength
-  const depth = isVertical ? rawLength : rawDepth
-  
+  // V5.4: Usar dimensiones directamente como vienen del backend
+  // El backend ya envía las dimensiones orientadas correctamente
+  const length = dimensions?.length || 10  // Dimensión en X
+  const depth = dimensions?.depth || 1.1   // Dimensión en Z
   const height = dimensions?.height || 8
   const levels = dimensions?.levels || Math.floor((height - 0.5) / (palletHeight + 0.25))
   
@@ -290,17 +280,10 @@ export default function DetailedShelf({
   
   // Vista planta: solo rectángulo
   if (viewMode === 'planta') {
-    // V5.4: Para vista planta, mostramos el rectángulo con las dimensiones correctas
-    // Sin rotación, solo intercambiamos width/height del plano según orientación
-    const planeArgs = isVertical ? [depth, length] : [length, depth]
-    
     return (
       <group position={[position?.x || 0, 0.01, position?.y || 0]}>
-        <mesh 
-          rotation={[-Math.PI / 2, 0, 0]} 
-          position={[planeArgs[0] / 2, 0, planeArgs[1] / 2]}
-        >
-          <planeGeometry args={planeArgs} />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[length / 2, 0, depth / 2]}>
+          <planeGeometry args={[length, depth]} />
           <meshStandardMaterial 
             color={isSelected ? '#fbbf24' : COLORS.beam} 
             transparent 
@@ -308,7 +291,7 @@ export default function DetailedShelf({
           />
         </mesh>
         {showLabels && (
-          <Html position={[planeArgs[0] / 2, 0.5, planeArgs[1] / 2]} center>
+          <Html position={[length / 2, 0.5, depth / 2]} center>
             <div style={{
               background: 'rgba(0,0,0,0.8)',
               color: 'white',
@@ -326,14 +309,9 @@ export default function DetailedShelf({
   }
   
   // Vista 3D completa
-  // V5.4: Para estanterías verticales (perpendiculares a muelles),
-  // dibujamos normal y aplicamos rotación, compensando posición
-  
+  // V5.4: Sin rotación - el backend envía dimensiones ya orientadas
   return (
-    <group 
-      position={[position?.x || 0, 0, position?.y || 0]}
-      rotation={isVertical ? [0, Math.PI / 2, 0] : [0, 0, 0]}
-    >
+    <group position={[position?.x || 0, 0, position?.y || 0]}>
       {/* ========== ESTRUCTURA ========== */}
       
       {/* Postes - instanciados o individuales */}

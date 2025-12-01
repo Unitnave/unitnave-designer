@@ -1,6 +1,8 @@
 /**
  * UNITNAVE Designer - Step1Dimensions
- * Configuración de dimensiones: largo, ancho, alto
+ * Configuración de dimensiones: largo, ancho, alto + altura palet
+ * 
+ * V5.4: Añadido cubicaje del palet configurable
  * 
  * ARCHIVO: frontend/src/components/wizard/Step1Dimensions.jsx
  */
@@ -8,15 +10,16 @@
 import { useState, useEffect } from 'react';
 import { 
   Grid, Typography, Box, TextField, Slider, 
-  Paper, Alert, InputAdornment, Chip
+  Paper, Alert, InputAdornment, Chip, Divider
 } from '@mui/material';
-import { Straighten, Height, AspectRatio, Info } from '@mui/icons-material';
+import { Straighten, Height, AspectRatio, Info, Inventory } from '@mui/icons-material';
 
 export default function Step1Dimensions({ data, onChange }) {
   const [dimensions, setDimensions] = useState({
     length: data.length || 80,
     width: data.width || 40,
-    height: data.height || 10
+    height: data.height || 10,
+    palletHeight: data.palletHeight || 1.5  // V5.4: Altura del palet configurable
   });
 
   const [errors, setErrors] = useState({});
@@ -36,6 +39,8 @@ export default function Step1Dimensions({ data, onChange }) {
       newErrors.width = 'Ancho debe estar entre 15m y 200m';
     } else if (field === 'height' && (numValue < 6 || numValue > 18)) {
       newErrors.height = 'Alto debe estar entre 6m y 18m';
+    } else if (field === 'palletHeight' && (numValue < 0.5 || numValue > 2.5)) {
+      newErrors.palletHeight = 'Altura de palet debe estar entre 0.5m y 2.5m';
     } else {
       delete newErrors[field];
     }
@@ -58,12 +63,15 @@ export default function Step1Dimensions({ data, onChange }) {
 
   const warehouseClass = getWarehouseClass();
 
-  // Estimaciones CORREGIDAS - Incluyen ALTURA
-  // Altura por nivel de estantería: palet (1.5m) + beam (0.15m) + margen (0.15m) = ~1.8m
-  const LEVEL_HEIGHT = 1.8;
+  // V5.4: Estimaciones con altura de palet CONFIGURABLE
+  // Altura por nivel: palet + beam (0.15m) + margen (0.15m)
+  const BEAM_HEIGHT = 0.15;
+  const LEVEL_MARGIN = 0.15;
+  const levelHeight = dimensions.palletHeight + BEAM_HEIGHT + LEVEL_MARGIN;
+  
   const SECURITY_MARGIN = 1.0; // Margen de seguridad bajo techo
   const usableHeight = Math.max(0, dimensions.height - SECURITY_MARGIN);
-  const estimatedLevels = Math.max(1, Math.floor(usableHeight / LEVEL_HEIGHT));
+  const estimatedLevels = Math.max(1, Math.floor(usableHeight / levelHeight));
   
   // Área de almacenamiento efectiva (~60% del total después de pasillos, muelles, etc.)
   const STORAGE_EFFICIENCY = 0.60;
@@ -188,6 +196,61 @@ export default function Step1Dimensions({ data, onChange }) {
               ]}
               valueLabelDisplay="auto"
             />
+          </Paper>
+        </Grid>
+
+        {/* V5.4: ALTURA DEL PALET (CUBICAJE) */}
+        <Grid item xs={12}>
+          <Paper elevation={2} sx={{ p: 3, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <Inventory color="warning" sx={{ mr: 1 }} />
+              <Typography variant="h6">📦 Altura del Palet (Cubicaje)</Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Define la altura total del palet CON CARGA. Esto determina cuántos niveles caben en la nave.
+            </Typography>
+            <Grid container spacing={3} alignItems="center">
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  value={dimensions.palletHeight}
+                  onChange={(e) => handleChange('palletHeight', e.target.value)}
+                  error={!!errors.palletHeight}
+                  helperText={errors.palletHeight || 'Altura palet + mercancía'}
+                  InputProps={{
+                    endAdornment: <InputAdornment position="end">metros</InputAdornment>,
+                  }}
+                  inputProps={{ step: 0.1, min: 0.5, max: 2.5 }}
+                />
+              </Grid>
+              <Grid item xs={12} md={8}>
+                <Slider
+                  value={dimensions.palletHeight}
+                  onChange={(_, v) => handleChange('palletHeight', v)}
+                  min={0.5}
+                  max={2.5}
+                  step={0.1}
+                  marks={[
+                    { value: 0.5, label: '0.5m' },
+                    { value: 1.0, label: '1.0m' },
+                    { value: 1.5, label: '1.5m (estándar)' },
+                    { value: 2.0, label: '2.0m' },
+                    { value: 2.5, label: '2.5m' }
+                  ]}
+                  valueLabelDisplay="auto"
+                  valueLabelFormat={(v) => `${v}m`}
+                />
+              </Grid>
+            </Grid>
+            <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
+              <Typography variant="body2">
+                Con palet de <strong>{dimensions.palletHeight}m</strong> y nave de <strong>{dimensions.height}m</strong>:
+              </Typography>
+              <Typography variant="h6" color="primary.main">
+                ➜ Caben <strong>{estimatedLevels} niveles</strong> de estanterías
+              </Typography>
+            </Box>
           </Paper>
         </Grid>
 
