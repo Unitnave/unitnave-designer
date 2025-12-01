@@ -820,10 +820,34 @@ class LayoutBuilder:
                 "wall_attached": True  # V5.3: Pegada a la pared
             })
         
-        # V5.4: Marcar grid de oficina SIEMPRE (aunque sea mezzanine)
+        # V5.4: Marcar grid de oficina CON BUFFER para paso de maquinaria
         # Las estanterías NO van bajo la oficina según requisito del usuario
-        self._mark_grid(x, z, office_length, office_width)
-        self.fixed_area += office_length * office_width
+        # Añadimos buffer solo en los lados donde puede haber estanterías
+        aisle_buffer = AISLE_WIDTHS.get(self.input.machinery, 2.8)
+        
+        # Calcular extensión del buffer según posición de oficina
+        buffer_x_start = x
+        buffer_z_start = z
+        buffer_length = office_length
+        buffer_width = office_width
+        
+        # Si la oficina está en una esquina trasera, añadir buffer hacia adelante
+        if position in ["front_left", "front_right"]:
+            # Oficina al fondo → buffer hacia los muelles (reducir z_start)
+            buffer_z_start = max(0, z - aisle_buffer)
+            buffer_width = office_width + aisle_buffer
+        
+        # Añadir buffer lateral si no está pegada a pared
+        if position == "front_left":
+            # Buffer en el lado derecho de la oficina
+            buffer_length = office_length + aisle_buffer
+        elif position == "front_right":
+            # Buffer en el lado izquierdo de la oficina
+            buffer_x_start = max(0, x - aisle_buffer)
+            buffer_length = office_length + aisle_buffer
+        
+        self._mark_grid(buffer_x_start, buffer_z_start, buffer_length, buffer_width)
+        self.fixed_area += office_length * office_width  # Solo área real de oficina
     
     def _place_services_block(self, position: str):
         """Colocar bloque compacto de servicios"""

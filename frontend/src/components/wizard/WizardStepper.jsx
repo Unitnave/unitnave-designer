@@ -273,16 +273,6 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
 
   return (
     <Box sx={{ maxWidth: 1200, mx: 'auto', p: { xs: 2, md: 4 } }}>
-      {/* Header */}
-      <Box sx={{ mb: 4, textAlign: 'center' }}>
-        <Typography variant="h4" fontWeight={700} gutterBottom>
-          🏭 UNITNAVE Designer V5
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Optimizador de layouts para naves industriales
-        </Typography>
-      </Box>
-
       {/* Stepper */}
       <Stepper 
         activeStep={activeStep} 

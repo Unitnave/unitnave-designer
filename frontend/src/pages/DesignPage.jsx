@@ -115,6 +115,33 @@ export default function DesignPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
             >
+              {/* Botón para mostrar comparador si no hay escenarios */}
+              {!showScenarios && (
+                <Box sx={{ mb: 3, textAlign: 'center' }}>
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    size="large"
+                    onClick={async () => {
+                      const payload = designState.formData;
+                      if (payload) {
+                        try {
+                          const scenariosData = await optimizeScenarios(payload);
+                          setScenarios(scenariosData);
+                          setShowScenarios(true);
+                        } catch (err) {
+                          console.error('Error generando escenarios:', err);
+                        }
+                      }
+                    }}
+                    disabled={loading}
+                    sx={{ py: 1.5, px: 4 }}
+                  >
+                    {loading ? '⏳ Generando...' : '🔄 Comparar Configuraciones (ABC, maquinaria...)'}
+                  </Button>
+                </Box>
+              )}
+
               {/* Comparador de Escenarios */}
               {showScenarios && scenarios && (
                 <ScenarioComparator 
