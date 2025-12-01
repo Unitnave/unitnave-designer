@@ -584,8 +584,10 @@ class LayoutBuilder:
         # 5. Zonas operativas
         self._place_operational_zones()
         
-        # 6. ESTANTERÍAS (CORE) - Ahora considera office_rect
-        self._place_racks(config.rack_orientation, config.aisle_strategy)
+        # 6. ESTANTERÍAS (CORE) - V5.4: Forzar perpendicular a muelles
+        # La orientación perpendicular es el estándar industrial
+        forced_orientation = "parallel_width"  # SIEMPRE perpendicular
+        self._place_racks(forced_orientation, config.aisle_strategy)
         
         return {
             "elements": self.elements,
@@ -818,10 +820,10 @@ class LayoutBuilder:
                 "wall_attached": True  # V5.3: Pegada a la pared
             })
         
-        # Marcar grid solo si es planta baja (ocupa suelo)
-        if not is_mezzanine:
-            self._mark_grid(x, z, office_length, office_width)
-            self.fixed_area += office_length * office_width
+        # V5.4: Marcar grid de oficina SIEMPRE (aunque sea mezzanine)
+        # Las estanterías NO van bajo la oficina según requisito del usuario
+        self._mark_grid(x, z, office_length, office_width)
+        self.fixed_area += office_length * office_width
     
     def _place_services_block(self, position: str):
         """Colocar bloque compacto de servicios"""
@@ -911,41 +913,10 @@ class LayoutBuilder:
         storage_start_x = 2
         storage_end_x = self.dims["length"] - 2
         
-        # ===== V5.3: EXCLUIR ÁREA DE OFICINAS (SIEMPRE) =====
-        # Las estanterías NUNCA van bajo la oficina, independientemente de si es mezzanine
-        if self.office_rect:
-            office = self.office_rect
-            position = office.get("position", "front_left")
-            
-            # Buffer de seguridad entre estanterías y oficina
-            BUFFER = 1.5
-            
-            # Reducir Z si la oficina está en el fondo (posiciones front_*)
-            if position in ["front_left", "front_right"]:
-                if office["z_start"] < storage_end_z:
-                    storage_end_z = office["z_start"] - BUFFER
-            
-            # Ajustar X según posición lateral de la oficina
-            if position == "front_left":
-                # Oficina en frontal izquierda → reducir X inicial
-                if office["x_end"] > storage_start_x:
-                    storage_start_x = office["x_end"] + BUFFER
-            elif position == "front_right":
-                # Oficina en frontal derecha → reducir X final
-                if office["x_start"] < storage_end_x:
-                    storage_end_x = office["x_start"] - BUFFER
-            elif position == "side_left":
-                # Oficina en lateral izquierdo completo
-                if office["x_end"] > storage_start_x:
-                    storage_start_x = office["x_end"] + BUFFER
-                if office["z_start"] < storage_end_z:
-                    storage_end_z = office["z_start"] - BUFFER
-            elif position == "side_right":
-                # Oficina en lateral derecho completo
-                if office["x_start"] < storage_end_x:
-                    storage_end_x = office["x_start"] - BUFFER
-                if office["z_start"] < storage_end_z:
-                    storage_end_z = office["z_start"] - BUFFER
+        # V5.4: La exclusión de oficinas se maneja mediante el GRID
+        # El grid de la oficina ya está marcado como ocupado en _place_offices()
+        # Las funciones _find_free_segments() automáticamente evitan esas zonas
+        # NO reducimos storage_end_z globalmente porque eso excluye demasiado área
         
         storage_rect = {
             "x_start": storage_start_x,
@@ -959,7 +930,8 @@ class LayoutBuilder:
             self._place_racks_abc_zoned(storage_rect, rack_depth, max_levels, aisle_strategy)
             return
         
-        # ===== MODO UNIFORME (Original) =====
+        # ===== MODO UNIFORME =====
+        # V5.4: Orientación perpendicular a muelles (parallel_width) por defecto
         if orientation == "parallel_length":
             self._place_racks_parallel_length(
                 storage_start_x, storage_end_x,
