@@ -223,6 +223,115 @@ export default function Step5Preferences({ data, onChange }) {
           </Paper>
         </Grid>
 
+        {/* ABC ZONING - AHORA VISIBLE DIRECTAMENTE */}
+        <Grid item xs={12}>
+          <Paper elevation={3} sx={{ 
+            p: 3, 
+            bgcolor: preferences.enable_abc_zones ? 'success.50' : 'grey.50', 
+            border: '3px solid', 
+            borderColor: preferences.enable_abc_zones ? 'success.main' : 'grey.300' 
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Layers color={preferences.enable_abc_zones ? 'success' : 'disabled'} sx={{ fontSize: 32 }} />
+                <Box>
+                  <Typography variant="h6">🎯 Optimización por Zonas ABC</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Divide el almacén en 3 zonas con diferentes estrategias según rotación de productos
+                  </Typography>
+                </Box>
+              </Box>
+              <FormControlLabel
+                control={
+                  <Switch 
+                    checked={preferences.enable_abc_zones}
+                    onChange={(e) => handleChange('enable_abc_zones', e.target.checked)}
+                    color="success"
+                    size="medium"
+                  />
+                }
+                label={
+                  <Typography variant="body1" fontWeight={700} color={preferences.enable_abc_zones ? 'success.main' : 'text.secondary'}>
+                    {preferences.enable_abc_zones ? "✓ ACTIVADO" : "DESACTIVADO"}
+                  </Typography>
+                }
+              />
+            </Box>
+            
+            {preferences.enable_abc_zones && (
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Distribución de zonas (% de profundidad desde muelles)
+                </Typography>
+                
+                <Grid container spacing={2} sx={{ mt: 1 }}>
+                  <Grid item xs={4}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'error.50', border: '2px solid', borderColor: 'error.200' }}>
+                      <Typography variant="h6" color="error.main">Zona A</Typography>
+                      <Typography variant="body2" color="text.secondary">Alta rotación</Typography>
+                      <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_a_pct * 100).toFixed(0)}%</Typography>
+                      <Slider
+                        value={preferences.abc_zone_a_pct * 100}
+                        onChange={(_, v) => {
+                          const newA = v / 100;
+                          const remaining = 1 - newA;
+                          handleChange('abc_zone_a_pct', newA);
+                          handleChange('abc_zone_b_pct', remaining * 0.5);
+                          handleChange('abc_zone_c_pct', remaining * 0.5);
+                        }}
+                        min={10}
+                        max={40}
+                        size="small"
+                      />
+                      <Typography variant="caption">Pasillos anchos, acceso rápido</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={4}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.50', border: '2px solid', borderColor: 'warning.200' }}>
+                      <Typography variant="h6" color="warning.main">Zona B</Typography>
+                      <Typography variant="body2" color="text.secondary">Media rotación</Typography>
+                      <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_b_pct * 100).toFixed(0)}%</Typography>
+                      <Slider
+                        value={preferences.abc_zone_b_pct * 100}
+                        onChange={(_, v) => {
+                          const newB = v / 100;
+                          const usedByA = preferences.abc_zone_a_pct;
+                          const newC = Math.max(0.1, 1 - usedByA - newB);
+                          handleChange('abc_zone_b_pct', newB);
+                          handleChange('abc_zone_c_pct', newC);
+                        }}
+                        min={20}
+                        max={60}
+                        size="small"
+                      />
+                      <Typography variant="caption">Equilibrio capacidad/acceso</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={4}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'info.50', border: '2px solid', borderColor: 'info.200' }}>
+                      <Typography variant="h6" color="info.main">Zona C</Typography>
+                      <Typography variant="body2" color="text.secondary">Baja rotación</Typography>
+                      <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_c_pct * 100).toFixed(0)}%</Typography>
+                      <Typography variant="caption">VNA + doble profundidad</Typography>
+                    </Paper>
+                  </Grid>
+                </Grid>
+                
+                <Alert severity="success" sx={{ mt: 2 }}>
+                  <strong>Ventaja ABC:</strong> Los pasillos se alinean automáticamente entre zonas para circulación fluida. 
+                  Zona C puede ganar +20% capacidad con racks doble profundidad.
+                </Alert>
+              </Box>
+            )}
+            
+            {!preferences.enable_abc_zones && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                <strong>Modo uniforme:</strong> Misma configuración en todo el almacén. Activa ABC para optimizar por zonas de rotación.
+              </Alert>
+            )}
+          </Paper>
+        </Grid>
+
         {/* OPCIONES AVANZADAS */}
         <Grid item xs={12}>
           <Accordion>
@@ -231,103 +340,6 @@ export default function Step5Preferences({ data, onChange }) {
             </AccordionSummary>
             <AccordionDetails>
               <Grid container spacing={3}>
-                {/* ABC ZONING - NUEVO */}
-                <Grid item xs={12}>
-                  <Paper elevation={1} sx={{ p: 2, bgcolor: preferences.enable_abc_zones ? 'success.50' : 'grey.50', border: '2px solid', borderColor: preferences.enable_abc_zones ? 'success.main' : 'grey.300' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Layers color={preferences.enable_abc_zones ? 'success' : 'disabled'} />
-                        <Typography variant="h6">Optimización por Zonas ABC</Typography>
-                        <Tooltip title="Divide el almacén en 3 zonas con diferentes estrategias: A (alta rotación, pasillos anchos), B (media, equilibrado), C (baja rotación, densificado con VNA)">
-                          <Info fontSize="small" color="action" sx={{ cursor: 'pointer' }} />
-                        </Tooltip>
-                      </Box>
-                      <FormControlLabel
-                        control={
-                          <Switch 
-                            checked={preferences.enable_abc_zones}
-                            onChange={(e) => handleChange('enable_abc_zones', e.target.checked)}
-                            color="success"
-                          />
-                        }
-                        label={preferences.enable_abc_zones ? "Activado" : "Desactivado"}
-                      />
-                    </Box>
-                    
-                    {preferences.enable_abc_zones && (
-                      <Box sx={{ mt: 2 }}>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          Distribución de zonas (% de profundidad desde muelles)
-                        </Typography>
-                        
-                        <Grid container spacing={2} sx={{ mt: 1 }}>
-                          <Grid item xs={4}>
-                            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'error.50', border: '1px solid', borderColor: 'error.200' }}>
-                              <Typography variant="h6" color="error.main">Zona A</Typography>
-                              <Typography variant="body2" color="text.secondary">Alta rotación</Typography>
-                              <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_a_pct * 100).toFixed(0)}%</Typography>
-                              <Slider
-                                value={preferences.abc_zone_a_pct * 100}
-                                onChange={(_, v) => {
-                                  const newA = v / 100;
-                                  const remaining = 1 - newA;
-                                  handleChange('abc_zone_a_pct', newA);
-                                  handleChange('abc_zone_b_pct', remaining * 0.5);
-                                  handleChange('abc_zone_c_pct', remaining * 0.5);
-                                }}
-                                min={10}
-                                max={40}
-                                size="small"
-                              />
-                              <Typography variant="caption">Pasillos anchos, acceso rápido</Typography>
-                            </Paper>
-                          </Grid>
-                          <Grid item xs={4}>
-                            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-                              <Typography variant="h6" color="warning.main">Zona B</Typography>
-                              <Typography variant="body2" color="text.secondary">Media rotación</Typography>
-                              <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_b_pct * 100).toFixed(0)}%</Typography>
-                              <Slider
-                                value={preferences.abc_zone_b_pct * 100}
-                                onChange={(_, v) => {
-                                  const newB = v / 100;
-                                  const usedByA = preferences.abc_zone_a_pct;
-                                  const newC = Math.max(0.1, 1 - usedByA - newB);
-                                  handleChange('abc_zone_b_pct', newB);
-                                  handleChange('abc_zone_c_pct', newC);
-                                }}
-                                min={20}
-                                max={60}
-                                size="small"
-                              />
-                              <Typography variant="caption">Equilibrio capacidad/acceso</Typography>
-                            </Paper>
-                          </Grid>
-                          <Grid item xs={4}>
-                            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'info.50', border: '1px solid', borderColor: 'info.200' }}>
-                              <Typography variant="h6" color="info.main">Zona C</Typography>
-                              <Typography variant="body2" color="text.secondary">Baja rotación</Typography>
-                              <Typography variant="h4" fontWeight={700}>{(preferences.abc_zone_c_pct * 100).toFixed(0)}%</Typography>
-                              <Typography variant="caption">VNA + doble profundidad</Typography>
-                            </Paper>
-                          </Grid>
-                        </Grid>
-                        
-                        <Alert severity="success" sx={{ mt: 2 }}>
-                          <strong>Ventaja ABC:</strong> Los pasillos se alinean automáticamente entre zonas para circulación fluida. 
-                          Zona C puede ganar +20% capacidad con racks doble profundidad.
-                        </Alert>
-                      </Box>
-                    )}
-                    
-                    {!preferences.enable_abc_zones && (
-                      <Alert severity="info" sx={{ mt: 1 }}>
-                        Modo uniforme: misma configuración en todo el almacén. Activa ABC para optimizar por zonas de rotación.
-                      </Alert>
-                    )}
-                  </Paper>
-                </Grid>
-                
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" gutterBottom>
                     Complejidad del layout

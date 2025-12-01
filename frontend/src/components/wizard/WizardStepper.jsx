@@ -88,14 +88,17 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
     palletType: initialData.palletType || 'europalet',
     workers: initialData.workers || null,
     
-    // Step 3: Oficinas
+    // Step 3: Oficinas (NUEVO MODELO V5.1)
     officeConfig: initialData.officeConfig || {
       include: true,
-      area: 40,
       floor: 'mezzanine',
-      mezzanineHeight: 3.5,
+      position: 'front_left',
+      height_under: 4.0,        // Altura libre bajo oficina
+      floor_height: 3.0,        // Altura de cada planta
+      num_floors: 1,            // Número de plantas
+      area_per_floor: 100,      // m² por planta
       hasElevator: true,
-      position: 'front_left'
+      hasStairs: true
     },
     
     // Step 4: Muelles
@@ -175,13 +178,17 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
         workers: wizardData.workers,
         n_docks: wizardData.dockConfig?.count || 4,
         
-        // Configuración de oficinas
+        // Configuración de oficinas (NUEVO MODELO V5.1)
         office_config: wizardData.officeConfig?.include ? {
-          area: wizardData.officeConfig.area,
           floor: wizardData.officeConfig.floor,
-          mezzanine_height: wizardData.officeConfig.mezzanineHeight,
+          position: wizardData.officeConfig.position,
+          height_under: wizardData.officeConfig.height_under || 4.0,
+          floor_height: wizardData.officeConfig.floor_height || 3.0,
+          num_floors: wizardData.officeConfig.num_floors || 1,
+          area_per_floor: wizardData.officeConfig.area_per_floor || 100,
+          area: (wizardData.officeConfig.area_per_floor || 100) * (wizardData.officeConfig.num_floors || 1),
           has_elevator: wizardData.officeConfig.hasElevator,
-          position: wizardData.officeConfig.position
+          has_stairs: wizardData.officeConfig.hasStairs
         } : null,
         
         // Configuración de muelles

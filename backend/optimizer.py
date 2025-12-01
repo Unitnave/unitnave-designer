@@ -647,8 +647,8 @@ class LayoutBuilder:
         # Zona de almacenamiento - MÁRGENES OPTIMIZADOS
         # Margen desde muelles: zona maniobra + 2m buffer
         storage_start_z = DOCK_STANDARDS["depth"] + DOCK_STANDARDS["maneuver_zone"] + 2
-        # Margen trasero: 3m para circulación perimetral
-        storage_end_z = self.dims["width"] - 3
+        # Margen trasero: REDUCIDO a 0.5m para maximizar capacidad
+        storage_end_z = self.dims["width"] - 0.5
         # Márgenes laterales: 2m para acceso
         storage_start_x = 2
         storage_end_x = self.dims["length"] - 2
@@ -748,26 +748,33 @@ class LayoutBuilder:
         """
         Racks paralelos al largo de la nave.
         
-        Estrategia óptima:
-        1. Llenar con back-to-back (más eficientes: 0.40 racks/m)
-        2. En el hueco restante, si cabe simple + pasillo, añadirla
+        Estrategia óptima V5.1:
+        1. Llenar con back-to-back (más eficientes)
+        2. Calcular posición real de última estantería
+        3. Verificar si cabe simple + pasillo en hueco restante hasta pared
         """
         available_width = z_end - z_start
         aisle = aisle_width_override or self.aisle_width
         
         # Módulos
         double_module = rack_depth * 2 + aisle  # Back-to-back + pasillo
-        single_module = rack_depth + aisle       # Simple + pasillo
         
         # Paso 1: Calcular cuántos dobles caben
         num_double_rows = int(available_width / double_module)
-        space_used_by_doubles = num_double_rows * double_module
         
-        # Paso 2: Calcular hueco restante
-        remaining_space = available_width - space_used_by_doubles
+        # Paso 2: Posición real donde termina la última doble
+        if num_double_rows > 0:
+            # La última doble está en: z_start + (num-1)*módulo, y termina en +depth*2
+            last_double_end_z = z_start + (num_double_rows - 1) * double_module + rack_depth * 2
+        else:
+            last_double_end_z = z_start
         
-        # Paso 3: ¿Cabe una simple en el hueco?
-        can_fit_single = remaining_space >= single_module
+        # Paso 3: Hueco real hasta el límite (z_end)
+        real_remaining_space = z_end - last_double_end_z
+        
+        # Paso 4: ¿Cabe una simple? Necesita: pasillo + profundidad simple + margen
+        min_space_for_single = aisle + rack_depth + 0.2  # 0.2m margen a pared
+        can_fit_single = real_remaining_space >= min_space_for_single
         
         # ===== COLOCAR BACK-TO-BACK =====
         current_z = z_start
@@ -785,7 +792,13 @@ class LayoutBuilder:
         
         # ===== COLOCAR SIMPLE EN HUECO RESTANTE (pegada a pared trasera) =====
         if can_fit_single:
-            single_z = z_end - rack_depth  # Pegada a la pared
+            # Posición: después del pasillo desde la última doble
+            single_z = last_double_end_z + aisle
+            
+            # Verificar que no se pase del límite
+            if single_z + rack_depth > z_end:
+                single_z = z_end - rack_depth - 0.1  # Ajustar con margen mínimo
+            
             segments = self._find_free_segments(x_start, x_end, single_z, rack_depth)
             
             for seg_start, seg_end in segments:
@@ -811,26 +824,32 @@ class LayoutBuilder:
         """
         Racks paralelos al ancho de la nave.
         
-        Estrategia óptima:
-        1. Llenar con back-to-back (más eficientes)
-        2. En el hueco restante, si cabe simple + pasillo, añadirla
+        Estrategia óptima V5.1:
+        1. Llenar con back-to-back
+        2. Calcular posición real de última estantería
+        3. Verificar si cabe simple en hueco restante
         """
         available_length = x_end - x_start
         aisle = aisle_width_override or self.aisle_width
         
         # Módulos
         double_module = rack_depth * 2 + aisle
-        single_module = rack_depth + aisle
         
         # Paso 1: Cuántos dobles caben
         num_double_cols = int(available_length / double_module)
-        space_used_by_doubles = num_double_cols * double_module
         
-        # Paso 2: Hueco restante
-        remaining_space = available_length - space_used_by_doubles
+        # Paso 2: Posición real donde termina la última doble
+        if num_double_cols > 0:
+            last_double_end_x = x_start + (num_double_cols - 1) * double_module + rack_depth * 2
+        else:
+            last_double_end_x = x_start
         
-        # Paso 3: ¿Cabe simple?
-        can_fit_single = remaining_space >= single_module
+        # Paso 3: Hueco real hasta el límite
+        real_remaining_space = x_end - last_double_end_x
+        
+        # Paso 4: ¿Cabe una simple?
+        min_space_for_single = aisle + rack_depth + 0.2
+        can_fit_single = real_remaining_space >= min_space_for_single
         
         # ===== COLOCAR BACK-TO-BACK =====
         current_x = x_start
@@ -848,7 +867,11 @@ class LayoutBuilder:
         
         # ===== COLOCAR SIMPLE EN HUECO RESTANTE (pegada a pared lateral) =====
         if can_fit_single:
-            single_x = x_end - rack_depth
+            single_x = last_double_end_x + aisle
+            
+            if single_x + rack_depth > x_end:
+                single_x = x_end - rack_depth - 0.1
+            
             segments = self._find_free_segments_vertical(z_start, z_end, single_x, rack_depth)
             
             for seg_start, seg_end in segments:

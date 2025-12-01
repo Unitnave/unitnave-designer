@@ -195,7 +195,7 @@ class DockMetrics:
 
 @dataclass
 class OfficeMetrics:
-    """Métricas de oficinas"""
+    """Métricas de oficinas (V5.1)"""
     posicion_x: float
     posicion_z: float
     largo: float
@@ -208,6 +208,12 @@ class OfficeMetrics:
     altura_desde_suelo: float  # Altura libre bajo oficina
     altura_libre_bajo_oficina: float
     altura_libre_sobre_oficina: float
+    
+    # Nuevo modelo V5.1
+    num_floors: int = 1
+    floor_height: float = 3.0
+    area_per_floor: float = 0
+    total_area: float = 0
 
 
 @dataclass
@@ -881,34 +887,55 @@ class ReportGenerator:
         )
     
     def _calc_oficinas(self):
-        """Calcula métricas de oficinas"""
+        """Calcula métricas de oficinas (V5.1)"""
         offices = [el for el in self.result.elements if el.type == "office"]
         
         for office in offices:
             dims = office.dimensions
             props = office.properties
             
-            largo = self._get_attr(dims, "length", 0) or 0
-            ancho = self._get_attr(dims, "width", 0) or 0
+            # Dimensiones (pueden venir como largo/ancho o length/width)
+            largo = self._get_attr(dims, "largo", 0) or self._get_attr(dims, "length", 0) or 0
+            ancho = self._get_attr(dims, "ancho", 0) or self._get_attr(dims, "width", 0) or 0
             altura_oficina = self._get_attr(dims, "height", 3.0) or 3.0
             
-            elevacion = self._get_attr(props, "elevation", 0) or 0
-            es_entresuelo = elevacion > 0
+            # Nuevo modelo V5.1
+            num_floors = self._get_attr(props, "num_floors", 1) or 1
+            floor_height = self._get_attr(props, "floor_height", 3.0) or 3.0
+            area_per_floor = self._get_attr(props, "area_per_floor", 0) or largo * ancho
+            total_area = self._get_attr(props, "total_area", 0) or area_per_floor * num_floors
             
-            altura_libre_bajo = elevacion if es_entresuelo else 0
-            altura_libre_sobre = self.input.height - elevacion - altura_oficina if es_entresuelo else self.input.height - altura_oficina
+            # Entresuelo
+            es_entresuelo = self._get_attr(props, "is_mezzanine", False) or self._get_attr(props, "floor", "") == "mezzanine"
+            altura_libre_bajo = self._get_attr(props, "mezzanine_height", 0) or self._get_attr(props, "height_under", 3.5) or 0
+            
+            if not es_entresuelo:
+                altura_libre_bajo = 0
+            
+            # Altura usada por la oficina
+            altura_usada = num_floors * floor_height
+            
+            # Altura libre sobre oficina
+            if es_entresuelo:
+                altura_libre_sobre = self.input.height - altura_libre_bajo - altura_usada
+            else:
+                altura_libre_sobre = self.input.height - altura_usada
             
             office_metrics = OfficeMetrics(
                 posicion_x=office.position.x,
                 posicion_z=office.position.y,
                 largo=largo,
                 ancho=ancho,
-                superficie=round(largo * ancho, 2),
-                altura_oficina=altura_oficina,
+                superficie=round(area_per_floor, 2),
+                altura_oficina=altura_usada,
                 es_entresuelo=es_entresuelo,
-                altura_desde_suelo=elevacion,
+                altura_desde_suelo=altura_libre_bajo if es_entresuelo else 0,
                 altura_libre_bajo_oficina=round(altura_libre_bajo, 2),
-                altura_libre_sobre_oficina=round(altura_libre_sobre, 2)
+                altura_libre_sobre_oficina=round(max(0, altura_libre_sobre), 2),
+                num_floors=num_floors,
+                floor_height=floor_height,
+                area_per_floor=round(area_per_floor, 2),
+                total_area=round(total_area, 2)
             )
             self.report.oficinas.append(office_metrics)
     
@@ -1883,14 +1910,17 @@ def generate_pdf_report(optimization_result, warehouse_input, preferences, outpu
             office_data = [
                 ["Concepto", "Valor"],
                 ["Posición", f"({o.posicion_x}, {o.posicion_z}) m"],
-                ["Dimensiones", f"{o.largo} x {o.ancho} m"],
-                ["Superficie", f"{o.superficie} m²"],
-                ["Altura oficina", f"{o.altura_oficina} m"],
-                ["Es entresuelo", "Sí" if o.es_entresuelo else "No"],
+                ["Dimensiones por planta", f"{o.largo} x {o.ancho} m"],
+                ["Número de plantas", f"{o.num_floors}"],
+                ["Altura por planta", f"{o.floor_height} m"],
+                ["Superficie por planta", f"{o.area_per_floor} m²"],
+                ["Superficie TOTAL", f"{o.total_area} m²"],
+                ["Ubicación", "Entresuelo" if o.es_entresuelo else "Planta Baja"],
             ]
             if o.es_entresuelo:
                 office_data.append(["Altura libre bajo oficina", f"{o.altura_libre_bajo_oficina} m"])
-                office_data.append(["Altura libre sobre oficina", f"{o.altura_libre_sobre_oficina} m"])
+            office_data.append(["Altura total oficina", f"{o.altura_oficina} m"])
+            office_data.append(["Altura libre sobre oficina", f"{o.altura_libre_sobre_oficina} m"])
             
             office_table = Table(office_data, colWidths=[8*cm, 6*cm])
             office_table.setStyle(TableStyle([

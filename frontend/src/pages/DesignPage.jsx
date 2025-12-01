@@ -176,6 +176,10 @@ export default function DesignPage() {
                     machinery: designState.formData.machinery || 'retractil',
                     pallet_type: designState.formData.palletType || designState.formData.pallet_type || 'EUR',
                     activity_type: designState.formData.activityType || designState.formData.activity_type || 'industrial',
+                    // Configuración de oficinas (V5.1)
+                    office_config: designState.formData.office_config || null,
+                    // Configuración de muelles
+                    dock_config: designState.formData.dock_config || null,
                     preferences: {
                       enable_abc_zones: designState.formData.preferences?.enable_abc_zones || false,
                       abc_zone_a_pct: designState.formData.preferences?.abc_zone_a_pct || 0.2,
