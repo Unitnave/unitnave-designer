@@ -58,8 +58,22 @@ export default function Step1Dimensions({ data, onChange }) {
 
   const warehouseClass = getWarehouseClass();
 
-  // Estimaciones
-  const estimatedPallets = Math.floor(totalArea / 1.5); // Estimación burda
+  // Estimaciones CORREGIDAS - Incluyen ALTURA
+  // Altura por nivel de estantería: palet (1.5m) + beam (0.15m) + margen (0.15m) = ~1.8m
+  const LEVEL_HEIGHT = 1.8;
+  const SECURITY_MARGIN = 1.0; // Margen de seguridad bajo techo
+  const usableHeight = Math.max(0, dimensions.height - SECURITY_MARGIN);
+  const estimatedLevels = Math.max(1, Math.floor(usableHeight / LEVEL_HEIGHT));
+  
+  // Área de almacenamiento efectiva (~60% del total después de pasillos, muelles, etc.)
+  const STORAGE_EFFICIENCY = 0.60;
+  const storageArea = totalArea * STORAGE_EFFICIENCY;
+  
+  // M² por posición de palet (palet + separación)
+  const M2_PER_PALLET_POSITION = 1.4;
+  
+  // Palets = posiciones en suelo × niveles
+  const estimatedPallets = Math.floor((storageArea / M2_PER_PALLET_POSITION) * estimatedLevels);
   const estimatedWorkers = Math.max(5, Math.floor(totalArea / 150));
 
   return (
@@ -205,9 +219,9 @@ export default function Step1Dimensions({ data, onChange }) {
                 </Typography>
               </Grid>
               <Grid item xs={6} sm={4} md={2}>
-                <Typography variant="body2" color="text.secondary">Proporción</Typography>
-                <Typography variant="h5" fontWeight={700}>
-                  {aspectRatio}:1
+                <Typography variant="body2" color="text.secondary">Niveles (est.)</Typography>
+                <Typography variant="h5" fontWeight={700} color="primary.main">
+                  {estimatedLevels}
                 </Typography>
               </Grid>
               <Grid item xs={6} sm={4} md={2}>
@@ -220,7 +234,7 @@ export default function Step1Dimensions({ data, onChange }) {
               </Grid>
               <Grid item xs={6} sm={4} md={2}>
                 <Typography variant="body2" color="text.secondary">Palets (est.)</Typography>
-                <Typography variant="h5" fontWeight={700}>
+                <Typography variant="h5" fontWeight={700} color="success.main">
                   ~{estimatedPallets.toLocaleString()}
                 </Typography>
               </Grid>

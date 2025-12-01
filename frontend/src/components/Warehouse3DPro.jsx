@@ -1,10 +1,12 @@
 /**
  * UNITNAVE Designer - Visualizador 3D Profesional
  * FINAL: Paredes transparentes, colores claros, funcionalidad completa
+ * V5.3: Añadidas cotas/medidas en vista planta
  */
 
 import { useRef, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
+import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 
 import useWarehouseStore from '../stores/useWarehouseStore'
@@ -365,12 +367,135 @@ export default function Warehouse3DPro() {
         </group>
       )}
 
-      {/* Grid de referencia (solo en vista planta) */}
+      {/* Grid de referencia y MEDIDAS (solo en vista planta) */}
       {viewMode === 'Planta' && (
-        <gridHelper
-          args={[Math.max(dimensions.length, dimensions.width), 20, '#cbd5e1', '#e2e8f0']}
-          position={[dimensions.length / 2, 0.01, dimensions.width / 2]}
-        />
+        <>
+          <gridHelper
+            args={[Math.max(dimensions.length, dimensions.width), 20, '#cbd5e1', '#e2e8f0']}
+            position={[dimensions.length / 2, 0.01, dimensions.width / 2]}
+          />
+          
+          {/* === COTAS / MEDIDAS === */}
+          {/* Línea de cota inferior (LARGO) */}
+          <group position={[0, 0.02, -3]}>
+            {/* Línea horizontal */}
+            <mesh position={[dimensions.length / 2, 0, 0]}>
+              <boxGeometry args={[dimensions.length, 0.05, 0.05]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Extremo izquierdo */}
+            <mesh position={[0, 0, 0]}>
+              <boxGeometry args={[0.05, 0.05, 1.5]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Extremo derecho */}
+            <mesh position={[dimensions.length, 0, 0]}>
+              <boxGeometry args={[0.05, 0.05, 1.5]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Etiqueta LARGO */}
+            <Html position={[dimensions.length / 2, 0, -1]} center>
+              <div style={{
+                background: '#1e40af',
+                color: 'white',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                whiteSpace: 'nowrap'
+              }}>
+                LARGO: {dimensions.length.toFixed(1)} m
+              </div>
+            </Html>
+          </group>
+
+          {/* Línea de cota lateral (ANCHO) */}
+          <group position={[-3, 0.02, 0]}>
+            {/* Línea vertical */}
+            <mesh position={[0, 0, dimensions.width / 2]}>
+              <boxGeometry args={[0.05, 0.05, dimensions.width]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Extremo inferior */}
+            <mesh position={[0, 0, 0]}>
+              <boxGeometry args={[1.5, 0.05, 0.05]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Extremo superior */}
+            <mesh position={[0, 0, dimensions.width]}>
+              <boxGeometry args={[1.5, 0.05, 0.05]} />
+              <meshBasicMaterial color="#1e40af" />
+            </mesh>
+            {/* Etiqueta ANCHO */}
+            <Html position={[-1.5, 0, dimensions.width / 2]} center>
+              <div style={{
+                background: '#1e40af',
+                color: 'white',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                whiteSpace: 'nowrap',
+                transform: 'rotate(-90deg)'
+              }}>
+                ANCHO: {dimensions.width.toFixed(1)} m
+              </div>
+            </Html>
+          </group>
+
+          {/* Indicadores de escala cada 10m en X */}
+          {Array.from({ length: Math.floor(dimensions.length / 10) + 1 }).map((_, i) => (
+            <group key={`scale-x-${i}`} position={[i * 10, 0.02, -1.5]}>
+              <mesh>
+                <boxGeometry args={[0.05, 0.05, 0.8]} />
+                <meshBasicMaterial color="#64748b" />
+              </mesh>
+              <Html position={[0, 0, -0.8]} center>
+                <div style={{
+                  color: '#64748b',
+                  fontSize: '10px',
+                  fontWeight: '500'
+                }}>
+                  {i * 10}m
+                </div>
+              </Html>
+            </group>
+          ))}
+
+          {/* Indicadores de escala cada 10m en Z */}
+          {Array.from({ length: Math.floor(dimensions.width / 10) + 1 }).map((_, i) => (
+            <group key={`scale-z-${i}`} position={[-1.5, 0.02, i * 10]}>
+              <mesh>
+                <boxGeometry args={[0.8, 0.05, 0.05]} />
+                <meshBasicMaterial color="#64748b" />
+              </mesh>
+              <Html position={[-0.8, 0, 0]} center>
+                <div style={{
+                  color: '#64748b',
+                  fontSize: '10px',
+                  fontWeight: '500'
+                }}>
+                  {i * 10}m
+                </div>
+              </Html>
+            </group>
+          ))}
+
+          {/* Superficie total */}
+          <Html position={[dimensions.length / 2, 0, dimensions.width / 2]} center>
+            <div style={{
+              background: 'rgba(30, 64, 175, 0.1)',
+              border: '2px dashed #1e40af',
+              color: '#1e40af',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '16px',
+              fontWeight: 'bold'
+            }}>
+              {(dimensions.length * dimensions.width).toLocaleString()} m²
+            </div>
+          </Html>
+        </>
       )}
     </group>
   )

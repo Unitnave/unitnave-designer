@@ -1,13 +1,10 @@
 /**
  * UNITNAVE Designer - Oficina Industrial Realista
  * 
- * Características:
- * - Entreplanta con estructura visible
- * - Escalera con peldaños y barandilla
- * - Ascensor accesible
- * - Ventanas de cristal
- * - Mobiliario interior
- * - Configuración: planta baja / entreplanta / ambas
+ * V5.3 Cambios:
+ * - SIN COLUMNAS/PILARES (la oficina está colgada del techo)
+ * - Escalera PEGADA A LA PARED lateral
+ * - Oficina pegada al techo
  */
 
 import { useMemo } from 'react'
@@ -40,42 +37,24 @@ export default function DetailedOffice({
   viewMode = '3D'
 }) {
   const { largo = 12, ancho = 8, alto = 3.5 } = element.dimensions || {}
-  const elevation = element.properties?.elevation || 3.5
+  const elevation = element.properties?.elevation || element.properties?.height_under || 3.5
   const workers = element.properties?.workers || Math.floor((largo * ancho) / 6)
   const label = element.properties?.label || 'Oficinas'
-  const floorConfig = element.properties?.floor_config || 'mezzanine'
+  const floorConfig = element.properties?.floor || element.properties?.floor_config || 'mezzanine'
   const hasElevator = element.properties?.has_elevator !== false
+  const hasStairs = element.properties?.has_stairs !== false
   const isMezzanine = floorConfig === 'mezzanine' || floorConfig === 'both'
   const hasGroundFloor = floorConfig === 'ground' || floorConfig === 'both'
+  
+  // V5.3: Posición de la oficina (determina lado de escalera)
+  const officePosition = element.properties?.position || 'front_left'
+  const isRightSide = officePosition.includes('right')
+  
+  // V5.3: Sin columnas - oficina colgada del techo con estructura metálica perimetral
+  const hasColumns = false // Siempre false en V5.3
 
-  // Pilares de soporte
-  const pillars = useMemo(() => {
-    if (!isMezzanine) return []
-    
-    const result = []
-    const spacing = 4
-    
-    for (let x = 0; x <= largo; x += spacing) {
-      for (let z = 0; z <= ancho; z += ancho) {
-        result.push({
-          key: `pillar-${x}-${z}`,
-          position: [x, elevation / 2, z]
-        })
-      }
-    }
-    
-    // Pilares intermedios si es muy largo
-    if (largo > 8) {
-      for (let x = spacing; x < largo; x += spacing) {
-        result.push({
-          key: `pillar-mid-${x}`,
-          position: [x, elevation / 2, ancho / 2]
-        })
-      }
-    }
-    
-    return result
-  }, [largo, ancho, elevation, isMezzanine])
+  // V5.3: SIN PILARES - La oficina está soportada por vigas perimetrales colgadas del techo
+  // Los pilares se eliminan para maximizar espacio de almacenamiento debajo
 
   // Ventanas
   const windows = useMemo(() => {
@@ -139,9 +118,9 @@ export default function DetailedOffice({
     return items
   }, [largo, ancho, elevation, showInterior, isMezzanine])
 
-  // Escalera
+  // V5.3: Escalera PEGADA A LA PARED del mismo lado que la oficina
   const staircase = useMemo(() => {
-    if (!isMezzanine) return null
+    if (!isMezzanine || !hasStairs) return null
     
     const stairWidth = 1.2
     const stairDepth = 3.5
@@ -149,11 +128,16 @@ export default function DetailedOffice({
     const stepHeight = elevation / numSteps
     const stepDepth = stairDepth / numSteps
     
+    // V5.3: Posición X según lado de la oficina
+    // Si oficina a la derecha → escalera a la derecha (X = largo + offset)
+    // Si oficina a la izquierda → escalera a la izquierda (X = -offset)
+    const xBase = isRightSide ? largo + stairWidth / 2 + 0.1 : -stairWidth / 2 - 0.1
+    
     const steps = []
     for (let i = 0; i < numSteps; i++) {
       steps.push({
         key: `step-${i}`,
-        position: [largo + stairWidth / 2 + 0.3, (i + 0.5) * stepHeight, ancho / 2 - stairDepth / 2 + i * stepDepth],
+        position: [xBase, (i + 0.5) * stepHeight, ancho / 2 - stairDepth / 2 + i * stepDepth],
         size: [stairWidth, stepHeight * 0.95, stepDepth * 0.9]
       })
     }
@@ -162,33 +146,76 @@ export default function DetailedOffice({
       steps,
       width: stairWidth,
       depth: stairDepth,
-      handrailHeight: 1.0
+      handrailHeight: 1.0,
+      xPosition: xBase,
+      isRight: isRightSide
     }
-  }, [largo, ancho, elevation, isMezzanine])
+  }, [largo, ancho, elevation, isMezzanine, hasStairs, isRightSide])
 
-  // Ascensor
+  // V5.3: Ascensor en el mismo lado que la escalera
   const elevator = useMemo(() => {
     if (!isMezzanine || !hasElevator) return null
     
+    // V5.3: Al lado de la escalera, en el mismo lado que la oficina
+    const xPos = isRightSide ? largo + 2.5 : -2.5
+    
     return {
-      position: [largo + 3, 0, ancho / 2],
-      size: [1.6, elevation + alto, 1.8]
+      position: [xPos, 0, ancho / 2 + 2.5],
+      size: [1.6, elevation + alto, 1.8],
+      isRight: isRightSide
     }
-  }, [largo, ancho, elevation, alto, isMezzanine, hasElevator])
+  }, [largo, ancho, elevation, alto, isMezzanine, hasElevator, isRightSide])
 
   return (
     <group>
-      {/* === PILARES DE SOPORTE (entreplanta) === */}
-      {pillars.map(pillar => (
-        <mesh key={pillar.key} position={pillar.position} castShadow>
-          <boxGeometry args={[0.2, elevation, 0.2]} />
-          <meshStandardMaterial 
-            color={isSelected ? '#00ff88' : COLORS.structure}
-            metalness={0.6}
-            roughness={0.4}
-          />
-        </mesh>
-      ))}
+      {/* === V5.3: VIGAS PERIMETRALES DE SOPORTE (sin pilares) === */}
+      {isMezzanine && (
+        <group>
+          {/* Viga frontal (bajo el suelo de oficina) */}
+          <mesh position={[largo / 2, elevation - 0.15, 0.2]} castShadow>
+            <boxGeometry args={[largo, 0.25, 0.15]} />
+            <meshStandardMaterial 
+              color={COLORS.structureDark}
+              metalness={0.7}
+              roughness={0.3}
+            />
+          </mesh>
+          {/* Viga trasera */}
+          <mesh position={[largo / 2, elevation - 0.15, ancho - 0.2]} castShadow>
+            <boxGeometry args={[largo, 0.25, 0.15]} />
+            <meshStandardMaterial 
+              color={COLORS.structureDark}
+              metalness={0.7}
+              roughness={0.3}
+            />
+          </mesh>
+          {/* Viga lateral izquierda */}
+          <mesh position={[0.1, elevation - 0.15, ancho / 2]} castShadow>
+            <boxGeometry args={[0.15, 0.25, ancho]} />
+            <meshStandardMaterial 
+              color={COLORS.structureDark}
+              metalness={0.7}
+              roughness={0.3}
+            />
+          </mesh>
+          {/* Viga lateral derecha */}
+          <mesh position={[largo - 0.1, elevation - 0.15, ancho / 2]} castShadow>
+            <boxGeometry args={[0.15, 0.25, ancho]} />
+            <meshStandardMaterial 
+              color={COLORS.structureDark}
+              metalness={0.7}
+              roughness={0.3}
+            />
+          </mesh>
+          {/* Tirantes al techo (solo visuales, indican que está colgada) */}
+          {[0.2, 0.5, 0.8].map((pct, i) => (
+            <mesh key={`tirante-${i}`} position={[largo * pct, elevation + alto + 0.5, ancho / 2]} castShadow>
+              <cylinderGeometry args={[0.03, 0.03, 1.0, 8]} />
+              <meshStandardMaterial color={COLORS.structureDark} metalness={0.8} roughness={0.2} />
+            </mesh>
+          ))}
+        </group>
+      )}
 
       {/* === SUELO DE OFICINA === */}
       <mesh 
@@ -289,7 +316,7 @@ export default function DetailedOffice({
         </group>
       )}
 
-      {/* === ESCALERA === */}
+      {/* === ESCALERA PEGADA A LA PARED === */}
       {staircase && (
         <group>
           {/* Peldaños */}
@@ -300,16 +327,16 @@ export default function DetailedOffice({
             </mesh>
           ))}
 
-          {/* Zancas laterales */}
+          {/* Zancas laterales - pegadas a la pared */}
           <mesh 
-            position={[largo + 0.15, elevation / 2, ancho / 2]}
+            position={[staircase.xPosition - staircase.width / 2 - 0.05, elevation / 2, ancho / 2]}
             rotation={[Math.atan2(elevation, staircase.depth), 0, 0]}
           >
             <boxGeometry args={[0.1, Math.sqrt(elevation ** 2 + staircase.depth ** 2) * 1.05, 0.2]} />
             <meshStandardMaterial color={COLORS.structureDark} metalness={0.6} roughness={0.4} />
           </mesh>
           <mesh 
-            position={[largo + staircase.width + 0.45, elevation / 2, ancho / 2]}
+            position={[staircase.xPosition + staircase.width / 2 + 0.05, elevation / 2, ancho / 2]}
             rotation={[Math.atan2(elevation, staircase.depth), 0, 0]}
           >
             <boxGeometry args={[0.1, Math.sqrt(elevation ** 2 + staircase.depth ** 2) * 1.05, 0.2]} />
@@ -318,29 +345,22 @@ export default function DetailedOffice({
 
           {/* Pasamanos amarillo */}
           <mesh 
-            position={[largo + 0.1, elevation / 2 + 0.5, ancho / 2]}
-            rotation={[Math.atan2(elevation, staircase.depth), 0, 0]}
-          >
-            <cylinderGeometry args={[0.025, 0.025, Math.sqrt(elevation ** 2 + staircase.depth ** 2) * 1.05, 8]} />
-            <meshStandardMaterial color={COLORS.railingYellow} metalness={0.4} roughness={0.4} />
-          </mesh>
-          <mesh 
-            position={[largo + staircase.width + 0.5, elevation / 2 + 0.5, ancho / 2]}
+            position={[staircase.xPosition + staircase.width / 2 + 0.1, elevation / 2 + 0.5, ancho / 2]}
             rotation={[Math.atan2(elevation, staircase.depth), 0, 0]}
           >
             <cylinderGeometry args={[0.025, 0.025, Math.sqrt(elevation ** 2 + staircase.depth ** 2) * 1.05, 8]} />
             <meshStandardMaterial color={COLORS.railingYellow} metalness={0.4} roughness={0.4} />
           </mesh>
 
-          {/* Descansillo */}
-          <mesh position={[largo + staircase.width / 2 + 0.3, elevation - 0.05, ancho / 2]}>
+          {/* Descansillo superior */}
+          <mesh position={[staircase.xPosition, elevation - 0.05, ancho / 2]}>
             <boxGeometry args={[staircase.width + 0.5, 0.1, staircase.depth + 0.3]} />
             <meshStandardMaterial color={COLORS.stairs} metalness={0.5} roughness={0.5} />
           </mesh>
 
           {/* Señal escalera */}
           {showLabels && viewMode === '3D' && (
-            <Html position={[largo + staircase.width / 2 + 0.3, elevation + 1.2, ancho / 2 - staircase.depth / 2 - 0.5]} center>
+            <Html position={[staircase.xPosition, elevation + 1.2, ancho / 2 - staircase.depth / 2 - 0.5]} center>
               <div style={{
                 background: '#22c55e',
                 color: 'white',

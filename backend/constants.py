@@ -347,37 +347,43 @@ ALIGNMENT_PENALTY = 0.15  # -15% fitness si pasillos no alinean
 
 MACRO_SCENARIO_CONFIGS = {
     "ecommerce": {
-        "orientations": [RackOrientation.PARALLEL_LENGTH, RackOrientation.PARALLEL_WIDTH],
+        # E-commerce: perpendicular a muelles para picking rápido
+        "orientations": [RackOrientation.PARALLEL_WIDTH, RackOrientation.PARALLEL_LENGTH],
         "aisle_strategies": [AisleStrategy.MULTIPLE, AisleStrategy.CENTRAL],
         "abc_zones": True,
         "high_rotation_pct": 0.30
     },
     "almacen_masivo": {
-        "orientations": [RackOrientation.PARALLEL_LENGTH],
+        # Almacén masivo: puede usar paralelo para máxima densidad
+        "orientations": [RackOrientation.PARALLEL_WIDTH, RackOrientation.PARALLEL_LENGTH],
         "aisle_strategies": [AisleStrategy.CENTRAL],
         "abc_zones": False,
         "high_rotation_pct": 0.10
     },
     "crossdock": {
+        # Cross-dock: perpendicular para flujo rápido
         "orientations": [RackOrientation.PARALLEL_WIDTH],
         "aisle_strategies": [AisleStrategy.CENTRAL, AisleStrategy.PERIMETER],
         "abc_zones": False,
         "high_rotation_pct": 0.80
     },
     "frio": {
-        "orientations": [RackOrientation.PARALLEL_LENGTH],
+        # Frío: perpendicular para minimizar recorridos
+        "orientations": [RackOrientation.PARALLEL_WIDTH, RackOrientation.PARALLEL_LENGTH],
         "aisle_strategies": [AisleStrategy.CENTRAL],
         "abc_zones": True,
         "high_rotation_pct": 0.20
     },
     "3pl": {
-        "orientations": [RackOrientation.PARALLEL_LENGTH, RackOrientation.PARALLEL_WIDTH],
+        # 3PL: ambas orientaciones según cliente
+        "orientations": [RackOrientation.PARALLEL_WIDTH, RackOrientation.PARALLEL_LENGTH],
         "aisle_strategies": [AisleStrategy.CENTRAL, AisleStrategy.MULTIPLE],
         "abc_zones": True,
         "high_rotation_pct": 0.25
     },
     "industrial": {
-        "orientations": [RackOrientation.PARALLEL_LENGTH, RackOrientation.PARALLEL_WIDTH],
+        # Industrial: PERPENDICULAR a muelles como estándar
+        "orientations": [RackOrientation.PARALLEL_WIDTH, RackOrientation.PARALLEL_LENGTH],
         "aisle_strategies": [AisleStrategy.CENTRAL],
         "abc_zones": False,
         "high_rotation_pct": 0.15

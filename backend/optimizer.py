@@ -155,8 +155,8 @@ class ScenarioGenerator:
     def _generate_name(self, orientation: str, aisle: str) -> str:
         """Generar nombre descriptivo del escenario"""
         orient_names = {
-            "parallel_length": "Longitudinal",
-            "parallel_width": "Transversal"
+            "parallel_width": "⊥ Perpendicular muelles",   # RECOMENDADO
+            "parallel_length": "∥ Paralelo muelles"
         }
         aisle_names = {
             "central": "Pasillo Central",
@@ -393,12 +393,11 @@ class ABCZoneBuilder:
         if alignment_guide and strategy["preferred_orientation"] == "inherit":
             orientation = alignment_guide["orientation"]
         else:
-            # Zona A decide libremente basándose en su prioridad
-            if zone.priority == "speed":
-                # Para velocidad, paralelo a muelles minimiza distancia
-                orientation = "parallel_length"
-            else:
-                orientation = "parallel_width"  # Default para densidad
+            # V5.4: Perpendicular a muelles es SIEMPRE mejor para operaciones
+            # - Los pasillos conectan directamente con zona de expedición
+            # - Menor recorrido para picking
+            # - Acceso directo desde cualquier muelle
+            orientation = "parallel_width"  # PERPENDICULAR a muelles
         
         # Ajustar ancho de pasillo según estrategia
         base_aisle = AISLE_STANDARDS[machinery]["width"]
@@ -561,6 +560,11 @@ class LayoutBuilder:
         self.fixed_area = 0
         self.grid = self._init_grid()
         
+        # 0. PRE-CALCULAR oficinas para reservar espacio
+        self.office_rect = None
+        if self.prefs.include_offices:
+            self.office_rect = self._calculate_office_rect(config.office_position)
+        
         # 1. Muelles
         if self.prefs.include_docks:
             self._place_docks()
@@ -580,7 +584,7 @@ class LayoutBuilder:
         # 5. Zonas operativas
         self._place_operational_zones()
         
-        # 6. ESTANTERÍAS (CORE)
+        # 6. ESTANTERÍAS (CORE) - Ahora considera office_rect
         self._place_racks(config.rack_orientation, config.aisle_strategy)
         
         return {
@@ -590,6 +594,59 @@ class LayoutBuilder:
             "dock_positions": self.dock_positions,
             "expedition_zone": self.expedition_zone,
             "config": config
+        }
+    
+    def _calculate_office_rect(self, position: str) -> Dict:
+        """
+        Pre-calcular rectángulo de oficinas para reservar espacio.
+        Las estanterías NO deben invadir esta área.
+        
+        Returns:
+            Dict con x_start, x_end, z_start, z_end del área de oficina
+        """
+        # Obtener configuración
+        office_cfg = self.input.get_office_config() if hasattr(self.input, 'get_office_config') else None
+        
+        if office_cfg:
+            area_per_floor = office_cfg.area_per_floor
+            position = office_cfg.position
+        else:
+            area_per_floor = max(OFFICE_STANDARDS["min_area"], self.workers * OFFICE_STANDARDS["m2_per_worker"])
+        
+        # Calcular dimensiones
+        vertical_access_width = 3.0
+        effective_area = area_per_floor + (vertical_access_width * 4.0)
+        
+        if position in ["front_left", "front_right"]:
+            office_width = min(12, self.dims["width"] * 0.30)
+            office_length = min(effective_area / office_width, self.dims["length"] * 0.40)
+        elif position in ["side_left", "side_right"]:
+            office_length = min(self.dims["width"] * 0.80, 30)
+            office_width = min(effective_area / office_length, 15)
+        else:
+            office_width = min(10, self.dims["width"] * 0.25)
+            office_length = effective_area / office_width
+        
+        # Determinar posición
+        if position == "front_left":
+            x, z = 0, self.dims["width"] - office_width
+        elif position == "front_right":
+            x, z = self.dims["length"] - office_length, self.dims["width"] - office_width
+        elif position == "side_left":
+            x, z = 0, self.dims["width"] - office_width
+        elif position == "side_right":
+            x, z = self.dims["length"] - office_width, self.dims["width"] - office_length
+        else:
+            x, z = 0, self.dims["width"] - office_width
+        
+        return {
+            "x_start": x,
+            "x_end": x + office_length,
+            "z_start": z,
+            "z_end": z + office_width,
+            "position": position,
+            "length": office_length,
+            "width": office_width
         }
     
     def _place_docks(self):
@@ -619,54 +676,77 @@ class LayoutBuilder:
     
     def _place_offices(self, position: str):
         """
-        Colocar oficinas según configuración del usuario (V5.2)
+        Colocar oficinas según configuración del usuario (V5.3)
         
-        Mejoras:
-        - Respeta área configurada por usuario
-        - Soporta múltiples plantas
-        - Escalera/ascensor DENTRO del footprint
-        - Posiciones: front_left, front_right, side_left, side_right
+        Mejoras V5.3:
+        - Oficinas PEGADAS AL TECHO (altura automática)
+        - Escalera/ascensor PEGADA A LA PARED
+        - SIN COLUMNAS
+        - Altura estándar: 3m por planta
+        - Calcula automáticamente cuántas plantas caben
         """
         # Obtener configuración de oficinas
         office_cfg = self.input.get_office_config() if hasattr(self.input, 'get_office_config') else None
         
+        FLOOR_HEIGHT = 3.0  # Altura estándar por planta
+        
         if office_cfg:
-            # V5.2: Usar configuración del usuario
+            # V5.2+: Usar configuración del usuario
             area_per_floor = office_cfg.area_per_floor
             num_floors = office_cfg.num_floors
-            floor_height = office_cfg.floor_height
-            height_under = office_cfg.height_under if office_cfg.floor == "mezzanine" else 0
+            floor_height = getattr(office_cfg, 'floor_height', FLOOR_HEIGHT)
             is_mezzanine = office_cfg.floor == "mezzanine"
             has_elevator = office_cfg.has_elevator
-            has_stairs = office_cfg.has_stairs
+            has_stairs = getattr(office_cfg, 'has_stairs', True)
             position = office_cfg.position
         else:
             # Fallback: calcular por workers
             area_per_floor = max(OFFICE_STANDARDS["min_area"], self.workers * OFFICE_STANDARDS["m2_per_worker"])
             num_floors = 1
-            floor_height = OFFICE_STANDARDS["ceiling_height"]
-            height_under = 3.5
+            floor_height = FLOOR_HEIGHT
             is_mezzanine = True
             has_elevator = True
             has_stairs = True
         
+        # ===== V5.3: OFICINAS PEGADAS AL TECHO =====
+        # Altura total de la nave
+        nave_height = self.dims["height"]
+        
+        # Altura total de oficinas
+        total_office_height = num_floors * floor_height
+        
+        # Altura desde el suelo hasta la oficina (hueco debajo)
+        # La oficina está PEGADA AL TECHO, así que:
+        # height_under = altura_nave - altura_oficinas
+        if is_mezzanine:
+            height_under = nave_height - total_office_height
+            # Mínimo 3m de altura libre bajo la oficina para paso de carretillas
+            height_under = max(height_under, 3.0)
+            # Recalcular plantas si no caben
+            if height_under + total_office_height > nave_height:
+                # Reducir plantas
+                available_for_office = nave_height - 3.0  # Mínimo 3m debajo
+                num_floors = max(1, int(available_for_office / floor_height))
+                total_office_height = num_floors * floor_height
+                height_under = nave_height - total_office_height
+        else:
+            height_under = 0
+        
         # Calcular dimensiones incluyendo espacio para escalera/ascensor
-        vertical_access_width = 3.0 if (has_elevator or has_stairs) else 0  # Ancho escalera+ascensor
-        effective_office_area = area_per_floor + (vertical_access_width * 4.0)  # Incluir acceso vertical
+        vertical_access_width = 3.0 if (has_elevator or has_stairs) else 0
+        vertical_access_depth = 4.0
+        effective_office_area = area_per_floor + (vertical_access_width * vertical_access_depth)
         
         # Determinar dimensiones según posición
         if position in ["front_left", "front_right"]:
-            # Oficina en frente: ancho limitado, largo según área
             office_width = min(12, self.dims["width"] * 0.30)
             office_length = effective_office_area / office_width
             office_length = min(office_length, self.dims["length"] * 0.40)
         elif position in ["side_left", "side_right"]:
-            # Oficina en lateral: largo del lateral, ancho según área
-            office_length = min(self.dims["width"] * 0.80, 30)  # Máximo 80% del ancho
+            office_length = min(self.dims["width"] * 0.80, 30)
             office_width = effective_office_area / office_length
             office_width = min(office_width, 15)
         else:
-            # Default: esquina
             office_width = min(10, self.dims["width"] * 0.25)
             office_length = effective_office_area / office_width
         
@@ -682,45 +762,60 @@ class LayoutBuilder:
         else:
             x, z = 0, self.dims["width"] - office_width
         
-        # Altura total de la oficina
-        total_office_height = num_floors * floor_height
-        
-        # Añadir elemento oficina
+        # Añadir elemento oficina (SIN COLUMNAS)
         self._add_element("office", x, z, {
             "largo": round(office_length, 1),
             "ancho": round(office_width, 1),
             "alto": round(total_office_height, 1),
             "height": round(total_office_height, 1)
         }, {
-            "elevation": height_under if is_mezzanine else 0,
+            "elevation": round(height_under, 1),
             "is_mezzanine": is_mezzanine,
-            "mezzanine_height": height_under,
-            "height_under": height_under,
+            "mezzanine_height": round(height_under, 1),
+            "height_under": round(height_under, 1),
             "floor": "mezzanine" if is_mezzanine else "ground",
             "floor_height": floor_height,
             "num_floors": num_floors,
             "area_per_floor": round(area_per_floor, 1),
             "total_area": round(area_per_floor * num_floors, 1),
-            "label": f"Oficinas ({num_floors} plantas)",
-            "workers": self.workers
+            "label": f"Oficinas ({num_floors} {'planta' if num_floors == 1 else 'plantas'})",
+            "workers": self.workers,
+            "has_columns": False,  # V5.3: Sin columnas
+            "ceiling_attached": True,  # V5.3: Pegada al techo
+            "position": position,  # V5.3: Posición para escalera
+            "has_elevator": has_elevator,
+            "has_stairs": has_stairs
         })
         
-        # Acceso vertical DENTRO del footprint (en esquina interior)
+        # ===== V5.3: ESCALERA PEGADA A LA PARED =====
         if has_elevator or has_stairs:
-            # Posicionar en esquina de la oficina
-            access_x = x + office_length - vertical_access_width - 0.5
-            access_z = z + 0.5
+            # La escalera va PEGADA A LA PARED lateral de la nave
             access_height = height_under + total_office_height if is_mezzanine else total_office_height
+            
+            # Determinar posición de la escalera según posición de oficina
+            if position in ["front_left", "side_left"]:
+                # Oficina en izquierda → escalera en X=0 (pared izquierda)
+                access_x = 0
+                access_z = z + 0.5  # Dentro de la oficina
+            elif position in ["front_right", "side_right"]:
+                # Oficina en derecha → escalera en X=length-ancho (pared derecha)
+                access_x = self.dims["length"] - vertical_access_width
+                access_z = z + 0.5
+            else:
+                # Default: pared izquierda
+                access_x = 0
+                access_z = z + 0.5
             
             self._add_element("service_room", access_x, access_z, {
                 "largo": vertical_access_width,
-                "ancho": 4.0,
+                "ancho": vertical_access_depth,
                 "alto": round(access_height, 1)
             }, {
                 "label": "Escalera + Ascensor" if (has_elevator and has_stairs) else ("Ascensor" if has_elevator else "Escalera"),
                 "type": "vertical_access",
                 "has_elevator": has_elevator,
-                "has_stairs": has_stairs
+                "has_stairs": has_stairs,
+                "wall_attached": True  # V5.3: Pegada a la pared
             })
         
         # Marcar grid solo si es planta baja (ocupa suelo)
@@ -815,6 +910,42 @@ class LayoutBuilder:
         # Márgenes laterales: 2m para acceso
         storage_start_x = 2
         storage_end_x = self.dims["length"] - 2
+        
+        # ===== V5.3: EXCLUIR ÁREA DE OFICINAS (SIEMPRE) =====
+        # Las estanterías NUNCA van bajo la oficina, independientemente de si es mezzanine
+        if self.office_rect:
+            office = self.office_rect
+            position = office.get("position", "front_left")
+            
+            # Buffer de seguridad entre estanterías y oficina
+            BUFFER = 1.5
+            
+            # Reducir Z si la oficina está en el fondo (posiciones front_*)
+            if position in ["front_left", "front_right"]:
+                if office["z_start"] < storage_end_z:
+                    storage_end_z = office["z_start"] - BUFFER
+            
+            # Ajustar X según posición lateral de la oficina
+            if position == "front_left":
+                # Oficina en frontal izquierda → reducir X inicial
+                if office["x_end"] > storage_start_x:
+                    storage_start_x = office["x_end"] + BUFFER
+            elif position == "front_right":
+                # Oficina en frontal derecha → reducir X final
+                if office["x_start"] < storage_end_x:
+                    storage_end_x = office["x_start"] - BUFFER
+            elif position == "side_left":
+                # Oficina en lateral izquierdo completo
+                if office["x_end"] > storage_start_x:
+                    storage_start_x = office["x_end"] + BUFFER
+                if office["z_start"] < storage_end_z:
+                    storage_end_z = office["z_start"] - BUFFER
+            elif position == "side_right":
+                # Oficina en lateral derecho completo
+                if office["x_start"] < storage_end_x:
+                    storage_end_x = office["x_start"] - BUFFER
+                if office["z_start"] < storage_end_z:
+                    storage_end_z = office["z_start"] - BUFFER
         
         storage_rect = {
             "x_start": storage_start_x,
@@ -1430,9 +1561,8 @@ class WarehouseOptimizer:
         best_uniform_scenario = None
         
         for config in scenarios:
-            # Forzar orientación coherente para benchmark justo
-            # (parallel_length es la orientación más común en almacenes reales)
-            config.rack_orientation = "parallel_length"
+            # V5.4: Orientación por defecto = perpendicular a muelles (estándar industrial)
+            config.rack_orientation = "parallel_width"
             
             builder = LayoutBuilder(self.input, uniform_prefs)
             builder.aisle_width = standard_aisle_width  # Pasillo estándar
@@ -1639,7 +1769,10 @@ class WarehouseOptimizer:
     
     def _generate_rationale(self, config: ScenarioConfig, fitness: FitnessResult) -> str:
         """Generar explicación textual del diseño"""
-        orient_text = "paralelas al largo" if config.rack_orientation == "parallel_length" else "paralelas al ancho"
+        if config.rack_orientation == "parallel_width":
+            orient_text = "PERPENDICULARES a los muelles (configuración óptima)"
+        else:
+            orient_text = "paralelas a los muelles"
         aisle_text = {
             "central": "pasillo central principal",
             "perimeter": "pasillos perimetrales",
