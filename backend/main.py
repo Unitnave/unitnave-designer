@@ -72,12 +72,18 @@ app.add_middleware(
 # ==================== MODELOS REQUEST ====================
 
 class OfficeConfigRequest(BaseModel):
-    """Configuración de oficinas"""
-    area: float = Field(default=40, ge=20, le=500)
-    floor: str = Field(default="mezzanine")  # ground, mezzanine, both
-    mezzanine_height: float = Field(default=3.5, ge=2.5, le=5.0)
+    """Configuración de oficinas V5.2"""
+    floor: str = Field(default="mezzanine")  # ground, mezzanine
+    position: str = Field(default="front_left")  # front_left, front_right, side_left, side_right
+    height_under: float = Field(default=4.0, ge=2.5, le=8.0)  # Altura libre bajo oficina
+    floor_height: float = Field(default=3.0, ge=2.5, le=4.0)  # Altura por planta
+    num_floors: int = Field(default=1, ge=1, le=5)  # Número de plantas
+    area_per_floor: float = Field(default=100, ge=30, le=500)  # m² por planta
     has_elevator: bool = Field(default=True)
     has_stairs: bool = Field(default=True)
+    # Legacy
+    area: Optional[float] = Field(default=None)
+    mezzanine_height: Optional[float] = Field(default=None)
 
 
 class DockConfigRequest(BaseModel):
@@ -199,55 +205,101 @@ async def health():
     }
 
 
+# ==================== FUNCIONES AUXILIARES ====================
+
+def build_office_config_dict(request: OptimizeRequest) -> Optional[Dict]:
+    """
+    Construye diccionario de office_config desde request.
+    Maneja tanto el nuevo modelo V5.2 como el legacy.
+    """
+    if not request.office_config:
+        return None
+    
+    oc = request.office_config
+    return {
+        "floor": oc.floor,
+        "position": getattr(oc, 'position', 'front_left'),
+        "height_under": getattr(oc, 'height_under', None) or getattr(oc, 'mezzanine_height', None) or 4.0,
+        "floor_height": getattr(oc, 'floor_height', 3.0),
+        "num_floors": getattr(oc, 'num_floors', 1),
+        "area_per_floor": getattr(oc, 'area_per_floor', None) or getattr(oc, 'area', None) or 100,
+        "has_elevator": oc.has_elevator,
+        "has_stairs": getattr(oc, 'has_stairs', True)
+    }
+
+
+def build_warehouse_input(request: OptimizeRequest) -> WarehouseInput:
+    """
+    Construye WarehouseInput desde request con soporte V5.2.
+    """
+    office_config_dict = build_office_config_dict(request)
+    
+    return WarehouseInput(
+        length=request.length,
+        width=request.width,
+        height=request.height,
+        n_docks=request.dock_config.count if request.dock_config else request.n_docks,
+        machinery=request.machinery,
+        pallet_type=request.pallet_type,
+        pallet_height=request.pallet_height,
+        custom_pallet=request.custom_pallet,
+        activity_type=request.activity_type,
+        workers=request.workers,
+        # V5.2: Pasar office_config completo
+        office_config=office_config_dict,
+        # Legacy fallback
+        office_floor=request.office_config.floor if request.office_config else request.office_floor,
+        office_height=getattr(request.office_config, 'height_under', None) or getattr(request.office_config, 'mezzanine_height', None) or request.office_height if request.office_config else request.office_height,
+        has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
+    )
+
+
+def build_preferences(request: OptimizeRequest) -> Optional[DesignPreferences]:
+    """
+    Construye DesignPreferences desde request.
+    """
+    if not request.preferences:
+        return None
+    
+    return DesignPreferences(
+        include_offices=request.preferences.include_offices,
+        include_services=request.preferences.include_services,
+        include_docks=request.preferences.include_docks,
+        include_technical=request.preferences.include_technical,
+        priority=request.preferences.priority,
+        warehouse_type=request.preferences.warehouse_type,
+        layout_complexity=getattr(request.preferences, 'layout_complexity', 'medio'),
+        # ABC Zoning
+        enable_abc_zones=request.preferences.enable_abc_zones,
+        abc_zone_a_pct=request.preferences.abc_zone_a_pct,
+        abc_zone_b_pct=request.preferences.abc_zone_b_pct,
+        abc_zone_c_pct=request.preferences.abc_zone_c_pct,
+        # Resto
+        forbidden_zones=request.preferences.forbidden_zones,
+        high_rotation_pct=request.preferences.high_rotation_pct
+    )
+
+
+# ==================== ENDPOINTS DE OPTIMIZACIÓN ====================
+
 @app.post("/api/optimize")
 async def optimize_layout(request: OptimizeRequest):
     """
-    🚀 Optimización V5 Multi-Escenario
+    🚀 Optimización V5.2 Multi-Escenario
     
     - Genera 5-8 escenarios según tipo de almacén (15-20 con ABC)
     - Evalúa con fitness multi-criterio
     - Selecciona el mejor + alternativas
     - Incluye informe detallado con medidas
     - Soporta optimización ABC por zonas
+    - V5.2: Configuración completa de oficinas por plantas
     """
     try:
-        # Construir input
-        input_data = WarehouseInput(
-            length=request.length,
-            width=request.width,
-            height=request.height,
-            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
-            machinery=request.machinery,
-            pallet_type=request.pallet_type,
-            pallet_height=request.pallet_height,
-            custom_pallet=request.custom_pallet,
-            activity_type=request.activity_type,
-            workers=request.workers,
-            office_floor=request.office_config.floor if request.office_config else request.office_floor,
-            office_height=request.office_config.mezzanine_height if request.office_config else request.office_height,
-            has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
-        )
+        # Construir input usando función auxiliar
+        input_data = build_warehouse_input(request)
         
-        # Construir preferencias
-        prefs = None
-        if request.preferences:
-            prefs = DesignPreferences(
-                include_offices=request.preferences.include_offices,
-                include_services=request.preferences.include_services,
-                include_docks=request.preferences.include_docks,
-                include_technical=request.preferences.include_technical,
-                priority=request.preferences.priority,
-                warehouse_type=request.preferences.warehouse_type,
-                layout_complexity=request.preferences.layout_complexity,
-                # ABC Zoning
-                enable_abc_zones=request.preferences.enable_abc_zones,
-                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
-                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
-                abc_zone_c_pct=request.preferences.abc_zone_c_pct,
-                # Resto
-                forbidden_zones=request.preferences.forbidden_zones,
-                high_rotation_pct=request.preferences.high_rotation_pct
-            )
+        # Construir preferencias usando función auxiliar
+        prefs = build_preferences(request)
         
         # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)
@@ -255,7 +307,7 @@ async def optimize_layout(request: OptimizeRequest):
         
         abc_status = "ABC activo" if (prefs and prefs.enable_abc_zones) else "uniforme"
         logger.info(
-            f"✅ Optimización V5 completada ({abc_status}): {result.capacity.total_pallets} palets, "
+            f"✅ Optimización V5.2 completada ({abc_status}): {result.capacity.total_pallets} palets, "
             f"{result.metadata.get('scenarios_evaluated', 1)} escenarios evaluados"
         )
         
@@ -566,41 +618,11 @@ async def generate_detailed_report(request: OptimizeRequest):
     try:
         from report_generator import ReportGenerator
         
-        # Construir input
-        input_data = WarehouseInput(
-            length=request.length,
-            width=request.width,
-            height=request.height,
-            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
-            machinery=request.machinery,
-            pallet_type=request.pallet_type,
-            pallet_height=request.pallet_height,
-            custom_pallet=request.custom_pallet,
-            activity_type=request.activity_type,
-            workers=request.workers,
-            office_floor=request.office_config.floor if request.office_config else request.office_floor,
-            office_height=request.office_config.mezzanine_height if request.office_config else request.office_height,
-            has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
-        )
+        # Construir input usando función auxiliar
+        input_data = build_warehouse_input(request)
         
-        # Construir preferencias
-        prefs = None
-        if request.preferences:
-            prefs = DesignPreferences(
-                include_offices=request.preferences.include_offices,
-                include_services=request.preferences.include_services,
-                include_docks=request.preferences.include_docks,
-                include_technical=request.preferences.include_technical,
-                priority=request.preferences.priority,
-                warehouse_type=request.preferences.warehouse_type,
-                layout_complexity=request.preferences.layout_complexity,
-                enable_abc_zones=request.preferences.enable_abc_zones,
-                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
-                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
-                abc_zone_c_pct=request.preferences.abc_zone_c_pct,
-                forbidden_zones=request.preferences.forbidden_zones,
-                high_rotation_pct=request.preferences.high_rotation_pct
-            )
+        # Construir preferencias usando función auxiliar
+        prefs = build_preferences(request)
         
         # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)
@@ -637,35 +659,11 @@ async def generate_pdf_report(request: OptimizeRequest):
         import tempfile
         import os
         
-        # Construir input
-        input_data = WarehouseInput(
-            length=request.length,
-            width=request.width,
-            height=request.height,
-            n_docks=request.dock_config.count if request.dock_config else request.n_docks,
-            machinery=request.machinery,
-            pallet_type=request.pallet_type,
-            pallet_height=request.pallet_height,
-            custom_pallet=request.custom_pallet,
-            activity_type=request.activity_type,
-            workers=request.workers
-        )
+        # Construir input usando función auxiliar
+        input_data = build_warehouse_input(request)
         
-        # Construir preferencias
-        prefs = None
-        if request.preferences:
-            prefs = DesignPreferences(
-                include_offices=request.preferences.include_offices,
-                include_services=request.preferences.include_services,
-                include_docks=request.preferences.include_docks,
-                include_technical=request.preferences.include_technical,
-                priority=request.preferences.priority,
-                warehouse_type=request.preferences.warehouse_type,
-                enable_abc_zones=request.preferences.enable_abc_zones,
-                abc_zone_a_pct=request.preferences.abc_zone_a_pct,
-                abc_zone_b_pct=request.preferences.abc_zone_b_pct,
-                abc_zone_c_pct=request.preferences.abc_zone_c_pct
-            )
+        # Construir preferencias usando función auxiliar
+        prefs = build_preferences(request)
         
         # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)

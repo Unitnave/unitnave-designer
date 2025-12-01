@@ -267,6 +267,99 @@ class ABCZoneBuilder:
         
         return zones
     
+    def build_zones_with_transition(self, aisle_width: float) -> List[ABCZone]:
+        """
+        V5.2: Divide el espacio en zonas ABC CON PASILLOS DE TRANSICIÓN
+        
+        Esto evita que las estanterías de una zona queden pegadas
+        a las de la zona siguiente.
+        
+        Args:
+            aisle_width: Ancho del pasillo operativo
+        
+        Returns:
+            Lista de zonas con pasillos de transición incorporados
+        """
+        x_start = self.storage_rect["x_start"]
+        x_end = self.storage_rect["x_end"]
+        z_start = self.storage_rect["z_start"]
+        z_end = self.storage_rect["z_end"]
+        
+        total_depth = z_end - z_start
+        
+        # Pasillos de transición entre zonas (mínimo para maniobra)
+        transition_aisle = aisle_width * 0.8  # 80% del pasillo normal
+        total_transitions = transition_aisle * 2  # Entre A-B y B-C
+        
+        # Espacio efectivo para zonas
+        effective_depth = total_depth - total_transitions
+        
+        # Proporciones
+        if self.prefs.abc_zone_a_pct != 0.20:
+            pct_a = self.prefs.abc_zone_a_pct
+            pct_b = self.prefs.abc_zone_b_pct
+            pct_c = self.prefs.abc_zone_c_pct
+        else:
+            pct_a, pct_b, pct_c = compute_zone_proportions(
+                effective_depth, 
+                self.prefs.high_rotation_pct
+            )
+        
+        self.computed_proportions = {"A": pct_a, "B": pct_b, "C": pct_c}
+        self.was_dynamic = (self.prefs.abc_zone_a_pct == 0.20)
+        
+        # Calcular límites CON TRANSICIONES
+        depth_a = effective_depth * pct_a
+        depth_b = effective_depth * pct_b
+        depth_c = effective_depth * pct_c
+        
+        z_a_end = z_start + depth_a
+        z_b_start = z_a_end + transition_aisle  # PASILLO A-B
+        z_b_end = z_b_start + depth_b
+        z_c_start = z_b_end + transition_aisle  # PASILLO B-C
+        z_c_end = z_end
+        
+        zones = [
+            ABCZone(
+                name="A",
+                z_start=z_start,
+                z_end=z_a_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["A"]["priority"],
+                description=f"{self.abc_config['A']['description']} ({pct_a*100:.0f}%)",
+                depth_pct=pct_a
+            ),
+            ABCZone(
+                name="B",
+                z_start=z_b_start,  # Empieza DESPUÉS del pasillo
+                z_end=z_b_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["B"]["priority"],
+                description=f"{self.abc_config['B']['description']} ({pct_b*100:.0f}%)",
+                depth_pct=pct_b
+            ),
+            ABCZone(
+                name="C",
+                z_start=z_c_start,  # Empieza DESPUÉS del pasillo
+                z_end=z_c_end,
+                x_start=x_start,
+                x_end=x_end,
+                priority=self.abc_config["C"]["priority"],
+                description=f"{self.abc_config['C']['description']} ({pct_c*100:.0f}%)",
+                depth_pct=pct_c
+            )
+        ]
+        
+        # Guardar info de pasillos de transición
+        self.transition_aisles = [
+            {"between": "A-B", "z_start": z_a_end, "z_end": z_b_start, "width": transition_aisle},
+            {"between": "B-C", "z_start": z_b_end, "z_end": z_c_start, "width": transition_aisle}
+        ]
+        
+        return zones
+    
     def calculate_spine_position(self, zones: List[ABCZone]) -> float:
         """
         Calcula la posición del pasillo vertebral central.
@@ -525,45 +618,115 @@ class LayoutBuilder:
         self.fixed_area += self.dims["length"] * (DOCK_STANDARDS["depth"] + maneuver)
     
     def _place_offices(self, position: str):
-        """Colocar oficinas según posición"""
-        office_area = max(OFFICE_STANDARDS["min_area"], self.workers * OFFICE_STANDARDS["m2_per_worker"])
-        office_width = min(10, self.dims["width"] * 0.25)
-        office_length = office_area / office_width
+        """
+        Colocar oficinas según configuración del usuario (V5.2)
         
-        if position == "mezzanine_docks":
-            x, z = 0, self.dims["width"] - office_width
-            elevation = 3.5
+        Mejoras:
+        - Respeta área configurada por usuario
+        - Soporta múltiples plantas
+        - Escalera/ascensor DENTRO del footprint
+        - Posiciones: front_left, front_right, side_left, side_right
+        """
+        # Obtener configuración de oficinas
+        office_cfg = self.input.get_office_config() if hasattr(self.input, 'get_office_config') else None
+        
+        if office_cfg:
+            # V5.2: Usar configuración del usuario
+            area_per_floor = office_cfg.area_per_floor
+            num_floors = office_cfg.num_floors
+            floor_height = office_cfg.floor_height
+            height_under = office_cfg.height_under if office_cfg.floor == "mezzanine" else 0
+            is_mezzanine = office_cfg.floor == "mezzanine"
+            has_elevator = office_cfg.has_elevator
+            has_stairs = office_cfg.has_stairs
+            position = office_cfg.position
+        else:
+            # Fallback: calcular por workers
+            area_per_floor = max(OFFICE_STANDARDS["min_area"], self.workers * OFFICE_STANDARDS["m2_per_worker"])
+            num_floors = 1
+            floor_height = OFFICE_STANDARDS["ceiling_height"]
+            height_under = 3.5
             is_mezzanine = True
-        elif position == "ground_opposite":
+            has_elevator = True
+            has_stairs = True
+        
+        # Calcular dimensiones incluyendo espacio para escalera/ascensor
+        vertical_access_width = 3.0 if (has_elevator or has_stairs) else 0  # Ancho escalera+ascensor
+        effective_office_area = area_per_floor + (vertical_access_width * 4.0)  # Incluir acceso vertical
+        
+        # Determinar dimensiones según posición
+        if position in ["front_left", "front_right"]:
+            # Oficina en frente: ancho limitado, largo según área
+            office_width = min(12, self.dims["width"] * 0.30)
+            office_length = effective_office_area / office_width
+            office_length = min(office_length, self.dims["length"] * 0.40)
+        elif position in ["side_left", "side_right"]:
+            # Oficina en lateral: largo del lateral, ancho según área
+            office_length = min(self.dims["width"] * 0.80, 30)  # Máximo 80% del ancho
+            office_width = effective_office_area / office_length
+            office_width = min(office_width, 15)
+        else:
+            # Default: esquina
+            office_width = min(10, self.dims["width"] * 0.25)
+            office_length = effective_office_area / office_width
+        
+        # Determinar posición X, Z según configuración
+        if position == "front_left":
             x, z = 0, self.dims["width"] - office_width
-            elevation = 0
-            is_mezzanine = False
-            self.fixed_area += office_length * office_width
+        elif position == "front_right":
+            x, z = self.dims["length"] - office_length, self.dims["width"] - office_width
+        elif position == "side_left":
+            x, z = 0, self.dims["width"] - office_width
+        elif position == "side_right":
+            x, z = self.dims["length"] - office_width, self.dims["width"] - office_length
         else:
             x, z = 0, self.dims["width"] - office_width
-            elevation = 3.5
-            is_mezzanine = True
         
+        # Altura total de la oficina
+        total_office_height = num_floors * floor_height
+        
+        # Añadir elemento oficina
         self._add_element("office", x, z, {
             "largo": round(office_length, 1),
             "ancho": round(office_width, 1),
-            "alto": OFFICE_STANDARDS["ceiling_height"]
+            "alto": round(total_office_height, 1),
+            "height": round(total_office_height, 1)
         }, {
-            "elevation": elevation,
+            "elevation": height_under if is_mezzanine else 0,
             "is_mezzanine": is_mezzanine,
-            "label": "Oficinas",
+            "mezzanine_height": height_under,
+            "height_under": height_under,
+            "floor": "mezzanine" if is_mezzanine else "ground",
+            "floor_height": floor_height,
+            "num_floors": num_floors,
+            "area_per_floor": round(area_per_floor, 1),
+            "total_area": round(area_per_floor * num_floors, 1),
+            "label": f"Oficinas ({num_floors} plantas)",
             "workers": self.workers
         })
         
-        # Acceso vertical
-        self._add_element("service_room", office_length, z, {
-            "largo": SERVICE_ROOMS["vertical_access"]["width"],
-            "ancho": SERVICE_ROOMS["vertical_access"]["depth"],
-            "alto": 7.0
-        }, {"label": "Escalera + Ascensor", "type": "vertical_access"})
+        # Acceso vertical DENTRO del footprint (en esquina interior)
+        if has_elevator or has_stairs:
+            # Posicionar en esquina de la oficina
+            access_x = x + office_length - vertical_access_width - 0.5
+            access_z = z + 0.5
+            access_height = height_under + total_office_height if is_mezzanine else total_office_height
+            
+            self._add_element("service_room", access_x, access_z, {
+                "largo": vertical_access_width,
+                "ancho": 4.0,
+                "alto": round(access_height, 1)
+            }, {
+                "label": "Escalera + Ascensor" if (has_elevator and has_stairs) else ("Ascensor" if has_elevator else "Escalera"),
+                "type": "vertical_access",
+                "has_elevator": has_elevator,
+                "has_stairs": has_stairs
+            })
         
+        # Marcar grid solo si es planta baja (ocupa suelo)
         if not is_mezzanine:
-            self._mark_grid(x, z, office_length + SERVICE_ROOMS["vertical_access"]["width"], office_width)
+            self._mark_grid(x, z, office_length, office_width)
+            self.fixed_area += office_length * office_width
     
     def _place_services_block(self, position: str):
         """Colocar bloque compacto de servicios"""
@@ -681,13 +844,16 @@ class LayoutBuilder:
     
     def _place_racks_abc_zoned(self, storage_rect: Dict, rack_depth: float, max_levels: int, aisle_strategy: str):
         """
-        Colocar estanterías con optimización ABC por zonas.
+        Colocar estanterías con optimización ABC por zonas (V5.2 CORREGIDO)
         
-        Proceso:
-        1. Dividir espacio en 3 zonas (A, B, C)
+        Proceso CORREGIDO:
+        1. Dividir espacio en 3 zonas (A, B, C) CON PASILLOS ENTRE ELLAS
         2. Zona A (líder): decide orientación óptima para velocidad
         3. Zonas B y C: heredan alineación de pasillos de A
         4. Zona C: puede usar VNA o doble profundidad
+        
+        CORRECCIÓN V5.2: Se añaden pasillos de transición entre zonas
+        para evitar que estanterías queden pegadas.
         """
         abc_builder = ABCZoneBuilder(
             storage_rect, 
@@ -695,8 +861,8 @@ class LayoutBuilder:
             self.prefs
         )
         
-        # 1. Construir zonas
-        zones = abc_builder.build_zones()
+        # 1. Construir zonas CON PASILLOS DE TRANSICIÓN
+        zones = abc_builder.build_zones_with_transition(self.aisle_width)
         
         # 2. Calcular pasillo vertebral
         abc_builder.calculate_spine_position(zones)
@@ -714,12 +880,65 @@ class LayoutBuilder:
             zone_configs.append(config)
             alignment_guide = config  # Pasar como guía a la siguiente zona
         
-        # 4. Colocar racks en cada zona
+        # 4. Colocar racks en cada zona CON VERIFICACIÓN DE PASILLOS
         for zone, config in zip(zones, zone_configs):
-            self._place_racks_in_zone(zone, config, rack_depth, max_levels)
+            self._place_racks_in_zone_v52(zone, config, rack_depth, max_levels)
         
         # 5. Guardar reporte ABC para metadata
         self.abc_report = abc_builder.generate_zone_report(zones, zone_configs)
+    
+    def _place_racks_in_zone_v52(self, zone: ABCZone, config: Dict, base_rack_depth: float, max_levels: int):
+        """
+        Colocar racks dentro de una zona específica ABC (V5.2)
+        
+        MEJORAS:
+        - Verifica espacio mínimo de pasillo
+        - No coloca racks si no hay espacio suficiente
+        - Respeta límites de zona estrictamente
+        """
+        rack_depth = config["rack_depth"]  # Puede ser doble si es zona C
+        aisle_width = config["aisle_width"]
+        orientation = config["orientation"]
+        
+        # Verificar que la zona tiene espacio suficiente
+        zone_depth = zone.z_end - zone.z_start
+        min_required = aisle_width + rack_depth * 2  # Al menos un módulo doble
+        
+        if zone_depth < min_required:
+            # Zona muy pequeña, intentar con simple
+            if zone_depth >= aisle_width + rack_depth:
+                # Cabe una simple
+                self._place_single_row_in_zone(zone, config, rack_depth, max_levels)
+            return
+        
+        if orientation == "parallel_length":
+            self._place_racks_parallel_length(
+                zone.x_start, zone.x_end,
+                zone.z_start, zone.z_end,
+                rack_depth, max_levels, "central",
+                zone_label=zone.name,
+                aisle_width_override=aisle_width
+            )
+        else:
+            self._place_racks_parallel_width(
+                zone.x_start, zone.x_end,
+                zone.z_start, zone.z_end,
+                rack_depth, max_levels, "central",
+                zone_label=zone.name,
+                aisle_width_override=aisle_width
+            )
+    
+    def _place_single_row_in_zone(self, zone: ABCZone, config: Dict, rack_depth: float, max_levels: int):
+        """Colocar una sola fila de estanterías en zona pequeña"""
+        aisle_width = config["aisle_width"]
+        z_position = zone.z_start + aisle_width / 2
+        
+        segments = self._find_free_segments(zone.x_start, zone.x_end, z_position, rack_depth)
+        
+        for seg_start, seg_end in segments:
+            seg_length = seg_end - seg_start
+            if seg_length >= 5.0:
+                self._add_single_rack(seg_start, z_position, seg_length, rack_depth, max_levels, f"{zone.name}-S")
     
     def _place_racks_in_zone(self, zone: ABCZone, config: Dict, base_rack_depth: float, max_levels: int):
         """Colocar racks dentro de una zona específica ABC"""

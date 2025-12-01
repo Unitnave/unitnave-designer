@@ -1,9 +1,37 @@
 """
 UNITNAVE - Modelos Pydantic para validación datos
+V5.2 - Añadido office_config completo
 """
 from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Optional, Literal, Any
 from datetime import datetime
+
+
+# ==================== CONFIGURACIÓN OFICINAS V5.2 ====================
+class OfficeConfig(BaseModel):
+    """Configuración completa de oficinas (V5.2)"""
+    floor: str = Field(default="mezzanine", description="ground, mezzanine")
+    position: str = Field(default="front_left", description="front_left, front_right, side_left, side_right")
+    height_under: float = Field(default=4.0, ge=2.5, le=8.0, description="Altura libre bajo oficina (entresuelo)")
+    floor_height: float = Field(default=3.0, ge=2.5, le=4.0, description="Altura de cada planta")
+    num_floors: int = Field(default=1, ge=1, le=5, description="Número de plantas")
+    area_per_floor: float = Field(default=100, ge=30, le=500, description="m² por planta")
+    has_elevator: bool = Field(default=True)
+    has_stairs: bool = Field(default=True)
+    
+    @property
+    def total_area(self) -> float:
+        """Superficie total de oficinas"""
+        return self.area_per_floor * self.num_floors
+    
+    @property
+    def total_height(self) -> float:
+        """Altura total usada por oficinas"""
+        if self.floor == "ground":
+            return self.num_floors * self.floor_height
+        else:
+            return self.height_under + (self.num_floors * self.floor_height)
+
 
 # ==================== INPUT USUARIO ====================
 class WarehouseInput(BaseModel):
@@ -19,7 +47,10 @@ class WarehouseInput(BaseModel):
     workers: Optional[int] = Field(None, ge=1, le=500)
     activity_type: Literal["ecommerce", "3pl", "industrial", "logistica", "almacen"] = "industrial"
     
-    # Configuración de oficinas
+    # Configuración de oficinas (V5.2 - objeto completo)
+    office_config: Optional[OfficeConfig] = None
+    
+    # Campos legacy para compatibilidad
     office_floor: Optional[str] = Field(default="mezzanine", description="ground, mezzanine, both")
     office_height: Optional[float] = Field(default=3.5, ge=2.5, le=5.0)
     has_elevator: Optional[bool] = Field(default=True)
@@ -50,6 +81,17 @@ class WarehouseInput(BaseModel):
             if not all(k in v for k in required_keys):
                 raise ValueError(f"custom_pallet must contain: {required_keys}")
         return v
+    
+    def get_office_config(self) -> OfficeConfig:
+        """Obtener configuración de oficinas (nueva o legacy)"""
+        if self.office_config:
+            return self.office_config
+        # Crear desde campos legacy
+        return OfficeConfig(
+            floor=self.office_floor or "mezzanine",
+            height_under=self.office_height or 3.5,
+            has_elevator=self.has_elevator if self.has_elevator is not None else True
+        )
 
 # ==================== ELEMENTOS 3D ====================
 class ElementPosition(BaseModel):
