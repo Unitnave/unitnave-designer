@@ -179,23 +179,32 @@ function InstancedBeams({ beams }) {
   const ref = useRef()
   const count = beams.length
   
+  // Quaternion para rotación 90° en Y
+  const verticalQuaternion = useMemo(() => {
+    const q = new THREE.Quaternion()
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2)
+    return q
+  }, [])
+  
+  const identityQuaternion = useMemo(() => new THREE.Quaternion(), [])
+  
   useEffect(() => {
     if (!ref.current) return
     
     const tempMatrix = new THREE.Matrix4()
     const tempPosition = new THREE.Vector3()
-    const tempQuaternion = new THREE.Quaternion()
     const tempScale = new THREE.Vector3()
     
     beams.forEach((beam, i) => {
       tempPosition.set(beam.x, beam.y, beam.z)
       tempScale.set(beam.length, 1, 1)
-      tempMatrix.compose(tempPosition, tempQuaternion, tempScale)
+      const quaternion = beam.vertical ? verticalQuaternion : identityQuaternion
+      tempMatrix.compose(tempPosition, quaternion, tempScale)
       ref.current.setMatrixAt(i, tempMatrix)
     })
     
     ref.current.instanceMatrix.needsUpdate = true
-  }, [beams])
+  }, [beams, verticalQuaternion, identityQuaternion])
   
   if (count === 0) return null
   
@@ -215,11 +224,20 @@ export default function DetailedShelf({
 }) {
   const { position, dimensions, properties } = element
   
-  // V5.4: Usar dimensiones directamente como vienen del backend
-  // El backend ya envía las dimensiones orientadas correctamente
-  const length = dimensions?.length || 10  // Dimensión en X
-  const depth = dimensions?.depth || 1.1   // Dimensión en Z
+  // V5.4: Usar dimensiones tal como vienen, pero para el cálculo interno
+  // usamos la dimensión más larga como "longitud" del rack
+  const rawLength = dimensions?.length || 10
+  const rawDepth = dimensions?.depth || 1.1
   const height = dimensions?.height || 8
+  
+  // La dimensión larga es donde van los palets en fila
+  // La dimensión corta es la profundidad (single o double deep)
+  const rackLength = Math.max(rawLength, rawDepth)  // Siempre la más larga
+  const rackDepth = Math.min(rawLength, rawDepth)   // Siempre la más corta
+  
+  // Determinar si está rotado (depth > length significa vertical)
+  const isVerticalRack = rawDepth > rawLength
+  
   const levels = dimensions?.levels || Math.floor((height - 0.5) / (palletHeight + 0.25))
   
   // Calcular estructura
@@ -227,40 +245,61 @@ export default function DetailedShelf({
     const levelHeight = palletHeight + 0.25
     const actualLevels = Math.min(levels, Math.floor((height - 0.5) / levelHeight))
     
-    // Postes cada 2.7m (cada 2 palets)
+    // Postes cada 2.7m (cada 2 palets) a lo largo del rack
     const postSpacing = 2.7
-    const numPostPairs = Math.max(2, Math.ceil(length / postSpacing) + 1)
+    const numPostPairs = Math.max(2, Math.ceil(rackLength / postSpacing) + 1)
     
     const posts = []
     const beams = []
     const palletPositions = []
     
-    // Generar postes
+    // Generar postes a lo largo del rack
     for (let i = 0; i < numPostPairs; i++) {
-      const x = Math.min(i * postSpacing, length)
-      posts.push({ x, z: 0 })
-      posts.push({ x, z: depth })
+      const pos = Math.min(i * postSpacing, rackLength)
+      if (isVerticalRack) {
+        // Rack vertical: postes a lo largo de Z
+        posts.push({ x: 0, z: pos })
+        posts.push({ x: rackDepth, z: pos })
+      } else {
+        // Rack horizontal: postes a lo largo de X
+        posts.push({ x: pos, z: 0 })
+        posts.push({ x: pos, z: rackDepth })
+      }
     }
     
     // Generar largueros y posiciones de palets por nivel
     for (let level = 0; level < actualLevels; level++) {
       const y = 0.3 + level * levelHeight
       
-      // Largueros frontales y traseros
-      beams.push({ x: length / 2, y, z: 0, length })
-      beams.push({ x: length / 2, y, z: depth, length })
+      // Largueros a lo largo del rack (2 por nivel: frontal y trasero)
+      if (isVerticalRack) {
+        // Rack vertical: vigas van en eje Z, a los lados X
+        beams.push({ x: 0, y, z: rackLength / 2, length: rackLength, vertical: true })
+        beams.push({ x: rackDepth, y, z: rackLength / 2, length: rackLength, vertical: true })
+      } else {
+        // Rack horizontal: vigas van en eje X, a los lados Z
+        beams.push({ x: rackLength / 2, y, z: 0, length: rackLength, vertical: false })
+        beams.push({ x: rackLength / 2, y, z: rackDepth, length: rackLength, vertical: false })
+      }
       
-      // Posiciones de palets en este nivel
-      const palletsInLength = Math.floor(length / DIMENSIONS.PALLET_LENGTH)
-      const palletsInDepth = Math.floor(depth / DIMENSIONS.PALLET_WIDTH)
+      // Posiciones de palets: a lo largo de la dimensión larga
+      const palletsInLength = Math.floor(rackLength / DIMENSIONS.PALLET_LENGTH)
+      const palletsInDepth = Math.max(1, Math.floor(rackDepth / DIMENSIONS.PALLET_WIDTH))
       
-      for (let px = 0; px < palletsInLength; px++) {
-        for (let pz = 0; pz < palletsInDepth; pz++) {
+      for (let pl = 0; pl < palletsInLength; pl++) {
+        for (let pd = 0; pd < palletsInDepth; pd++) {
           // Aplicar ocupación aleatoria
           if (Math.random() < palletOccupancy) {
-            const palletX = px * DIMENSIONS.PALLET_LENGTH + DIMENSIONS.PALLET_LENGTH / 2
-            const palletZ = pz * DIMENSIONS.PALLET_WIDTH + DIMENSIONS.PALLET_WIDTH / 2
-            palletPositions.push([palletX, y + DIMENSIONS.BEAM_HEIGHT, palletZ])
+            const posAlongLength = pl * DIMENSIONS.PALLET_LENGTH + DIMENSIONS.PALLET_LENGTH / 2
+            const posAlongDepth = pd * DIMENSIONS.PALLET_WIDTH + DIMENSIONS.PALLET_WIDTH / 2
+            
+            if (isVerticalRack) {
+              // Rack vertical: length va en Z, depth va en X
+              palletPositions.push([posAlongDepth, y + DIMENSIONS.BEAM_HEIGHT, posAlongLength])
+            } else {
+              // Rack horizontal: length va en X, depth va en Z
+              palletPositions.push([posAlongLength, y + DIMENSIONS.BEAM_HEIGHT, posAlongDepth])
+            }
           }
         }
       }
@@ -269,8 +308,8 @@ export default function DetailedShelf({
     const totalPallets = palletPositions.length
     const useInstancing = totalPallets > INSTANCING_THRESHOLD
     
-    return { posts, beams, palletPositions, totalPallets, useInstancing }
-  }, [length, depth, height, levels, palletHeight, palletOccupancy])
+    return { posts, beams, palletPositions, totalPallets, useInstancing, isVerticalRack }
+  }, [rackLength, rackDepth, height, levels, palletHeight, palletOccupancy, isVerticalRack])
   
   // Tipo de carga aleatorio pero consistente
   const cargoType = useMemo(() => {
@@ -278,12 +317,12 @@ export default function DetailedShelf({
     return types[Math.floor((position?.x || 0) % 4)]
   }, [position?.x])
   
-  // Vista planta: solo rectángulo
+  // Vista planta: solo rectángulo con dimensiones originales
   if (viewMode === 'planta') {
     return (
       <group position={[position?.x || 0, 0.01, position?.y || 0]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[length / 2, 0, depth / 2]}>
-          <planeGeometry args={[length, depth]} />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[rawLength / 2, 0, rawDepth / 2]}>
+          <planeGeometry args={[rawLength, rawDepth]} />
           <meshStandardMaterial 
             color={isSelected ? '#fbbf24' : COLORS.beam} 
             transparent 
@@ -291,7 +330,7 @@ export default function DetailedShelf({
           />
         </mesh>
         {showLabels && (
-          <Html position={[length / 2, 0.5, depth / 2]} center>
+          <Html position={[rawLength / 2, 0.5, rawDepth / 2]} center>
             <div style={{
               background: 'rgba(0,0,0,0.8)',
               color: 'white',
@@ -337,6 +376,7 @@ export default function DetailedShelf({
           <mesh
             key={`beam-${i}`}
             position={[beam.x, beam.y, beam.z]}
+            rotation={beam.vertical ? [0, Math.PI / 2, 0] : [0, 0, 0]}
             scale={[beam.length, 1, 1]}
             geometry={sharedGeometries.beam}
             material={sharedMaterials.beam}
@@ -353,7 +393,7 @@ export default function DetailedShelf({
             material={sharedMaterials.connector}
           />
           <mesh
-            position={[length - 0.05, beam.y, beam.z]}
+            position={[rawLength - 0.05, beam.y, beam.z]}
             geometry={sharedGeometries.connector}
             material={sharedMaterials.connector}
           />
@@ -404,8 +444,8 @@ export default function DetailedShelf({
       {/* ========== INDICADOR DE SELECCIÓN ========== */}
       
       {isSelected && (
-        <mesh position={[length / 2, 0.02, depth / 2]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[length + 0.5, depth + 0.5]} />
+        <mesh position={[rawLength / 2, 0.02, rawDepth / 2]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[rawLength + 0.5, rawDepth + 0.5]} />
           <meshStandardMaterial color="#fbbf24" transparent opacity={0.3} />
         </mesh>
       )}
@@ -413,7 +453,7 @@ export default function DetailedShelf({
       {/* ========== ETIQUETA ========== */}
       
       {showLabels && (
-        <Html position={[length / 2, height + 0.5, depth / 2]} center>
+        <Html position={[rawLength / 2, height + 0.5, rawDepth / 2]} center>
           <div style={{
             background: useInstancing ? 'rgba(34, 197, 94, 0.9)' : 'rgba(0,0,0,0.85)',
             color: 'white',
