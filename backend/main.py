@@ -249,7 +249,7 @@ def build_warehouse_input(request: OptimizeRequest) -> WarehouseInput:
         office_config=office_config_dict,
         # Legacy fallback
         office_floor=request.office_config.floor if request.office_config else request.office_floor,
-        office_height=getattr(request.office_config, 'height_under', None) or getattr(request.office_config, 'mezzanine_height', None) or request.office_height if request.office_config else request.office_height,
+        office_height=getattr(request.office_config, 'floor_height', 3.5) if request.office_config else (request.office_height or 3.5),
         has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
     )
 
