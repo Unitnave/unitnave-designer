@@ -1119,7 +1119,7 @@ class ReportGenerator:
                     dock_width = self._get_attr(dock.dimensions, "width", DOCK_STANDARDS["width"])
                     dock_depth = self._get_attr(dock.dimensions, "depth", DOCK_STANDARDS["depth"])
                     dock_center_x = dock.position.x + (dock_width / 2)
-                    dock_center_z = dock.position.z + (dock_depth / 2)
+                    dock_center_z = dock.position.y + (dock_depth / 2)  # .y es profundidad (Z en Three.js)
                     
                     # Distancia Manhattan = |Δx| + |Δz| (recorrido real de carretilla)
                     dist_manhattan = abs(shelf_center_x - dock_center_x) + abs(shelf_center_z - dock_center_z)
