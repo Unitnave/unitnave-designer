@@ -1,296 +1,270 @@
 /**
- * UNITNAVE Designer - Warehouse 3D Editor V2
+ * UNITNAVE Designer - Warehouse 3D Editor V3
  * 
- * Editor principal que integra:
- * - Canvas 3D con React Three Fiber
- * - Sistema de Tools
- * - Layers
- * - Grid con Snap
- * - Cotas automáticas
- * - Validaciones en tiempo real
- * - TransformControls
+ * CORREGIDO:
+ * - TransformControls funciona correctamente
+ * - Arrastrar elementos directamente
+ * - OrbitControls se desactiva al arrastrar
  * 
- * @version 2.0
+ * @version 3.0
  */
 
-import React, { useEffect, useRef, useCallback, useMemo } from 'react'
-import { Canvas, useThree, useFrame } from '@react-three/fiber'
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { Canvas, useThree } from '@react-three/fiber'
 import { 
   OrbitControls, 
-  PerspectiveCamera, 
-  OrthographicCamera,
-  ContactShadows,
-  Environment
+  TransformControls,
+  PerspectiveCamera,
+  Html,
+  Grid
 } from '@react-three/drei'
 import * as THREE from 'three'
 
 // Stores
 import useEditorStore from '../../stores/useEditorStore'
-// Asumimos que estos stores existen en tu proyecto
-// import useWarehouseStore from '../stores/useWarehouseStore'
-// import useUIStore from '../stores/useUIStore'
 
 // Editor components
-import EditorToolbar, { EditorToolbarMini } from './EditorToolbar'
+import EditorToolbar from './EditorToolbar'
 import LayersPanel from './LayersPanel'
-import EditorGrid, { SnapIndicator } from './EditorGrid'
-import AutoDimensions from './AutoDimensions'
-import TransformableElement from './TransformableElement'
 import { ValidationMarkers3D, ValidationPanel, DensityIndicator } from './ValidationWarnings'
 
-// 3D components (importar desde tu proyecto)
-// import DetailedShelf from '../3d/DetailedShelf'
-// import DetailedDock from '../3d/DetailedDock'
-// import DetailedOffice from '../3d/DetailedOffice'
-// import IndustrialFloor from '../3d/IndustrialFloor'
-
-/**
- * Controlador de cámara que maneja modos 2D/3D
- */
-function CameraController({ dimensions }) {
-  const { cameraMode, cameraPreset } = useEditorStore()
-  const { camera, gl } = useThree()
-  const controlsRef = useRef()
-  
-  const { length = 80, width = 40, height = 10 } = dimensions || {}
-  
-  useEffect(() => {
-    if (!camera) return
-    
-    const centerX = length / 2
-    const centerZ = width / 2
-    
-    if (cameraMode === '2D') {
-      // Vista cenital (planta)
-      const distance = Math.max(length, width) * 1.2
-      camera.position.set(centerX, distance, centerZ)
-      camera.lookAt(centerX, 0, centerZ)
-      
-      if (controlsRef.current) {
-        controlsRef.current.target.set(centerX, 0, centerZ)
-        controlsRef.current.enableRotate = false
-        controlsRef.current.maxPolarAngle = 0
-        controlsRef.current.minPolarAngle = 0
-      }
-    } else {
-      // Vista 3D isométrica
-      camera.position.set(
-        length * 1.2,
-        height * 2.5,
-        width * 1.2
-      )
-      camera.lookAt(centerX, 0, centerZ)
-      
-      if (controlsRef.current) {
-        controlsRef.current.target.set(centerX, 0, centerZ)
-        controlsRef.current.enableRotate = true
-        controlsRef.current.maxPolarAngle = Math.PI / 2.1
-      }
-    }
-  }, [camera, cameraMode, cameraPreset, length, width, height])
-  
-  return (
-    <OrbitControls
-      ref={controlsRef}
-      makeDefault
-      enablePan={true}
-      enableZoom={true}
-      enableRotate={cameraMode === '3D'}
-      minDistance={10}
-      maxDistance={500}
-      panSpeed={1}
-      zoomSpeed={1}
-    />
-  )
+// ============================================================
+// COLORES POR TIPO DE ELEMENTO
+// ============================================================
+const ELEMENT_COLORS = {
+  shelf: '#3b82f6',      // Azul
+  dock: '#22c55e',       // Verde
+  office: '#a855f7',     // Morado
+  zone: '#06b6d4',       // Cyan
+  operational_zone: '#06b6d4',
+  service_room: '#f59e0b', // Naranja
+  technical_room: '#ef4444' // Rojo
 }
 
-/**
- * Estructura de la nave (paredes, columnas, cubierta)
- */
-function WarehouseStructure({ dimensions }) {
-  const { layers } = useEditorStore()
+// ============================================================
+// COMPONENTE ELEMENTO INDIVIDUAL CON TRANSFORM
+// ============================================================
+function EditableElement({ 
+  element, 
+  isSelected, 
+  onSelect, 
+  onUpdate,
+  orbitControlsRef,
+  dimensions
+}) {
+  const meshRef = useRef()
+  const transformRef = useRef()
+  const [isHovered, setIsHovered] = useState(false)
+  const [mounted, setMounted] = useState(false)
   
-  if (!layers.walls.visible) return null
+  const { currentTool, snapConfig, layers } = useEditorStore()
   
-  const { length = 80, width = 40, height = 10 } = dimensions || {}
+  // Marcar como montado después del primer render
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   
-  // Calcular columnas
-  const columnSpacingX = Math.min(length * 0.2, 25)
-  const columnSpacingZ = Math.min(width * 0.2, 25)
-  const columnsX = Math.floor(length / columnSpacingX) + 1
-  const columnsZ = Math.floor(width / columnSpacingZ) + 1
+  // Extraer propiedades del elemento
+  const type = element.type || 'unknown'
+  const x = element.position?.x ?? 0
+  const z = element.position?.y ?? element.position?.z ?? 0
+  const rotation = (element.rotation || 0) * Math.PI / 180
+  
+  // Dimensiones según tipo
+  let width, depth, height
+  if (type === 'shelf') {
+    width = element.dimensions?.length ?? 2.7
+    depth = element.dimensions?.depth ?? 1.1
+    height = element.dimensions?.height ?? 10
+  } else if (type === 'dock') {
+    width = element.dimensions?.width ?? 3.5
+    depth = element.dimensions?.depth ?? 0.5
+    height = element.dimensions?.height ?? 4
+  } else if (type === 'office') {
+    width = element.dimensions?.length ?? element.dimensions?.largo ?? 12
+    depth = element.dimensions?.width ?? element.dimensions?.ancho ?? 8
+    height = element.dimensions?.height ?? 3
+  } else if (type === 'zone' || type === 'operational_zone') {
+    width = element.dimensions?.length ?? element.dimensions?.largo ?? 10
+    depth = element.dimensions?.width ?? element.dimensions?.ancho ?? 10
+    height = 0.3
+  } else {
+    width = element.dimensions?.length ?? 3
+    depth = element.dimensions?.width ?? element.dimensions?.depth ?? 3
+    height = element.dimensions?.height ?? 3
+  }
+  
+  // Verificar visibilidad de capa
+  const layerKey = type === 'shelf' ? 'shelves' : 
+                   type === 'dock' ? 'docks' : 
+                   type === 'office' ? 'offices' : 
+                   'zones'
+  const isVisible = layers[layerKey]?.visible !== false
+  
+  if (!isVisible) return null
+  
+  const color = ELEMENT_COLORS[type] || '#64748b'
+  
+  // Determinar modo de transformación
+  const transformMode = currentTool === 'rotate' ? 'rotate' : 'translate'
+  const showTransform = isSelected && (currentTool === 'move' || currentTool === 'rotate' || currentTool === 'select')
+  
+  // Handler cuando termina el drag
+  const handleTransformEnd = useCallback(() => {
+    if (!meshRef.current) return
+    
+    const pos = meshRef.current.position
+    const rot = meshRef.current.rotation
+    
+    // Aplicar snap si está activo
+    let finalX = pos.x - width/2  // Restar offset del centro
+    let finalZ = pos.z - depth/2
+    
+    if (snapConfig?.enabled) {
+      const snapSize = snapConfig.snapDistance || 0.5
+      finalX = Math.round(finalX / snapSize) * snapSize
+      finalZ = Math.round(finalZ / snapSize) * snapSize
+    }
+    
+    // Limitar a los bordes de la nave
+    finalX = Math.max(0, Math.min(finalX, (dimensions?.length || 80) - width))
+    finalZ = Math.max(0, Math.min(finalZ, (dimensions?.width || 40) - depth))
+    
+    // Actualizar posición en el mesh (con offset del centro)
+    meshRef.current.position.x = finalX + width/2
+    meshRef.current.position.z = finalZ + depth/2
+    
+    // Calcular rotación en grados
+    const rotationDeg = Math.round((rot.y * 180) / Math.PI)
+    
+    // Notificar cambio
+    onUpdate(element.id, {
+      position: {
+        x: Math.round(finalX * 100) / 100,
+        y: Math.round(finalZ * 100) / 100,
+        z: 0
+      },
+      rotation: rotationDeg
+    })
+  }, [element.id, onUpdate, snapConfig, dimensions, width, depth])
+  
+  // Desactivar OrbitControls mientras arrastramos
+  useEffect(() => {
+    const controls = transformRef.current
+    if (!controls) return
+    
+    const handleDraggingChanged = (event) => {
+      if (orbitControlsRef?.current) {
+        orbitControlsRef.current.enabled = !event.value
+      }
+    }
+    
+    controls.addEventListener('dragging-changed', handleDraggingChanged)
+    
+    return () => {
+      controls.removeEventListener('dragging-changed', handleDraggingChanged)
+    }
+  }, [orbitControlsRef])
   
   return (
-    <group name="warehouse-structure">
-      {/* Paredes transparentes */}
-      {[
-        { pos: [length / 2, height / 2, 0], size: [length, height, 0.2] },
-        { pos: [length / 2, height / 2, width], size: [length, height, 0.2] },
-        { pos: [0, height / 2, width / 2], size: [0.2, height, width] },
-        { pos: [length, height / 2, width / 2], size: [0.2, height, width] }
-      ].map((wall, i) => (
-        <mesh key={`wall-${i}`} position={wall.pos}>
-          <boxGeometry args={wall.size} />
-          <meshStandardMaterial 
-            color="#94a3b8" 
-            transparent 
-            opacity={0.15}
-            side={THREE.DoubleSide}
+    <group>
+      {/* El elemento 3D - PRIMERO para que meshRef tenga valor */}
+      <mesh
+        ref={meshRef}
+        position={[x + width/2, height/2, z + depth/2]}
+        rotation={[0, rotation, 0]}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(element.id)
+        }}
+        onPointerOver={() => setIsHovered(true)}
+        onPointerOut={() => setIsHovered(false)}
+      >
+        <boxGeometry args={[width, height, depth]} />
+        <meshStandardMaterial 
+          color={color}
+          transparent
+          opacity={isSelected ? 1 : (isHovered ? 0.9 : 0.8)}
+          emissive={isSelected ? color : '#000000'}
+          emissiveIntensity={isSelected ? 0.3 : 0}
+        />
+      </mesh>
+      
+      {/* TransformControls DESPUÉS de que el mesh existe */}
+      {showTransform && mounted && meshRef.current && (
+        <TransformControls
+          ref={transformRef}
+          object={meshRef.current}
+          mode={transformMode}
+          size={0.7}
+          showX={transformMode === 'translate'}
+          showY={false}
+          showZ={transformMode === 'translate'}
+          space="world"
+          translationSnap={snapConfig?.enabled ? (snapConfig.snapDistance || 0.5) : null}
+          rotationSnap={Math.PI / 12}
+          onMouseUp={handleTransformEnd}
+        />
+      )}
+      
+      {/* Outline de selección */}
+      {isSelected && (
+        <mesh
+          position={[x + width/2, height/2, z + depth/2]}
+          rotation={[0, rotation, 0]}
+        >
+          <boxGeometry args={[width + 0.3, height + 0.3, depth + 0.3]} />
+          <meshBasicMaterial 
+            color="#ffff00"
+            transparent
+            opacity={0.3}
+            side={THREE.BackSide}
           />
         </mesh>
-      ))}
+      )}
       
-      {/* Columnas */}
-      {Array.from({ length: columnsX }).map((_, i) => 
-        Array.from({ length: columnsZ }).map((_, j) => {
-          // Solo columnas en bordes o interiores específicas
-          if (i > 0 && i < columnsX - 1 && j > 0 && j < columnsZ - 1) return null
-          
-          return (
-            <mesh 
-              key={`col-${i}-${j}`}
-              position={[i * columnSpacingX, height / 2, j * columnSpacingZ]}
-            >
-              <boxGeometry args={[0.4, height, 0.4]} />
-              <meshStandardMaterial color="#64748b" roughness={0.7} />
-            </mesh>
-          )
-        })
+      {/* Etiqueta */}
+      {(isSelected || isHovered) && (
+        <Html
+          position={[x + width/2, height + 1, z + depth/2]}
+          center
+          style={{ pointerEvents: 'none' }}
+        >
+          <div style={{
+            background: isSelected ? '#3b82f6' : 'rgba(0,0,0,0.7)',
+            color: 'white',
+            padding: '4px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 600,
+            whiteSpace: 'nowrap'
+          }}>
+            {element.properties?.label || element.id}
+            <br/>
+            <span style={{ fontSize: '9px', opacity: 0.8 }}>
+              {width.toFixed(1)}m × {depth.toFixed(1)}m
+            </span>
+          </div>
+        </Html>
       )}
     </group>
   )
 }
 
-/**
- * Suelo industrial básico
- */
-function BasicFloor({ dimensions }) {
-  const { length = 80, width = 40 } = dimensions || {}
-  
-  return (
-    <mesh 
-      rotation={[-Math.PI / 2, 0, 0]} 
-      position={[length / 2, -0.01, width / 2]}
-      receiveShadow
-    >
-      <planeGeometry args={[length, width]} />
-      <meshStandardMaterial 
-        color="#e2e8f0"
-        roughness={0.8}
-      />
-    </mesh>
-  )
-}
-
-/**
- * Contenedor de elementos editables
- */
-function ElementsContainer({ 
-  elements, 
-  dimensions,
-  selectedElements,
-  onSelectElement,
-  onUpdateElement 
-}) {
-  const { isElementVisible, isElementLocked, currentTool } = useEditorStore()
-  
-  // Placeholder para elementos - en producción usarías tus componentes 3D
-  const renderElement = (element) => {
-    const { type, position, dimensions: dims, properties } = element
-    
-    // Verificar visibilidad de la capa
-    if (!isElementVisible(type)) return null
-    
-    const x = position?.x || 0
-    const z = position?.y || position?.z || 0
-    const length = dims?.length || dims?.width || 2.7
-    const depth = dims?.depth || dims?.width || 1.1
-    const height = dims?.height || 1
-    
-    // Colores por tipo
-    const colors = {
-      shelf: '#3b82f6',
-      dock: '#22c55e',
-      office: '#a855f7',
-      zone: '#06b6d4',
-      service: '#f59e0b'
-    }
-    
-    const isSelected = selectedElements.includes(element.id)
-    
-    return (
-      <group 
-        key={element.id}
-        position={[x, 0, z]}
-        onClick={(e) => {
-          e.stopPropagation()
-          if (currentTool === 'erase') {
-            // Borrar elemento
-            // onDeleteElement(element.id)
-          } else {
-            onSelectElement(element.id)
-          }
-        }}
-      >
-        {/* Elemento básico (placeholder) */}
-        <mesh position={[length / 2, height / 2, depth / 2]} castShadow>
-          <boxGeometry args={[length, height, depth]} />
-          <meshStandardMaterial 
-            color={colors[type] || '#64748b'}
-            transparent
-            opacity={isSelected ? 1 : 0.85}
-          />
-        </mesh>
-        
-        {/* Indicador de selección */}
-        {isSelected && (
-          <mesh 
-            position={[length / 2, 0.02, depth / 2]}
-            rotation={[-Math.PI / 2, 0, 0]}
-          >
-            <planeGeometry args={[length + 0.5, depth + 0.5]} />
-            <meshBasicMaterial color="#3b82f6" transparent opacity={0.3} />
-          </mesh>
-        )}
-      </group>
-    )
-  }
-  
-  return (
-    <group name="elements-container">
-      {elements.map(element => {
-        const isSelected = selectedElements.includes(element.id)
-        
-        if (isSelected && (currentTool === 'move' || currentTool === 'rotate')) {
-          return (
-            <TransformableElement
-              key={element.id}
-              element={element}
-              enabled={true}
-              updateElement={onUpdateElement}
-            >
-              {renderElement(element)}
-            </TransformableElement>
-          )
-        }
-        
-        return renderElement(element)
-      })}
-    </group>
-  )
-}
-
-/**
- * Escena principal del editor
- */
+// ============================================================
+// ESCENA PRINCIPAL
+// ============================================================
 function EditorScene({ 
   dimensions, 
-  elements,
-  selectedElements,
-  onSelectElement,
+  elements, 
+  selectedId, 
+  onSelectElement, 
   onUpdateElement 
 }) {
-  const { cameraMode, validateLayout, machinery } = useEditorStore()
+  const orbitControlsRef = useRef()
+  const { validateLayout, machinery } = useEditorStore()
+  
+  const { length = 80, width = 40, height = 10 } = dimensions || {}
   
   // Validar layout cuando cambian elementos
   useEffect(() => {
@@ -299,249 +273,264 @@ function EditorScene({
     }
   }, [elements, dimensions, machinery, validateLayout])
   
-  // Encontrar elemento seleccionado
-  const selectedElement = useMemo(() => 
-    elements?.find(el => selectedElements.includes(el.id)),
-    [elements, selectedElements]
-  )
-  
   return (
     <>
+      {/* Cámara */}
+      <PerspectiveCamera 
+        makeDefault 
+        position={[length * 0.8, height * 3, width * 1.2]}
+        fov={50}
+      />
+      
+      {/* Controles de órbita */}
+      <OrbitControls
+        ref={orbitControlsRef}
+        enableDamping
+        dampingFactor={0.05}
+        minDistance={5}
+        maxDistance={200}
+        maxPolarAngle={Math.PI / 2.1}
+        target={[length / 2, 0, width / 2]}
+      />
+      
       {/* Luces */}
       <ambientLight intensity={0.6} />
-      <directionalLight 
-        position={[50, 80, 30]} 
-        intensity={0.8}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-      />
-      <hemisphereLight 
-        skyColor="#87CEEB" 
-        groundColor="#f0f0f0" 
-        intensity={0.4} 
-      />
-      
-      {/* Cámara */}
-      <CameraController dimensions={dimensions} />
-      
-      {/* Plano de fondo para deseleccionar */}
-      <mesh 
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[dimensions?.length / 2 || 40, -0.5, dimensions?.width / 2 || 20]}
-        onClick={() => onSelectElement(null)}
-        visible={false}
-      >
-        <planeGeometry args={[1000, 1000]} />
-        <meshBasicMaterial transparent opacity={0} />
-      </mesh>
-      
-      {/* Suelo */}
-      <BasicFloor dimensions={dimensions} />
+      <directionalLight position={[50, 80, 30]} intensity={0.8} castShadow />
+      <hemisphereLight skyColor="#87CEEB" groundColor="#f0f0f0" intensity={0.4} />
       
       {/* Grid */}
-      <EditorGrid dimensions={dimensions} />
-      
-      {/* Estructura de la nave */}
-      <WarehouseStructure dimensions={dimensions} />
-      
-      {/* Elementos */}
-      <ElementsContainer
-        elements={elements || []}
-        dimensions={dimensions}
-        selectedElements={selectedElements}
-        onSelectElement={onSelectElement}
-        onUpdateElement={onUpdateElement}
+      <Grid
+        args={[length, width]}
+        position={[length / 2, 0.01, width / 2]}
+        cellSize={1}
+        cellThickness={0.5}
+        cellColor="#e0e0e0"
+        sectionSize={5}
+        sectionThickness={1}
+        sectionColor="#bdbdbd"
+        fadeDistance={200}
+        infiniteGrid={false}
       />
       
-      {/* Cotas */}
-      <AutoDimensions 
-        dimensions={dimensions}
-        elements={elements}
-        selectedElement={selectedElement}
-      />
+      {/* Suelo */}
+      <mesh 
+        rotation={[-Math.PI / 2, 0, 0]} 
+        position={[length / 2, 0, width / 2]}
+        onClick={() => onSelectElement(null)}
+        receiveShadow
+      >
+        <planeGeometry args={[length, width]} />
+        <meshStandardMaterial color="#f5f5f5" />
+      </mesh>
       
-      {/* Markers de validación */}
-      <ValidationMarkers3D />
+      {/* Paredes (wireframe) */}
+      <group>
+        {/* Pared frontal */}
+        <mesh position={[length / 2, height / 2, 0]}>
+          <boxGeometry args={[length, height, 0.1]} />
+          <meshBasicMaterial color="#94a3b8" transparent opacity={0.3} />
+        </mesh>
+        {/* Pared trasera */}
+        <mesh position={[length / 2, height / 2, width]}>
+          <boxGeometry args={[length, height, 0.1]} />
+          <meshBasicMaterial color="#94a3b8" transparent opacity={0.3} />
+        </mesh>
+        {/* Pared izquierda */}
+        <mesh position={[0, height / 2, width / 2]}>
+          <boxGeometry args={[0.1, height, width]} />
+          <meshBasicMaterial color="#94a3b8" transparent opacity={0.3} />
+        </mesh>
+        {/* Pared derecha */}
+        <mesh position={[length, height / 2, width / 2]}>
+          <boxGeometry args={[0.1, height, width]} />
+          <meshBasicMaterial color="#94a3b8" transparent opacity={0.3} />
+        </mesh>
+      </group>
       
-      {/* Sombras de contacto (solo 3D) */}
-      {cameraMode === '3D' && (
-        <ContactShadows
-          position={[dimensions?.length / 2 || 40, 0, dimensions?.width / 2 || 20]}
-          width={dimensions?.length || 80}
-          height={dimensions?.width || 40}
-          far={10}
-          opacity={0.3}
-          blur={2}
+      {/* Elementos editables */}
+      {elements.map(element => (
+        <EditableElement
+          key={element.id}
+          element={element}
+          isSelected={selectedId === element.id}
+          onSelect={onSelectElement}
+          onUpdate={onUpdateElement}
+          orbitControlsRef={orbitControlsRef}
+          dimensions={dimensions}
         />
-      )}
+      ))}
+      
+      {/* Marcadores de validación */}
+      <ValidationMarkers3D elements={elements} dimensions={dimensions} />
     </>
   )
 }
 
-/**
- * Componente principal del Editor
- */
-export default function Warehouse3DEditor({
-  dimensions = { length: 80, width: 40, height: 10 },
-  elements = [],
-  machinery = 'retractil',
-  onElementsChange,
-  onSelectElement: externalSelectElement
+// ============================================================
+// COMPONENTE PRINCIPAL DEL EDITOR
+// ============================================================
+export default function Warehouse3DEditor({ 
+  dimensions, 
+  elements: initialElements, 
+  machinery,
+  onElementsChange 
 }) {
-  const {
-    cameraMode,
-    selectedElements,
-    selectElement,
-    setMachinery,
-    registerKeyboardShortcuts,
-    currentTool
+  const [elements, setElements] = useState(initialElements || [])
+  const [selectedId, setSelectedId] = useState(null)
+  
+  const { 
+    showLayersPanel, 
+    validationErrors,
+    setMachinery 
   } = useEditorStore()
   
-  // Configurar maquinaria
+  // Sincronizar elementos externos
   useEffect(() => {
-    setMachinery(machinery)
-  }, [machinery, setMachinery])
+    if (initialElements && initialElements.length > 0) {
+      console.log('📦 Editor recibió elementos:', initialElements.length)
+      setElements(initialElements)
+    }
+  }, [initialElements])
   
-  // Registrar atajos de teclado
+  // Sincronizar maquinaria
   useEffect(() => {
-    const unregister = registerKeyboardShortcuts({
-      setElements: (newElements) => onElementsChange?.(newElements),
-      getElementById: (id) => elements.find(el => el.id === id),
-      addElement: (el) => onElementsChange?.([...elements, el]),
-      removeElement: (id) => onElementsChange?.(elements.filter(el => el.id !== id))
-    })
-    
-    return unregister
-  }, [elements, onElementsChange, registerKeyboardShortcuts])
+    if (machinery) {
+      setMachinery(machinery)
+    }
+  }, [machinery, setMachinery])
   
   // Handler de selección
   const handleSelectElement = useCallback((id) => {
-    selectElement(id)
-    externalSelectElement?.(id)
-  }, [selectElement, externalSelectElement])
+    setSelectedId(id)
+    console.log('🎯 Seleccionado:', id)
+  }, [])
   
-  // Handler de actualización de elemento
+  // Handler de actualización
   const handleUpdateElement = useCallback((id, updates) => {
-    const newElements = elements.map(el => 
-      el.id === id ? { ...el, ...updates } : el
-    )
-    onElementsChange?.(newElements)
-  }, [elements, onElementsChange])
+    console.log('📝 Actualizando elemento:', id, updates)
+    
+    setElements(prev => {
+      const updated = prev.map(el => {
+        if (el.id === id) {
+          return {
+            ...el,
+            position: updates.position || el.position,
+            rotation: updates.rotation !== undefined ? updates.rotation : el.rotation
+          }
+        }
+        return el
+      })
+      
+      // Notificar al padre
+      if (onElementsChange) {
+        onElementsChange(updated)
+      }
+      
+      return updated
+    })
+  }, [onElementsChange])
   
-  // Configuración de cámara según modo
-  const cameraProps = useMemo(() => {
-    if (cameraMode === '2D') {
-      return {
-        position: [dimensions.length / 2, Math.max(dimensions.length, dimensions.width) * 1.2, dimensions.width / 2],
-        fov: 50,
-        near: 1,
-        far: 1000
+  // Handler para eliminar elemento
+  const handleDeleteSelected = useCallback(() => {
+    if (!selectedId) return
+    
+    setElements(prev => {
+      const updated = prev.filter(el => el.id !== selectedId)
+      if (onElementsChange) {
+        onElementsChange(updated)
+      }
+      return updated
+    })
+    setSelectedId(null)
+  }, [selectedId, onElementsChange])
+  
+  // Atajos de teclado
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        handleDeleteSelected()
+      }
+      if (e.key === 'Escape') {
+        setSelectedId(null)
       }
     }
-    return {
-      position: [dimensions.length * 1.2, dimensions.height * 2.5, dimensions.width * 1.2],
-      fov: 50,
-      near: 0.1,
-      far: 2000
-    }
-  }, [cameraMode, dimensions])
-  
-  // Cursor según herramienta
-  const getCursor = () => {
-    const cursors = {
-      select: 'default',
-      move: 'move',
-      rotate: 'crosshair',
-      draw_shelf: 'crosshair',
-      draw_dock: 'crosshair',
-      draw_office: 'crosshair',
-      draw_zone: 'crosshair',
-      erase: 'not-allowed',
-      measure: 'crosshair',
-      pan: 'grab'
-    }
-    return cursors[currentTool] || 'default'
-  }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleDeleteSelected])
   
   return (
-    <div 
-      style={{ 
-        width: '100%', 
-        height: '100%', 
-        position: 'relative',
-        cursor: getCursor()
-      }}
-    >
-      {/* Toolbar principal */}
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {/* Toolbar */}
       <EditorToolbar />
-      
-      {/* Toolbar lateral (opcional) */}
-      <EditorToolbarMini />
-      
-      {/* Panel de capas */}
-      <LayersPanel />
-      
-      {/* Panel de validaciones */}
-      <ValidationPanel position="bottom-right" />
-      
-      {/* Indicador de densidad */}
-      <DensityIndicator elements={elements} dimensions={dimensions} />
       
       {/* Canvas 3D */}
       <Canvas
+        style={{ background: '#f8fafc' }}
         shadows
-        camera={cameraProps}
-        style={{
-          background: 'linear-gradient(180deg, #e0f2fe 0%, #f0f9ff 100%)'
-        }}
         gl={{ 
           antialias: true,
-          preserveDrawingBuffer: true
+          preserveDrawingBuffer: true 
         }}
       >
         <EditorScene
           dimensions={dimensions}
           elements={elements}
-          selectedElements={selectedElements}
+          selectedId={selectedId}
           onSelectElement={handleSelectElement}
           onUpdateElement={handleUpdateElement}
         />
       </Canvas>
       
-      {/* Indicador de modo */}
-      <div style={{
-        position: 'absolute',
-        bottom: 60,
-        left: 10,
-        background: cameraMode === '2D' ? '#3b82f6' : '#8b5cf6',
-        color: 'white',
-        padding: '6px 14px',
-        borderRadius: '8px',
-        fontSize: '12px',
-        fontWeight: 600,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-      }}>
-        {cameraMode === '2D' ? '📐 Vista 2D' : '🎮 Vista 3D'}
-      </div>
+      {/* Panel de capas */}
+      {showLayersPanel && <LayersPanel />}
+      
+      {/* Panel de validación */}
+      <ValidationPanel />
+      
+      {/* Indicador de densidad */}
+      <DensityIndicator elements={elements} dimensions={dimensions} />
       
       {/* Info de dimensiones */}
       <div style={{
         position: 'absolute',
-        bottom: 60,
-        right: 10,
+        bottom: 20,
+        right: 20,
         background: 'rgba(255,255,255,0.95)',
-        padding: '8px 14px',
+        padding: '8px 16px',
         borderRadius: '8px',
-        fontSize: '11px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-        display: 'flex',
-        gap: '12px'
+        fontSize: '13px',
+        fontFamily: 'monospace',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
       }}>
-        <span><strong>L:</strong> {dimensions.length}m</span>
-        <span><strong>A:</strong> {dimensions.width}m</span>
-        <span><strong>H:</strong> {dimensions.height}m</span>
-        <span><strong>Sup:</strong> {(dimensions.length * dimensions.width).toLocaleString()}m²</span>
+        <strong>L:</strong> {dimensions?.length || 80}m &nbsp;
+        <strong>A:</strong> {dimensions?.width || 40}m &nbsp;
+        <strong>H:</strong> {dimensions?.height || 10}m &nbsp;
+        <strong>Sup:</strong> {((dimensions?.length || 80) * (dimensions?.width || 40)).toLocaleString()}m²
+      </div>
+      
+      {/* Instrucciones */}
+      <div style={{
+        position: 'absolute',
+        bottom: 60,
+        right: 20,
+        background: 'rgba(59, 130, 246, 0.9)',
+        color: 'white',
+        padding: '8px 12px',
+        borderRadius: '6px',
+        fontSize: '11px',
+        maxWidth: '200px'
+      }}>
+        <strong>Controles:</strong><br/>
+        • Click = Seleccionar<br/>
+        • Flechas rojas/azules = Mover<br/>
+        • Delete = Eliminar seleccionado<br/>
+        • Scroll = Zoom<br/>
+        • Click derecho = Rotar vista
       </div>
     </div>
   )
 }
+
+// Re-exportar para compatibilidad
+export { Warehouse3DEditor }
