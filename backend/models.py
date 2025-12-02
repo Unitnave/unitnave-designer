@@ -15,14 +15,23 @@ class OfficeConfig(BaseModel):
     height_under: float = Field(default=4.0, ge=2.5, le=8.0, description="Altura libre bajo oficina (entresuelo)")
     floor_height: float = Field(default=3.0, ge=2.5, le=4.0, description="Altura de cada planta")
     num_floors: int = Field(default=1, ge=1, le=5, description="Número de plantas")
-    area_per_floor: float = Field(default=100, ge=30, le=500, description="m² por planta")
+    # V6: Largo y ancho de oficina (prioridad sobre area_per_floor)
+    office_length: float = Field(default=12, ge=5, le=50, description="Largo de oficina (m)")
+    office_width: float = Field(default=8, ge=5, le=30, description="Ancho de oficina (m)")
+    area_per_floor: float = Field(default=96, ge=30, le=500, description="m² por planta (calculado de largo × ancho)")
     has_elevator: bool = Field(default=True)
     has_stairs: bool = Field(default=True)
     
     @property
+    def calculated_area(self) -> float:
+        """Área calculada desde largo × ancho (prioridad)"""
+        return self.office_length * self.office_width
+    
+    @property
     def total_area(self) -> float:
         """Superficie total de oficinas"""
-        return self.area_per_floor * self.num_floors
+        # Usar área calculada de largo × ancho
+        return self.calculated_area * self.num_floors
     
     @property
     def total_height(self) -> float:

@@ -2,11 +2,10 @@
  * UNITNAVE Designer - Step3Offices
  * Configuración de oficinas con múltiples plantas
  * 
- * V5.1: Nuevo modelo con:
- * - Altura libre bajo oficina (si entresuelo)
- * - Altura por planta configurable
- * - Número de plantas dinámico según espacio
- * - Superficie por planta
+ * V6.0 Cambios:
+ * - Largo y ancho configurables (prioridad sobre m²)
+ * - Altura libre calculada automáticamente desde el techo
+ * - Acceso vertical automático (siempre escalera + ascensor con oficinas)
  * 
  * ARCHIVO: frontend/src/components/wizard/Step3Offices.jsx
  */
@@ -15,16 +14,18 @@ import { useState, useEffect, useMemo } from 'react';
 import { 
   Grid, Typography, Box, Slider, 
   ToggleButton, ToggleButtonGroup, Alert, Paper, Switch, FormControlLabel,
-  Divider
+  Divider, TextField, InputAdornment
 } from '@mui/material';
-import { Business, Stairs, Elevator, Layers, Height } from '@mui/icons-material';
+import { Business, Layers } from '@mui/icons-material';
 
 export default function Step3Offices({ data, onChange }) {
   // Altura de la nave
   const warehouseHeight = data.height || 12;
+  const warehouseLength = data.length || 80;
+  const warehouseWidth = data.width || 40;
   
   // Calcular máximo de superficie por planta (25% de la nave)
-  const totalArea = (data.length || 80) * (data.width || 40);
+  const totalArea = warehouseLength * warehouseWidth;
   const maxAreaPerFloor = Math.min(500, Math.floor(totalArea * 0.25));
   
   const [officeConfig, setOfficeConfig] = useState(data.officeConfig || {
@@ -32,44 +33,49 @@ export default function Step3Offices({ data, onChange }) {
     floor: 'mezzanine',           // ground, mezzanine, both
     position: 'front_left',
     
-    // Nuevo modelo de alturas
-    height_under: 4.0,            // Altura libre bajo oficina (si entresuelo)
+    // Dimensiones configurables (NUEVO)
+    office_length: 12,            // Largo de oficina (m)
+    office_width: 8,              // Ancho de oficina (m)
+    
+    // Altura por planta y número de plantas
     floor_height: 3.0,            // Altura de cada planta de oficina
     num_floors: 1,                // Número de plantas
-    area_per_floor: 100,          // m² por planta
-    
-    // Accesos
-    hasElevator: true,
-    hasStairs: true
+    area_per_floor: 96            // m² por planta (calculado de largo x ancho)
   });
+
+  // Calcular área desde largo x ancho (prioridad)
+  const calculatedArea = officeConfig.office_length * officeConfig.office_width;
+  
+  // Calcular altura libre automáticamente (oficina pegada al techo)
+  const autoHeightUnder = useMemo(() => {
+    if (officeConfig.floor === 'ground') return 0;
+    const totalOfficeHeight = officeConfig.num_floors * officeConfig.floor_height;
+    const heightUnder = warehouseHeight - totalOfficeHeight;
+    return Math.max(3.0, heightUnder); // Mínimo 3m para carretillas
+  }, [warehouseHeight, officeConfig.num_floors, officeConfig.floor_height, officeConfig.floor]);
 
   // Calcular máximo de plantas según espacio disponible
   const maxFloors = useMemo(() => {
     if (officeConfig.floor === 'ground') {
-      // En planta baja, todas las plantas hasta el techo
       return Math.floor(warehouseHeight / officeConfig.floor_height);
     } else {
-      // En entresuelo, descontar altura libre
-      const availableHeight = warehouseHeight - officeConfig.height_under;
+      // En entresuelo, mínimo 3m libres debajo
+      const availableHeight = warehouseHeight - 3.0;
       return Math.max(1, Math.floor(availableHeight / officeConfig.floor_height));
     }
-  }, [warehouseHeight, officeConfig.floor, officeConfig.height_under, officeConfig.floor_height]);
+  }, [warehouseHeight, officeConfig.floor, officeConfig.floor_height]);
 
   // Calcular altura total usada
   const totalHeightUsed = useMemo(() => {
     if (officeConfig.floor === 'ground') {
       return officeConfig.num_floors * officeConfig.floor_height;
     } else {
-      return officeConfig.height_under + (officeConfig.num_floors * officeConfig.floor_height);
+      return autoHeightUnder + (officeConfig.num_floors * officeConfig.floor_height);
     }
-  }, [officeConfig]);
+  }, [officeConfig, autoHeightUnder]);
 
   // Calcular superficie total
-  const totalOfficeArea = officeConfig.area_per_floor * officeConfig.num_floors;
-
-  // Trabajadores estimados
-  const workers = data.workers || Math.max(10, Math.floor(totalArea / 80));
-  const recommendedAreaPerFloor = Math.ceil(workers * 2 / Math.max(1, officeConfig.num_floors));
+  const totalOfficeArea = calculatedArea * officeConfig.num_floors;
 
   // Ajustar num_floors si excede el máximo
   useEffect(() => {
@@ -78,9 +84,24 @@ export default function Step3Offices({ data, onChange }) {
     }
   }, [maxFloors]);
 
+  // Actualizar area_per_floor cuando cambian largo o ancho
   useEffect(() => {
-    onChange({ officeConfig });
-  }, [officeConfig]);
+    if (officeConfig.area_per_floor !== calculatedArea) {
+      setOfficeConfig(prev => ({ ...prev, area_per_floor: calculatedArea }));
+    }
+  }, [calculatedArea]);
+
+  useEffect(() => {
+    // Incluir height_under calculado automáticamente
+    onChange({ 
+      officeConfig: {
+        ...officeConfig,
+        height_under: autoHeightUnder,
+        hasElevator: true,  // Siempre automático
+        hasStairs: true     // Siempre automático
+      }
+    });
+  }, [officeConfig, autoHeightUnder]);
 
   const handleChange = (field, value) => {
     setOfficeConfig(prev => ({ ...prev, [field]: value }));
@@ -105,11 +126,15 @@ export default function Step3Offices({ data, onChange }) {
     officeConfig.floor === 'mezzanine' 
       ? 0 
       : officeConfig.floor === 'ground' 
-        ? officeConfig.area_per_floor 
-        : officeConfig.area_per_floor * 0.5;
+        ? calculatedArea 
+        : calculatedArea * 0.5;
 
   // Validación de altura
   const heightWarning = totalHeightUsed > warehouseHeight;
+
+  // Validación de dimensiones
+  const dimensionWarning = officeConfig.office_length > warehouseLength * 0.4 || 
+                           officeConfig.office_width > warehouseWidth * 0.3;
 
   return (
     <Box>
@@ -134,7 +159,7 @@ export default function Step3Offices({ data, onChange }) {
                 <Box>
                   <Typography variant="h6">Incluir zona de oficinas</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Espacio para administración, vestuarios y servicios
+                    Espacio para administración, vestuarios y servicios. Incluye escalera y ascensor automáticamente.
                   </Typography>
                 </Box>
               }
@@ -218,41 +243,66 @@ export default function Step3Offices({ data, onChange }) {
               </Paper>
             </Grid>
 
-            {/* ALTURA LIBRE BAJO OFICINA (solo si entresuelo) */}
-            {officeConfig.floor !== 'ground' && (
-              <Grid item xs={12} md={6}>
-                <Paper elevation={2} sx={{ p: 3 }}>
-                  <Typography variant="h6" gutterBottom>
-                    <Height sx={{ mr: 1, verticalAlign: 'middle' }} />
-                    Altura Libre Bajo Oficina
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Espacio para almacenamiento o circulación debajo del entresuelo
-                  </Typography>
-                  <Box sx={{ px: 2 }}>
-                    <Typography variant="body2" gutterBottom>
-                      Altura libre: <strong>{officeConfig.height_under} m</strong>
-                    </Typography>
-                    <Slider
-                      value={officeConfig.height_under}
-                      onChange={(_, v) => handleChange('height_under', v)}
-                      min={2.5}
-                      max={Math.min(8, warehouseHeight - 3)}
-                      step={0.5}
-                      marks={[
-                        { value: 2.5, label: '2.5m' },
-                        { value: 4, label: '4m ★' },
-                        { value: 6, label: '6m' }
-                      ]}
-                      valueLabelDisplay="auto"
+            {/* DIMENSIONES DE OFICINA (LARGO x ANCHO) */}
+            <Grid item xs={12}>
+              <Paper elevation={2} sx={{ p: 3, bgcolor: 'primary.50', border: '2px solid', borderColor: 'primary.200' }}>
+                <Typography variant="h6" gutterBottom>
+                  <Business sx={{ mr: 1, verticalAlign: 'middle' }} />
+                  📐 Dimensiones de Oficina
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  Define largo y ancho en metros. Los m² se calculan automáticamente.
+                </Typography>
+                
+                <Grid container spacing={3} alignItems="center">
+                  <Grid item xs={12} sm={4}>
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Largo"
+                      value={officeConfig.office_length}
+                      onChange={(e) => handleChange('office_length', parseFloat(e.target.value) || 5)}
+                      InputProps={{
+                        endAdornment: <InputAdornment position="end">m</InputAdornment>,
+                      }}
+                      inputProps={{ min: 5, max: warehouseLength * 0.4, step: 0.5 }}
+                      helperText={`Máx: ${(warehouseLength * 0.4).toFixed(0)}m`}
                     />
-                    <Alert severity="info" sx={{ mt: 2 }}>
-                      Recomendado: 3.5-4m para carretillas retráctiles
-                    </Alert>
-                  </Box>
-                </Paper>
-              </Grid>
-            )}
+                  </Grid>
+                  <Grid item xs={12} sm={1} sx={{ textAlign: 'center' }}>
+                    <Typography variant="h5">×</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={4}>
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Ancho"
+                      value={officeConfig.office_width}
+                      onChange={(e) => handleChange('office_width', parseFloat(e.target.value) || 5)}
+                      InputProps={{
+                        endAdornment: <InputAdornment position="end">m</InputAdornment>,
+                      }}
+                      inputProps={{ min: 5, max: warehouseWidth * 0.3, step: 0.5 }}
+                      helperText={`Máx: ${(warehouseWidth * 0.3).toFixed(0)}m`}
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={3}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'success.100' }}>
+                      <Typography variant="body2" color="text.secondary">Por planta</Typography>
+                      <Typography variant="h4" fontWeight={700} color="success.main">
+                        {calculatedArea} m²
+                      </Typography>
+                    </Paper>
+                  </Grid>
+                </Grid>
+
+                {dimensionWarning && (
+                  <Alert severity="warning" sx={{ mt: 2 }}>
+                    Las dimensiones son muy grandes. Considera reducirlas para dejar más espacio de almacenamiento.
+                  </Alert>
+                )}
+              </Paper>
+            </Grid>
 
             {/* ALTURA POR PLANTA */}
             <Grid item xs={12} md={6}>
@@ -293,7 +343,7 @@ export default function Step3Offices({ data, onChange }) {
                   🏗️ Número de Plantas
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Máximo disponible: {maxFloors} plantas (según alturas configuradas)
+                  Máximo disponible: {maxFloors} plantas (según altura nave)
                 </Typography>
                 <Box sx={{ px: 2 }}>
                   <Typography variant="body2" gutterBottom>
@@ -316,80 +366,10 @@ export default function Step3Offices({ data, onChange }) {
               </Paper>
             </Grid>
 
-            {/* SUPERFICIE POR PLANTA */}
-            <Grid item xs={12} md={6}>
-              <Paper elevation={2} sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom>
-                  <Business sx={{ mr: 1, verticalAlign: 'middle' }} />
-                  Superficie por Planta
-                </Typography>
-                <Box sx={{ mt: 2, px: 2 }}>
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    Área por planta: <strong>{officeConfig.area_per_floor} m²</strong>
-                  </Typography>
-                  <Slider
-                    value={officeConfig.area_per_floor}
-                    onChange={(_, v) => handleChange('area_per_floor', v)}
-                    min={30}
-                    max={maxAreaPerFloor}
-                    step={10}
-                    marks={[
-                      { value: 50, label: '50m²' },
-                      { value: Math.min(recommendedAreaPerFloor, maxAreaPerFloor), label: `${Math.min(recommendedAreaPerFloor, maxAreaPerFloor)}m² ★` },
-                      { value: maxAreaPerFloor, label: `${maxAreaPerFloor}m²` }
-                    ]}
-                    valueLabelDisplay="auto"
-                  />
-                  <Alert severity="info" sx={{ mt: 2 }}>
-                    Recomendado: ~{recommendedAreaPerFloor}m²/planta para {workers} trabajadores
-                  </Alert>
-                </Box>
-              </Paper>
-            </Grid>
-
-            {/* ACCESO VERTICAL */}
-            {(officeConfig.floor !== 'ground' || officeConfig.num_floors > 1) && (
-              <Grid item xs={12} md={6}>
-                <Paper elevation={2} sx={{ p: 3 }}>
-                  <Typography variant="h6" gutterBottom>🚪 Acceso Vertical</Typography>
-                  <Box sx={{ mt: 2 }}>
-                    <FormControlLabel
-                      control={<Switch checked={true} disabled />}
-                      label={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Stairs color="primary" />
-                          <Typography>Escalera (obligatoria)</Typography>
-                        </Box>
-                      }
-                    />
-                    <FormControlLabel
-                      control={
-                        <Switch 
-                          checked={officeConfig.hasElevator}
-                          onChange={(e) => handleChange('hasElevator', e.target.checked)}
-                        />
-                      }
-                      label={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Elevator color={officeConfig.hasElevator ? 'primary' : 'disabled'} />
-                          <Typography>Ascensor</Typography>
-                        </Box>
-                      }
-                    />
-                    {officeConfig.num_floors >= 2 && (
-                      <Alert severity="warning" sx={{ mt: 2 }}>
-                        Con {officeConfig.num_floors} plantas, se recomienda ascensor
-                      </Alert>
-                    )}
-                  </Box>
-                </Paper>
-              </Grid>
-            )}
-
             {/* DIAGRAMA VISUAL */}
             <Grid item xs={12}>
               <Paper elevation={2} sx={{ p: 3, bgcolor: 'grey.100' }}>
-                <Typography variant="h6" gutterBottom>📐 Diagrama de Alturas</Typography>
+                <Typography variant="h6" gutterBottom>📐 Diagrama de Alturas (Automático)</Typography>
                 <Box sx={{ 
                   display: 'flex', 
                   alignItems: 'flex-end', 
@@ -407,14 +387,14 @@ export default function Step3Offices({ data, onChange }) {
                     position: 'relative',
                     bgcolor: 'white'
                   }}>
-                    {/* Altura libre bajo oficina */}
+                    {/* Altura libre bajo oficina - CALCULADA AUTOMÁTICAMENTE */}
                     {officeConfig.floor !== 'ground' && (
                       <Box sx={{ 
                         position: 'absolute',
                         bottom: 0,
                         left: 0,
                         right: 0,
-                        height: `${(officeConfig.height_under / warehouseHeight) * 100}%`,
+                        height: `${(autoHeightUnder / warehouseHeight) * 100}%`,
                         bgcolor: 'success.100',
                         borderTop: '2px dashed #4caf50',
                         display: 'flex',
@@ -422,7 +402,7 @@ export default function Step3Offices({ data, onChange }) {
                         justifyContent: 'center'
                       }}>
                         <Typography variant="caption" fontWeight={600}>
-                          Almacén: {officeConfig.height_under}m
+                          Almacén: {autoHeightUnder.toFixed(1)}m (auto)
                         </Typography>
                       </Box>
                     )}
@@ -431,7 +411,7 @@ export default function Step3Offices({ data, onChange }) {
                     {Array.from({ length: officeConfig.num_floors }).map((_, i) => {
                       const bottomOffset = officeConfig.floor === 'ground' 
                         ? (i * officeConfig.floor_height / warehouseHeight) * 100
-                        : ((officeConfig.height_under + i * officeConfig.floor_height) / warehouseHeight) * 100;
+                        : ((autoHeightUnder + i * officeConfig.floor_height) / warehouseHeight) * 100;
                       const plantHeight = (officeConfig.floor_height / warehouseHeight) * 100;
                       
                       return (
@@ -470,6 +450,11 @@ export default function Step3Offices({ data, onChange }) {
                   </Box>
                 </Box>
                 
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  📍 La altura libre bajo oficina ({autoHeightUnder.toFixed(1)}m) se calcula automáticamente desde el techo.
+                  Escalera y ascensor incluidos automáticamente.
+                </Alert>
+                
                 {heightWarning && (
                   <Alert severity="error" sx={{ mt: 2 }}>
                     ⚠️ La suma de alturas ({totalHeightUsed.toFixed(1)}m) excede la altura de la nave ({warehouseHeight}m)
@@ -498,15 +483,15 @@ export default function Step3Offices({ data, onChange }) {
                   </Typography>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Typography variant="body2" color="text.secondary">Plantas</Typography>
-                  <Typography variant="h5" fontWeight={700} color="primary.main">
-                    {officeConfig.num_floors}
+                  <Typography variant="body2" color="text.secondary">Dimensiones</Typography>
+                  <Typography variant="h6" fontWeight={700}>
+                    {officeConfig.office_length}×{officeConfig.office_width}m
                   </Typography>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Typography variant="body2" color="text.secondary">m² / Planta</Typography>
-                  <Typography variant="h6" fontWeight={700}>
-                    {officeConfig.area_per_floor} m²
+                  <Typography variant="body2" color="text.secondary">Plantas</Typography>
+                  <Typography variant="h5" fontWeight={700} color="primary.main">
+                    {officeConfig.num_floors}
                   </Typography>
                 </Grid>
                 <Grid item xs={6} md={2}>
@@ -516,9 +501,9 @@ export default function Step3Offices({ data, onChange }) {
                   </Typography>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Typography variant="body2" color="text.secondary">Altura Total Usada</Typography>
+                  <Typography variant="body2" color="text.secondary">Altura Libre (auto)</Typography>
                   <Typography variant="h6" fontWeight={700} color={heightWarning ? 'error.main' : 'text.primary'}>
-                    {totalHeightUsed.toFixed(1)} m
+                    {autoHeightUnder.toFixed(1)} m
                   </Typography>
                 </Grid>
                 <Grid item xs={6} md={2}>

@@ -85,38 +85,73 @@ export default function DetailedOffice({
     return result
   }, [largo, ancho, alto, elevation, isMezzanine])
 
-  // Mobiliario
+  // V6.0: Mobiliario en TODAS las plantas
   const furniture = useMemo(() => {
     if (!showInterior) return []
     
     const items = []
-    const baseY = isMezzanine ? elevation : 0
-    const deskRows = Math.floor(ancho / 3)
-    const desksPerRow = Math.floor(largo / 2.5)
+    const numFloors = element.properties?.num_floors || 1
+    const floorHeight = element.properties?.floor_height || 3.0
     
-    for (let row = 0; row < Math.min(deskRows, 2); row++) {
-      for (let col = 0; col < Math.min(desksPerRow, 4); col++) {
-        const x = 1.5 + col * 2.5
-        const z = 1.5 + row * 3
-        
-        if (x < largo - 1 && z < ancho - 1) {
-          items.push({
-            key: `desk-${row}-${col}`,
-            type: 'desk',
-            position: [x, baseY + 0.4, z]
-          })
+    // Calcular escritorios según tamaño de oficina
+    const officeArea = largo * ancho
+    const desksNeeded = Math.max(2, Math.floor(officeArea / 8)) // 1 escritorio cada 8m²
+    const deskRows = Math.ceil(Math.sqrt(desksNeeded * (ancho / largo)))
+    const desksPerRow = Math.ceil(desksNeeded / deskRows)
+    
+    // Generar mobiliario para CADA planta
+    for (let floor = 0; floor < numFloors; floor++) {
+      const floorY = isMezzanine 
+        ? elevation + (floor * floorHeight)
+        : floor * floorHeight
+      
+      // Escritorios distribuidos uniformemente
+      let deskCount = 0
+      for (let row = 0; row < deskRows && deskCount < desksNeeded; row++) {
+        for (let col = 0; col < desksPerRow && deskCount < desksNeeded; col++) {
+          const spacing_x = (largo - 3) / Math.max(desksPerRow, 1)
+          const spacing_z = (ancho - 2) / Math.max(deskRows, 1)
+          const x = 1.5 + col * Math.max(spacing_x, 2.2)
+          const z = 1.2 + row * Math.max(spacing_z, 2.5)
+          
+          if (x < largo - 1 && z < ancho - 1) {
+            items.push({
+              key: `desk-f${floor}-${row}-${col}`,
+              type: 'desk',
+              position: [x, floorY + 0.4, z]
+            })
+            deskCount++
+          }
         }
+      }
+      
+      // Plantas decorativas en cada planta
+      items.push(
+        { key: `plant-f${floor}-1`, type: 'plant', position: [0.6, floorY + 0.5, 0.6] },
+        { key: `plant-f${floor}-2`, type: 'plant', position: [largo - 0.6, floorY + 0.5, 0.6] }
+      )
+      
+      // Mesa de reuniones para oficinas grandes (>50m²)
+      if (officeArea > 50 && largo > 8 && ancho > 6) {
+        items.push({
+          key: `meeting-f${floor}`,
+          type: 'meeting_table',
+          position: [largo - 2.5, floorY + 0.4, ancho - 2]
+        })
+      }
+      
+      // Archivadores para oficinas medianas (>30m²)
+      if (officeArea > 30) {
+        items.push({
+          key: `cabinet-f${floor}`,
+          type: 'cabinet',
+          position: [0.4, floorY + 0.6, ancho - 1]
+        })
       }
     }
     
-    // Plantas decorativas
-    items.push(
-      { key: 'plant-1', type: 'plant', position: [0.6, baseY + 0.5, 0.6] },
-      { key: 'plant-2', type: 'plant', position: [largo - 0.6, baseY + 0.5, 0.6] }
-    )
-    
     return items
-  }, [largo, ancho, elevation, showInterior, isMezzanine])
+  }, [largo, ancho, elevation, showInterior, isMezzanine, element.properties?.num_floors, element.properties?.floor_height])
 
   // V5.4: Número de plantas
   const numFloors = element.properties?.num_floors || 1
@@ -172,10 +207,10 @@ export default function DetailedOffice({
     
     return {
       position: [xPos, 0, 0.3],  // Cerca del frente
-      size: [elevatorWidth, elevation + alto * numFloors, elevatorDepth],
+      size: [elevatorWidth, elevation + floorHeight * numFloors, elevatorDepth],  // CORREGIDO
       isRight: isRightSide
     }
-  }, [largo, ancho, elevation, alto, numFloors, isMezzanine, hasElevator, isRightSide])
+  }, [largo, ancho, elevation, floorHeight, numFloors, isMezzanine, hasElevator, isRightSide])
 
   return (
     <group>
@@ -249,9 +284,9 @@ export default function DetailedOffice({
         )
       })}
 
-      {/* === PAREDES (altura total de todas las plantas) === */}
+      {/* === PAREDES (altura total de todas las plantas - usando floorHeight) === */}
       {(() => {
-        const totalHeight = alto * numFloors
+        const totalHeight = floorHeight * numFloors  // CORREGIDO: usar floorHeight consistente
         const baseY = isMezzanine ? elevation : 0
         
         return (
@@ -312,7 +347,7 @@ export default function DetailedOffice({
       ))}
 
       {/* === TECHO (V5.4: Ajustado a múltiples plantas) === */}
-      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + alto * numFloors, ancho / 2]} receiveShadow>
+      <mesh position={[largo / 2, (isMezzanine ? elevation : 0) + floorHeight * numFloors, ancho / 2]} receiveShadow>
         <boxGeometry args={[largo + 0.3, 0.12, ancho + 0.3]} />
         <meshStandardMaterial color={COLORS.structure} metalness={0.5} roughness={0.5} />
       </mesh>

@@ -82,7 +82,6 @@ export default function Step1Dimensions({ data, onChange }) {
   
   // Palets = posiciones en suelo × niveles
   const estimatedPallets = Math.floor((storageArea / M2_PER_PALLET_POSITION) * estimatedLevels);
-  const estimatedWorkers = Math.max(5, Math.floor(totalArea / 150));
 
   return (
     <Box>
@@ -299,12 +298,6 @@ export default function Step1Dimensions({ data, onChange }) {
                 <Typography variant="body2" color="text.secondary">Palets (est.)</Typography>
                 <Typography variant="h5" fontWeight={700} color="success.main">
                   ~{estimatedPallets.toLocaleString()}
-                </Typography>
-              </Grid>
-              <Grid item xs={6} sm={4} md={2}>
-                <Typography variant="body2" color="text.secondary">Personal (est.)</Typography>
-                <Typography variant="h5" fontWeight={700}>
-                  ~{estimatedWorkers}
                 </Typography>
               </Grid>
             </Grid>

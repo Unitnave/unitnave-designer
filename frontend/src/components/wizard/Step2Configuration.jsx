@@ -8,19 +8,17 @@
 import { useState, useEffect } from 'react';
 import { 
   Grid, Typography, Box, Paper, Alert,
-  ToggleButton, ToggleButtonGroup, Chip, TextField
+  ToggleButton, ToggleButtonGroup, Chip
 } from '@mui/material';
 import { 
-  LocalShipping, Inventory, ShoppingCart, 
-  AcUnit, Warehouse, Speed
+  LocalShipping, Speed
 } from '@mui/icons-material';
 
 export default function Step2Configuration({ data, onChange }) {
   const [config, setConfig] = useState({
-    activityType: data.activityType || 'industrial',
+    activityType: data.activityType || '3pl',
     machinery: data.machinery || 'retractil',
-    palletType: data.palletType || 'europalet',
-    workers: data.workers || null
+    palletType: data.palletType || 'europalet'
   });
 
   useEffect(() => {
@@ -33,47 +31,15 @@ export default function Step2Configuration({ data, onChange }) {
     }
   };
 
-  // Opciones de tipo de actividad
+  // Opciones de tipo de actividad - Solo logístico y cross-dock
   const activityTypes = [
     { 
-      value: 'industrial', 
-      label: 'Industrial', 
-      icon: <Warehouse />, 
-      description: 'Fabricación, materias primas',
-      aisleWidth: '3.5m',
-      rotation: 'Media'
-    },
-    { 
-      value: 'ecommerce', 
-      label: 'E-commerce', 
-      icon: <ShoppingCart />, 
-      description: 'Alto picking, alta rotación',
-      aisleWidth: '4.0m',
-      rotation: 'Muy alta'
-    },
-    { 
       value: '3pl', 
-      label: '3PL/Logística', 
+      label: 'Logístico / 3PL', 
       icon: <LocalShipping />, 
-      description: 'Multi-cliente, flexibilidad',
+      description: 'Operador logístico, multi-cliente',
       aisleWidth: '3.8m',
       rotation: 'Variable'
-    },
-    { 
-      value: 'almacen_masivo', 
-      label: 'Almacén Masivo', 
-      icon: <Inventory />, 
-      description: 'Stock largo plazo, densidad',
-      aisleWidth: '3.2m',
-      rotation: 'Baja'
-    },
-    { 
-      value: 'frio', 
-      label: 'Frío/Congelado', 
-      icon: <AcUnit />, 
-      description: 'Cámara frigorífica',
-      aisleWidth: '3.5m',
-      rotation: 'Media'
     },
     { 
       value: 'crossdock', 
@@ -85,7 +51,7 @@ export default function Step2Configuration({ data, onChange }) {
     }
   ];
 
-  // Opciones de maquinaria
+  // Opciones de maquinaria - incluye sistemas automatizados
   const machineryTypes = [
     { 
       value: 'frontal', 
@@ -117,7 +83,7 @@ export default function Step2Configuration({ data, onChange }) {
       label: 'Trilateral', 
       aisleWidth: 1.6,
       maxHeight: 16,
-      description: 'Automatizado, alta altura',
+      description: 'Guiado por raíl',
       icon: '🔺'
     },
     { 
@@ -127,6 +93,33 @@ export default function Step2Configuration({ data, onChange }) {
       maxHeight: 5,
       description: 'Pequeños almacenes',
       icon: '🔋'
+    },
+    { 
+      value: 'agv', 
+      label: 'AGV / AMR', 
+      aisleWidth: 2.5,
+      maxHeight: 8,
+      description: 'Vehículos autónomos',
+      icon: '🤖',
+      automated: true
+    },
+    { 
+      value: 'transelevador', 
+      label: 'Transelevador', 
+      aisleWidth: 1.5,
+      maxHeight: 40,
+      description: 'Almacén automático AS/RS',
+      icon: '🏗️',
+      automated: true
+    },
+    { 
+      value: 'shuttle', 
+      label: 'Sistema Shuttle', 
+      aisleWidth: 1.4,
+      maxHeight: 20,
+      description: 'Alta densidad automatizada',
+      icon: '🚀',
+      automated: true
     }
   ];
 
@@ -257,61 +250,37 @@ export default function Step2Configuration({ data, onChange }) {
           </Paper>
         </Grid>
 
-        {/* TIPO DE PALET Y TRABAJADORES */}
+        {/* TIPO DE PALET */}
         <Grid item xs={12} md={5}>
-          <Grid container spacing={3}>
-            {/* TIPO DE PALET */}
-            <Grid item xs={12}>
-              <Paper elevation={2} sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom>📦 Tipo de Palet</Typography>
-                <ToggleButtonGroup
-                  value={config.palletType}
-                  exclusive
-                  onChange={(_, v) => handleChange('palletType', v)}
-                  fullWidth
-                  sx={{ flexWrap: 'wrap' }}
+          <Paper elevation={2} sx={{ p: 3 }}>
+            <Typography variant="h6" gutterBottom>📦 Tipo de Palet</Typography>
+            <ToggleButtonGroup
+              value={config.palletType}
+              exclusive
+              onChange={(_, v) => handleChange('palletType', v)}
+              fullWidth
+              sx={{ flexWrap: 'wrap' }}
+            >
+              {palletTypes.map(pallet => (
+                <ToggleButton 
+                  key={pallet.value} 
+                  value={pallet.value}
+                  sx={{ 
+                    flex: '1 1 45%',
+                    flexDirection: 'column',
+                    py: 1.5,
+                    '&.Mui-selected': {
+                      bgcolor: 'primary.100'
+                    }
+                  }}
                 >
-                  {palletTypes.map(pallet => (
-                    <ToggleButton 
-                      key={pallet.value} 
-                      value={pallet.value}
-                      sx={{ 
-                        flex: '1 1 45%',
-                        flexDirection: 'column',
-                        py: 1.5,
-                        '&.Mui-selected': {
-                          bgcolor: 'primary.100'
-                        }
-                      }}
-                    >
-                      <Typography variant="h5">{pallet.icon}</Typography>
-                      <Typography variant="body2" fontWeight={600}>{pallet.label}</Typography>
-                      <Typography variant="caption" color="text.secondary">{pallet.dims}</Typography>
-                    </ToggleButton>
-                  ))}
-                </ToggleButtonGroup>
-              </Paper>
-            </Grid>
-
-            {/* TRABAJADORES */}
-            <Grid item xs={12}>
-              <Paper elevation={2} sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom>👷 Personal Estimado</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Opcional: para dimensionar oficinas y servicios
-                </Typography>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Número de trabajadores"
-                  value={config.workers || ''}
-                  onChange={(e) => handleChange('workers', parseInt(e.target.value) || null)}
-                  placeholder="Auto-calculado si vacío"
-                  helperText="Dejar vacío para cálculo automático"
-                />
-              </Paper>
-            </Grid>
-          </Grid>
+                  <Typography variant="h5">{pallet.icon}</Typography>
+                  <Typography variant="body2" fontWeight={600}>{pallet.label}</Typography>
+                  <Typography variant="caption" color="text.secondary">{pallet.dims}</Typography>
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Paper>
         </Grid>
 
         {/* RESUMEN */}

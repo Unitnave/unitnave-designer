@@ -1105,14 +1105,27 @@ class ReportGenerator:
         shelves = [el for el in self.result.elements if el.type == "shelf"]
         
         if docks and shelves:
-            dock_center_z = DOCK_STANDARDS["depth"] / 2
-            
+            # V6: Calcular distancia Manhattan REAL (X + Z) al muelle más cercano
             distancias = []
             for shelf in shelves:
+                shelf_length = self._get_attr(shelf.dimensions, "length", 5.0)
                 shelf_depth = self._get_attr(shelf.dimensions, "depth", 1.1)
+                shelf_center_x = shelf.position.x + (shelf_length / 2)
                 shelf_center_z = shelf.position.y + (shelf_depth / 2)
-                distancia = abs(shelf_center_z - dock_center_z)
-                distancias.append(distancia)
+                
+                # Encontrar el muelle más cercano (distancia Manhattan)
+                min_dist_to_dock = float('inf')
+                for dock in docks:
+                    dock_width = self._get_attr(dock.dimensions, "width", DOCK_STANDARDS["width"])
+                    dock_depth = self._get_attr(dock.dimensions, "depth", DOCK_STANDARDS["depth"])
+                    dock_center_x = dock.position.x + (dock_width / 2)
+                    dock_center_z = dock.position.z + (dock_depth / 2)
+                    
+                    # Distancia Manhattan = |Δx| + |Δz| (recorrido real de carretilla)
+                    dist_manhattan = abs(shelf_center_x - dock_center_x) + abs(shelf_center_z - dock_center_z)
+                    min_dist_to_dock = min(min_dist_to_dock, dist_manhattan)
+                
+                distancias.append(min_dist_to_dock)
             
             dist_max = max(distancias)
             dist_min = min(distancias)

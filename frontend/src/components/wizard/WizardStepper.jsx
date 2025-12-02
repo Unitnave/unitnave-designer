@@ -97,7 +97,9 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
       height_under: 4.0,        // Altura libre bajo oficina
       floor_height: 3.0,        // Altura de cada planta
       num_floors: 1,            // Número de plantas
-      area_per_floor: 100,      // m² por planta
+      office_length: 12,        // Largo de oficina (m)
+      office_width: 8,          // Ancho de oficina (m)
+      area_per_floor: 96,       // m² por planta (largo × ancho)
       hasElevator: true,
       hasStairs: true
     },
@@ -187,8 +189,13 @@ export default function WizardStepper({ onComplete, initialData = {} }) {
           height_under: wizardData.officeConfig.height_under || 4.0,
           floor_height: wizardData.officeConfig.floor_height || 3.0,
           num_floors: wizardData.officeConfig.num_floors || 1,
-          area_per_floor: wizardData.officeConfig.area_per_floor || 100,
-          area: (wizardData.officeConfig.area_per_floor || 100) * (wizardData.officeConfig.num_floors || 1),
+          // V6: Largo y ancho tienen prioridad sobre area_per_floor
+          office_length: wizardData.officeConfig.office_length || 12,
+          office_width: wizardData.officeConfig.office_width || 8,
+          area_per_floor: wizardData.officeConfig.area_per_floor || 
+            (wizardData.officeConfig.office_length || 12) * (wizardData.officeConfig.office_width || 8),
+          area: ((wizardData.officeConfig.office_length || 12) * (wizardData.officeConfig.office_width || 8)) * 
+            (wizardData.officeConfig.num_floors || 1),
           has_elevator: wizardData.officeConfig.hasElevator,
           has_stairs: wizardData.officeConfig.hasStairs
         } : null,

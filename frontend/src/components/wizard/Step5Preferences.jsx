@@ -13,8 +13,7 @@ import {
   Accordion, AccordionSummary, AccordionDetails, Tooltip
 } from '@mui/material';
 import { 
-  ExpandMore, Settings, Speed, Balance, Inventory,
-  Warehouse, LocalShipping, ShoppingCart, AcUnit, Layers, Info
+  ExpandMore, Settings, Speed, Balance, Inventory, Layers, Info
 } from '@mui/icons-material';
 
 export default function Step5Preferences({ data, onChange }) {
@@ -68,15 +67,6 @@ export default function Step5Preferences({ data, onChange }) {
       description: 'Minimiza distancias y tiempos',
       weights: 'Palets 25% | Distancia 35% | Accesibilidad 25%'
     }
-  ];
-
-  const warehouseTypes = [
-    { value: 'industrial', label: 'Industrial', icon: <Warehouse />, description: 'Almacén general' },
-    { value: 'ecommerce', label: 'E-commerce', icon: <ShoppingCart />, description: 'Alto picking' },
-    { value: '3pl', label: '3PL', icon: <LocalShipping />, description: 'Operador logístico' },
-    { value: 'almacen_masivo', label: 'Almacén Masivo', icon: <Inventory />, description: 'Stock puro' },
-    { value: 'crossdock', label: 'Cross-dock', icon: <LocalShipping />, description: 'Tránsito rápido' },
-    { value: 'frio', label: 'Cámara Fría', icon: <AcUnit />, description: 'Refrigerado' }
   ];
 
   return (
@@ -183,40 +173,6 @@ export default function Step5Preferences({ data, onChange }) {
                       {opt.weights}
                     </Typography>
                   </Box>
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          </Paper>
-        </Grid>
-
-        {/* TIPO DE ALMACÉN */}
-        <Grid item xs={12}>
-          <Paper elevation={2} sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>🏭 Tipo de Almacén</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Esto afecta a los escenarios que el optimizador evaluará (orientaciones, pasillos, etc.)
-            </Typography>
-            
-            <ToggleButtonGroup
-              value={preferences.warehouse_type}
-              exclusive
-              onChange={(_, v) => v && handleChange('warehouse_type', v)}
-              sx={{ flexWrap: 'wrap', gap: 1 }}
-            >
-              {warehouseTypes.map(type => (
-                <ToggleButton 
-                  key={type.value} 
-                  value={type.value}
-                  sx={{ 
-                    flexDirection: 'column', 
-                    py: 2, 
-                    px: 3,
-                    minWidth: 120
-                  }}
-                >
-                  <Box sx={{ color: 'primary.main', mb: 0.5 }}>{type.icon}</Box>
-                  <Typography variant="body2" fontWeight={600}>{type.label}</Typography>
-                  <Typography variant="caption" color="text.secondary">{type.description}</Typography>
                 </ToggleButton>
               ))}
             </ToggleButtonGroup>
@@ -389,19 +345,13 @@ export default function Step5Preferences({ data, onChange }) {
           <Paper elevation={0} sx={{ p: 3, bgcolor: preferences.enable_abc_zones ? 'success.50' : 'primary.50', border: '2px solid', borderColor: preferences.enable_abc_zones ? 'success.200' : 'primary.200' }}>
             <Typography variant="h6" gutterBottom>📊 Configuración Seleccionada</Typography>
             <Grid container spacing={2}>
-              <Grid item xs={6} md={2}>
+              <Grid item xs={6} md={3}>
                 <Typography variant="body2" color="text.secondary">Prioridad</Typography>
                 <Typography variant="h6" fontWeight={700}>
                   {priorityOptions.find(p => p.value === preferences.priority)?.label}
                 </Typography>
               </Grid>
-              <Grid item xs={6} md={2}>
-                <Typography variant="body2" color="text.secondary">Tipo</Typography>
-                <Typography variant="h6" fontWeight={700}>
-                  {warehouseTypes.find(t => t.value === preferences.warehouse_type)?.label}
-                </Typography>
-              </Grid>
-              <Grid item xs={6} md={2}>
+              <Grid item xs={6} md={3}>
                 <Typography variant="body2" color="text.secondary">Elementos</Typography>
                 <Typography variant="h6" fontWeight={700}>
                   {[

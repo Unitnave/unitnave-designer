@@ -10,14 +10,13 @@ import {
   Grid, Typography, Box, Slider, Paper, Alert,
   ToggleButton, ToggleButtonGroup, FormControlLabel, Switch, Chip
 } from '@mui/material';
-import { LocalShipping, Warehouse, Speed } from '@mui/icons-material';
+import { LocalShipping, Warehouse } from '@mui/icons-material';
 
 export default function Step4Docks({ data, onChange }) {
   const [dockConfig, setDockConfig] = useState(data.dockConfig || {
     count: 4,
     position: 'front',
     dockWidth: 3.5,
-    maneuverDepth: 4.0,
     includeExpedition: true,
     expeditionDepth: 8,
     crossDocking: false
@@ -274,39 +273,6 @@ export default function Step4Docks({ data, onChange }) {
                 </Alert>
               </Box>
             )}
-          </Paper>
-        </Grid>
-
-        {/* ZONA DE MANIOBRA */}
-        <Grid item xs={12} md={6}>
-          <Paper elevation={2} sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              <Speed sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Zona de Maniobra
-            </Typography>
-            <Box sx={{ mt: 3, px: 2 }}>
-              <Typography variant="body2" color="text.secondary" gutterBottom>
-                Profundidad: <strong>{dockConfig.maneuverDepth}m</strong>
-              </Typography>
-              <Slider
-                value={dockConfig.maneuverDepth}
-                onChange={(_, v) => handleChange('maneuverDepth', v)}
-                min={3}
-                max={8}
-                step={0.5}
-                marks={[
-                  { value: 3, label: '3m' },
-                  { value: 4, label: '4m ★' },
-                  { value: 6, label: '6m' },
-                  { value: 8, label: '8m' }
-                ]}
-                valueLabelDisplay="auto"
-              />
-              <Alert severity="success" sx={{ mt: 2 }}>
-                V5 optimizado: <strong>4m</strong> suficiente para retráctiles (vs 12m tradicional).
-                Ganas {(12 - dockConfig.maneuverDepth) * warehouseLength}m² de almacenamiento.
-              </Alert>
-            </Box>
           </Paper>
         </Grid>
 
