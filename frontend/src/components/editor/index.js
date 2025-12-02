@@ -34,7 +34,7 @@ export {
 } from './AutoDimensions'
 
 // Transform
-export { default as TransformableElement, useTransformControls } from './TransformableElement'
+export { default as TransformableElement, useTransformControls } from './TransformableElement.jsx'
 
 // Guías de Snap (V2.2)
 export { default as SnapGuides, ShiftIndicator } from './SnapGuides'

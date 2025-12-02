@@ -35,7 +35,7 @@ import EditorToolbar, { EditorToolbarMini } from './EditorToolbar'
 import LayersPanel from './LayersPanel'
 import EditorGrid, { SnapIndicator } from './EditorGrid'
 import AutoDimensions from './AutoDimensions'
-import TransformableElement from './TransformableElement'
+import TransformableElement from './TransformableElement.jsx'
 import { ValidationMarkers3D, ValidationPanel, DensityIndicator } from './ValidationWarnings'
 
 // 3D components (importar desde tu proyecto)

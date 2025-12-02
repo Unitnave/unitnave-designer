@@ -1,256 +1,357 @@
 /**
- * UNITNAVE Designer - Manual Design Mode
- * Modo de diseño manual (legacy)
+ * UNITNAVE Designer - Transformable Element V2
  * 
- * @version 1.0
+ * Wrapper que permite mover y rotar elementos 3D con:
+ * - TransformControls de drei
+ * - Snap integrado
+ * - Límites de movimiento
+ * - Feedback visual durante drag
+ * - Integración con Undo/Redo
+ * 
+ * @version 2.0
  */
 
-import { useState, useCallback, useEffect } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei'
+import React, { useRef, useEffect, useState, useCallback } from 'react'
+import { TransformControls } from '@react-three/drei'
+import { Html } from '@react-three/drei'
+import * as THREE from 'three'
 
-// Stores
-import useWarehouseStore from '../stores/useWarehouseStore'
-import useUIStore from '../stores/useUIStore'
-import useCalculationsStore from '../stores/useCalculationsStore'
+import useEditorStore from '../stores/useEditorStore'
 
-// Componentes
-import Warehouse3DPro from './Warehouse3DPro'
-import Sidebar from './Sidebar'
-import FloatingPanel from './FloatingPanel'
-import AddElementModal from './AddElementModal'
-import Notification from './Notification'
-import LegendPanel from './ui/LegendPanel'
-
-export default function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
-  const { dimensions, elements } = useWarehouseStore()
-  const { viewMode, setViewMode } = useUIStore()
-  const { calculateCapacity } = useCalculationsStore()
+export default function TransformableElement({
+  children,
+  element,
+  enabled = true,
+  onTransformEnd,
+  updateElement  // Función para actualizar el elemento en el store
+}) {
+  const transformRef = useRef()
+  const groupRef = useRef()
   
-  const [showLegend, setShowLegend] = useState(true)
-  const [isCalculating, setIsCalculating] = useState(false)
-
-  // Calcular automáticamente al cambiar elementos
-  useEffect(() => {
-    if (elements.length > 0) {
-      calculateCapacity(dimensions, elements)
-    }
-  }, [elements, dimensions, calculateCapacity])
-
-  const handleCalculate = useCallback(async () => {
-    if (elements.length === 0) return
+  const {
+    currentTool,
+    snapConfig,
+    snapPosition,
+    gridConfig,
+    isElementLocked,
+    pushToHistory,
+    setIsTransforming,
+    selectedElements,
+    // Nuevos para guías dinámicas
+    setDragOrigin,
+    clearDragOrigin,
+    calculateGuides,
+    shiftPressed
+  } = useEditorStore()
+  
+  const [isDragging, setIsDragging] = useState(false)
+  const [previewPosition, setPreviewPosition] = useState(null)
+  const [initialState, setInitialState] = useState(null)
+  
+  // Verificar si este elemento está seleccionado
+  const isSelected = selectedElements.includes(element?.id)
+  
+  // Verificar si la capa está bloqueada
+  const isLocked = element ? isElementLocked(element.type) : false
+  
+  // Determinar modo de transformación según herramienta actual
+  const transformMode = currentTool === 'rotate' ? 'rotate' : 'translate'
+  
+  // Solo habilitar si está seleccionado y no bloqueado
+  const isTransformEnabled = enabled && isSelected && !isLocked && 
+    (currentTool === 'move' || currentTool === 'rotate' || currentTool === 'select')
+  
+  // Obtener dimensiones de la nave del contexto (pasadas como prop o del store)
+  const getDimensions = useCallback(() => {
+    // Asumimos que las dimensiones vienen del warehouse store
+    return { length: 80, width: 40 } // Default, debería venir de props
+  }, [])
+  
+  // Handler cuando empieza el drag
+  const handleDragStart = useCallback(() => {
+    if (!element) return
     
-    setIsCalculating(true)
-    try {
-      await calculateCapacity(dimensions, elements)
-    } catch (e) {
-      console.error('Error:', e)
-    } finally {
-      setIsCalculating(false)
+    setIsDragging(true)
+    setIsTransforming(true)
+    
+    // Guardar origen para modo ortogonal
+    const initialX = element.position?.x || 0
+    const initialZ = element.position?.y ?? element.position?.z ?? 0
+    setDragOrigin({ x: initialX, z: initialZ })
+    
+    // Guardar estado inicial para undo
+    setInitialState({
+      position: { ...element.position },
+      rotation: element.rotation || 0
+    })
+  }, [element, setIsTransforming, setDragOrigin])
+  
+  // Handler durante el drag
+  const handleDrag = useCallback(() => {
+    if (!groupRef.current || !element) return
+    
+    const pos = groupRef.current.position
+    const dimensions = getDimensions()
+    
+    // Obtener dimensiones del elemento para guías
+    const elWidth = element.dimensions?.length || 2.7
+    const elDepth = element.dimensions?.depth || 1.1
+    
+    // Calcular guías dinámicas (alineación con otros elementos)
+    // TODO: Pasar lista de elementos reales
+    calculateGuides(pos.x, pos.z, elWidth, elDepth, [], element.id)
+    
+    // Aplicar snap (ahora incluye ortho con SHIFT y guías)
+    const snapped = snapPosition(pos.x, pos.z, [], dimensions, element.id)
+    
+    setPreviewPosition({
+      x: snapped.x,
+      z: snapped.z,
+      snappedTo: snapped.snappedTo
+    })
+    
+    // Actualizar posición visual con snap
+    if (snapConfig.enabled && snapped.snappedTo) {
+      groupRef.current.position.x = snapped.x
+      groupRef.current.position.z = snapped.z
     }
-  }, [dimensions, elements, calculateCapacity])
-
-  const is3DView = viewMode === '3D'
-
+  }, [element, snapPosition, snapConfig.enabled, getDimensions, calculateGuides])
+  
+  // Handler cuando termina el drag
+  const handleDragEnd = useCallback(() => {
+    if (!groupRef.current || !element) return
+    
+    setIsDragging(false)
+    setIsTransforming(false)
+    setPreviewPosition(null)
+    
+    // Limpiar guías y origen
+    clearDragOrigin()
+    
+    const pos = groupRef.current.position
+    const rot = groupRef.current.rotation
+    const dimensions = getDimensions()
+    
+    // Aplicar snap final
+    const snapped = snapPosition(pos.x, pos.z, [], dimensions)
+    
+    // Aplicar límites (mantener dentro de la nave)
+    const elLength = element.dimensions?.length || 2.7
+    const elDepth = element.dimensions?.depth || 1.1
+    
+    const finalX = Math.max(0, Math.min(snapped.x, dimensions.length - elLength))
+    const finalZ = Math.max(0, Math.min(snapped.z, dimensions.width - elDepth))
+    
+    // Calcular rotación en grados
+    const rotationDeg = Math.round((rot.y * 180) / Math.PI)
+    
+    // Actualizar elemento
+    const updatedPosition = {
+      x: Math.round(finalX * 100) / 100,
+      y: Math.round(finalZ * 100) / 100,  // y es Z en el modelo 2D
+      z: element.position?.z || 0
+    }
+    
+    if (updateElement) {
+      updateElement(element.id, {
+        position: updatedPosition,
+        rotation: rotationDeg
+      })
+    }
+    
+    // Registrar en historial para undo
+    if (initialState && onTransformEnd) {
+      onTransformEnd({
+        elementId: element.id,
+        before: initialState,
+        after: {
+          position: updatedPosition,
+          rotation: rotationDeg
+        }
+      })
+    }
+    
+    // Push to history
+    pushToHistory({
+      type: 'transform',
+      elementId: element.id,
+      before: initialState,
+      after: {
+        position: updatedPosition,
+        rotation: rotationDeg
+      },
+      description: `${transformMode === 'rotate' ? 'Rotar' : 'Mover'} ${element.type}`
+    })
+    
+    setInitialState(null)
+  }, [
+    element, 
+    getDimensions, 
+    snapPosition, 
+    updateElement, 
+    onTransformEnd, 
+    initialState,
+    pushToHistory,
+    setIsTransforming,
+    transformMode,
+    clearDragOrigin
+  ])
+  
+  // Configurar eventos de TransformControls
+  useEffect(() => {
+    const controls = transformRef.current
+    if (!controls) return
+    
+    controls.addEventListener('dragging-changed', (event) => {
+      if (event.value) {
+        handleDragStart()
+      } else {
+        handleDragEnd()
+      }
+    })
+    
+    controls.addEventListener('change', handleDrag)
+    
+    return () => {
+      controls.removeEventListener('dragging-changed', handleDragStart)
+      controls.removeEventListener('change', handleDrag)
+    }
+  }, [handleDragStart, handleDragEnd, handleDrag])
+  
+  // Si no está habilitado o no está seleccionado, renderizar solo children
+  if (!isTransformEnabled) {
+    return (
+      <group ref={groupRef}>
+        {children}
+      </group>
+    )
+  }
+  
   return (
-    <div className="app" style={{ background: '#ffffff' }}>
-      {/* Header */}
-      <header style={{
-        background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-        padding: '10px 20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottom: '1px solid rgba(255,255,255,0.1)'
-      }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '32px' }}>🏭</span>
-          <div>
+    <group>
+      <TransformControls
+        ref={transformRef}
+        object={groupRef.current}
+        mode={transformMode}
+        size={0.8}
+        showX={transformMode === 'translate'}
+        showY={false}  // No permitir mover en Y (altura)
+        showZ={transformMode === 'translate'}
+        translationSnap={snapConfig.enabled ? snapConfig.snapDistance : null}
+        rotationSnap={
+          snapConfig.orthoMode 
+            ? Math.PI / 2  // 90 grados
+            : snapConfig.enabled 
+              ? Math.PI / 12  // 15 grados
+              : null
+        }
+        space="world"
+      />
+      
+      <group ref={groupRef}>
+        {children}
+        
+        {/* Indicador de posición durante drag */}
+        {isDragging && previewPosition && (
+          <Html
+            position={[0, 2, 0]}
+            center
+            style={{ pointerEvents: 'none' }}
+          >
             <div style={{
-              fontSize: '20px',
-              fontWeight: '800',
-              background: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              letterSpacing: '2px'
+              background: '#3b82f6',
+              color: 'white',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 600,
+              fontFamily: 'monospace',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
             }}>
-              UNITNAVE
+              X: {previewPosition.x.toFixed(2)}m | Z: {previewPosition.z.toFixed(2)}m
+              {previewPosition.snappedTo && (
+                <span style={{ 
+                  marginLeft: '8px', 
+                  background: '#22c55e',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontSize: '10px'
+                }}>
+                  SNAP: {previewPosition.snappedTo}
+                </span>
+              )}
             </div>
+          </Html>
+        )}
+        
+        {/* Indicador de herramienta activa cuando está seleccionado */}
+        {!isDragging && (
+          <Html
+            position={[0, -0.5, 0]}
+            center
+            style={{ pointerEvents: 'none' }}
+          >
             <div style={{
+              background: transformMode === 'rotate' ? '#a855f7' : '#3b82f6',
+              color: 'white',
+              padding: '3px 8px',
+              borderRadius: '4px',
               fontSize: '10px',
-              color: 'rgba(255,255,255,0.6)',
-              letterSpacing: '4px'
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
             }}>
-              DESIGNER PRO
+              {transformMode === 'rotate' ? '↻ Rotar' : '✥ Mover'}
             </div>
-          </div>
-        </div>
-
-        {/* Vistas */}
-        <div style={{ display: 'flex', gap: '6px' }}>
-          {[
-            { id: '3D', icon: '🎮', label: '3D' },
-            { id: 'Planta', icon: '📐', label: 'Planta' },
-            { id: 'Alzado', icon: '🏗️', label: 'Alzado' },
-            { id: 'Perfil', icon: '📊', label: 'Perfil' }
-          ].map(v => (
-            <button
-              key={v.id}
-              onClick={() => setViewMode(v.id)}
-              style={{
-                padding: '10px 18px',
-                background: viewMode === v.id
-                  ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
-                  : 'rgba(255,255,255,0.05)',
-                border: viewMode === v.id ? 'none' : '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '8px',
-                color: 'white',
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: viewMode === v.id ? '600' : '400',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                transition: 'all 0.2s'
-              }}
-            >
-              <span>{v.icon}</span>
-              {v.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Acciones */}
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <button
-            onClick={() => setShowLegend(!showLegend)}
-            style={{
-              padding: '10px 16px',
-              background: 'rgba(255,255,255,0.1)',
-              border: '1px solid rgba(255,255,255,0.15)',
-              borderRadius: '8px',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '13px'
-            }}
-          >
-            📊 {showLegend ? 'Ocultar' : 'Mostrar'} Info
-          </button>
-
-          <button
-            onClick={handleCalculate}
-            disabled={isCalculating || elements.length === 0}
-            style={{
-              padding: '10px 20px',
-              background: elements.length === 0 ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              border: 'none',
-              borderRadius: '8px',
-              color: 'white',
-              cursor: elements.length === 0 ? 'not-allowed' : (isCalculating ? 'wait' : 'pointer'),
-              fontSize: '14px',
-              fontWeight: '600',
-              boxShadow: elements.length === 0 ? 'none' : '0 4px 15px rgba(16, 185, 129, 0.3)',
-              opacity: (isCalculating || elements.length === 0) ? 0.5 : 1
-            }}
-          >
-            {isCalculating ? '⏳ Calculando...' : '🧮 Calcular'}
-          </button>
-
-          {onSwitchToEditor && (
-            <button
-              onClick={onSwitchToEditor}
-              style={{
-                padding: '10px 20px',
-                background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                border: 'none',
-                borderRadius: '8px',
-                color: 'white',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '600',
-                boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)'
-              }}
-            >
-              📐 Editor
-            </button>
-          )}
-
-          {onSwitchToWizard && (
-            <button
-              onClick={onSwitchToWizard}
-              style={{
-                padding: '10px 20px',
-                background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
-                border: 'none',
-                borderRadius: '8px',
-                color: 'white',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '600',
-                boxShadow: '0 4px 15px rgba(34, 197, 94, 0.3)'
-              }}
-            >
-              ⚡ Wizard
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* Main */}
-      <div className="main-content">
-        <Sidebar />
-
-        <div className="canvas-container" style={{ position: 'relative', flex: 1 }}>
-          <Canvas
-            style={{ background: '#ffffff' }}
-            gl={{ preserveDrawingBuffer: true, antialias: true, alpha: false }}
-          >
-            <color attach="background" args={['#ffffff']} />
-            <fog attach="fog" args={['#ffffff', 100, 300]} />
-
-            {is3DView ? (
-              <PerspectiveCamera
-                makeDefault
-                position={[dimensions.length * 0.8, dimensions.height * 2, dimensions.width * 0.8]}
-                fov={50}
-                near={0.1}
-                far={1000}
-              />
-            ) : (
-              <OrthographicCamera
-                makeDefault
-                position={[0, 100, 0]}
-                zoom={8}
-                near={-500}
-                far={500}
-              />
-            )}
-
-            <OrbitControls
-              enableDamping
-              dampingFactor={0.05}
-              minDistance={5}
-              maxDistance={300}
-              maxPolarAngle={Math.PI / 2}
-            />
-
-            {/* Iluminación sin sombras - Estilo plano técnico */}
-            <ambientLight intensity={1.2} />
-            <directionalLight position={[50, 100, 50]} intensity={0.6} />
-            <directionalLight position={[-50, 50, -50]} intensity={0.5} />
-            <hemisphereLight args={['#ffffff', '#e2e8f0', 0.5]} />
-
-            <Warehouse3DPro />
-          </Canvas>
-
-          {showLegend && <LegendPanel />}
-          <FloatingPanel />
-        </div>
-
-        <AddElementModal />
-        <Notification />
-      </div>
-    </div>
+          </Html>
+        )}
+      </group>
+      
+      {/* Preview de posición final con snap */}
+      {isDragging && previewPosition && snapConfig.enabled && previewPosition.snappedTo && (
+        <mesh 
+          position={[previewPosition.x, 0.02, previewPosition.z]}
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          <planeGeometry args={[
+            element?.dimensions?.length || 2.7,
+            element?.dimensions?.depth || 1.1
+          ]} />
+          <meshBasicMaterial 
+            color="#22c55e" 
+            transparent 
+            opacity={0.3}
+          />
+        </mesh>
+      )}
+    </group>
   )
+}
+
+/**
+ * Hook para usar TransformControls con un elemento
+ */
+export function useTransformControls(elementId) {
+  const {
+    currentTool,
+    setTool,
+    selectedElements,
+    selectElement,
+    isTransforming,
+    setIsTransforming
+  } = useEditorStore()
+  
+  const isSelected = selectedElements.includes(elementId)
+  const transformMode = currentTool === 'rotate' ? 'rotate' : 'translate'
+  
+  return {
+    transformMode,
+    setTransformMode: (mode) => setTool(mode === 'rotate' ? 'rotate' : 'move'),
+    isSelected,
+    isTransforming,
+    selectForTransform: () => selectElement(elementId),
+    deselectFromTransform: () => selectElement(null)
+  }
 }
