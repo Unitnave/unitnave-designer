@@ -1,16 +1,12 @@
 /**
- * UNITNAVE Designer - App.jsx v3.1 CORREGIDO
+ * UNITNAVE Designer - App.jsx v3.2 CORREGIDO
  * 
- * FLUJO CORRECTO:
- * 1. Wizard (6 pasos) → Optimizar
- * 2. Ver Resultados (métricas, 3D, informe)
- * 3. OPCIONAL: Editor AutoCAD para ajustes manuales
+ * CORRECCIONES v3.2:
+ * - Banner "MODO EDICIÓN" movido abajo izquierda (no bloquea menú)
+ * - Conversión de TODOS los tipos de elementos (oficinas, muelles, zonas, etc.)
+ * - Scroll habilitado en wizard
  * 
- * CORRECCIONES v3.1:
- * - Scroll habilitado en modo wizard
- * - overflow condicional según el modo
- * 
- * @version 3.1
+ * @version 3.2
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
@@ -72,7 +68,7 @@ const theme = createTheme({
 })
 
 // ============================================================
-// COMPONENTE MANUAL DESIGN MODE (incluido aquí, no archivo separado)
+// COMPONENTE MANUAL DESIGN MODE
 // ============================================================
 function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
   const { dimensions, elements } = useWarehouseStore()
@@ -82,7 +78,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
   const [showLegend, setShowLegend] = useState(true)
   const [isCalculating, setIsCalculating] = useState(false)
 
-  // Calcular automáticamente al cambiar elementos
   useEffect(() => {
     if (elements.length > 0) {
       calculateCapacity(dimensions, elements)
@@ -106,7 +101,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
 
   return (
     <div className="app" style={{ background: '#ffffff' }}>
-      {/* Header */}
       <header style={{
         background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
         padding: '10px 20px',
@@ -115,7 +109,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
         justifyContent: 'space-between',
         borderBottom: '1px solid rgba(255,255,255,0.1)'
       }}>
-        {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ fontSize: '32px' }}>🏭</span>
           <div>
@@ -139,7 +132,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
           </div>
         </div>
 
-        {/* Vistas */}
         <div style={{ display: 'flex', gap: '6px' }}>
           {[
             { id: '3D', icon: '🎮', label: '3D' },
@@ -173,7 +165,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
           ))}
         </div>
 
-        {/* Acciones */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button
             onClick={() => setShowLegend(!showLegend)}
@@ -249,7 +240,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
         </div>
       </header>
 
-      {/* Main */}
       <div className="main-content">
         <Sidebar />
 
@@ -287,7 +277,6 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
               maxPolarAngle={Math.PI / 2}
             />
 
-            {/* Iluminación sin sombras - Estilo plano técnico */}
             <ambientLight intensity={1.2} />
             <directionalLight position={[50, 100, 50]} intensity={0.6} />
             <directionalLight position={[-50, 50, -50]} intensity={0.5} />
@@ -311,10 +300,8 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
 // COMPONENTE APP PRINCIPAL
 // ============================================================
 function App() {
-  // Estado del modo actual: 'wizard' | 'manual' | 'editor'
   const [mode, setMode] = useState('wizard')
   
-  // Datos del warehouse store
   const { 
     dimensions,
     elements,
@@ -322,25 +309,77 @@ function App() {
     machinery
   } = useWarehouseStore()
   
-  // Convertir resultado de optimización a elementos editables
   const [editableElements, setEditableElements] = useState([])
   
-  // Cuando hay elementos en el store, usarlos para el editor
+  // ============================================================
+  // CONVERTIR ELEMENTOS DEL STORE AL FORMATO DEL EDITOR
+  // ============================================================
   useEffect(() => {
     if (elements && elements.length > 0) {
-      const converted = elements.map((el, index) => ({
-        id: el.id || `${el.type}-${index}`,
-        type: el.type,
-        position: {
+      console.log('📦 Elementos del store:', elements.length, elements)
+      
+      // Convertir TODOS los tipos de elementos
+      const converted = elements.map((el, index) => {
+        const type = el.type || 'unknown'
+        
+        // Extraer posición (diferentes formatos posibles)
+        const position = {
           x: el.position?.x ?? el.x ?? 0,
           y: el.position?.y ?? el.y ?? 0,
           z: el.position?.z ?? 0
-        },
-        dimensions: el.dimensions || {},
-        properties: el.properties || {},
-        rotation: el.rotation || 0,
-        layer: el.layer || el.type
-      }))
+        }
+        
+        // Extraer dimensiones según tipo
+        let dims = {}
+        if (type === 'shelf') {
+          dims = {
+            length: el.dimensions?.length ?? el.length ?? 2.7,
+            depth: el.dimensions?.depth ?? el.depth ?? 1.1,
+            height: el.dimensions?.height ?? el.height ?? 10
+          }
+        } else if (type === 'dock') {
+          dims = {
+            width: el.dimensions?.width ?? el.width ?? 3.5,
+            depth: el.dimensions?.depth ?? 0.3,
+            height: el.dimensions?.height ?? 4.5
+          }
+        } else if (type === 'office') {
+          dims = {
+            length: el.dimensions?.length ?? el.dimensions?.largo ?? el.largo ?? 12,
+            width: el.dimensions?.width ?? el.dimensions?.ancho ?? el.ancho ?? 8,
+            height: el.dimensions?.height ?? 3
+          }
+        } else if (type === 'zone' || type === 'operational_zone') {
+          dims = {
+            length: el.dimensions?.length ?? el.dimensions?.largo ?? 10,
+            width: el.dimensions?.width ?? el.dimensions?.ancho ?? 10,
+            height: 0.1
+          }
+        } else if (type === 'service_room' || type === 'technical_room') {
+          dims = {
+            length: el.dimensions?.length ?? el.dimensions?.largo ?? 6,
+            width: el.dimensions?.width ?? el.dimensions?.ancho ?? 4,
+            height: el.dimensions?.height ?? 3
+          }
+        } else {
+          dims = el.dimensions || { length: 2, width: 2, height: 2 }
+        }
+        
+        return {
+          id: el.id || `${type}-${index}`,
+          type: type,
+          position: position,
+          dimensions: dims,
+          properties: el.properties || {},
+          rotation: el.rotation || 0,
+          layer: type === 'shelf' ? 'shelves' : 
+                 type === 'dock' ? 'docks' : 
+                 type === 'office' ? 'offices' : 
+                 type === 'zone' || type === 'operational_zone' ? 'zones' : 'other'
+        }
+      })
+      
+      console.log('✅ Elementos convertidos:', converted.length, converted)
       setEditableElements(converted)
     }
   }, [elements])
@@ -348,16 +387,21 @@ function App() {
   // También escuchar optimizationResult.layout
   useEffect(() => {
     if (optimizationResult?.layout) {
+      console.log('📊 Layout del optimizador:', optimizationResult.layout)
       const converted = convertLayoutToElements(optimizationResult.layout)
+      console.log('✅ Layout convertido:', converted.length, converted)
       setEditableElements(converted)
     }
   }, [optimizationResult])
   
-  // Función para convertir layout del backend a elementos del editor
+  // ============================================================
+  // FUNCIÓN PARA CONVERTIR LAYOUT DEL BACKEND
+  // ============================================================
   const convertLayoutToElements = (layout) => {
     const elements = []
     
-    if (layout.shelves) {
+    // Convertir ESTANTERÍAS
+    if (layout.shelves && layout.shelves.length > 0) {
       layout.shelves.forEach((shelf, index) => {
         elements.push({
           id: shelf.id || `shelf-${index}`,
@@ -365,7 +409,7 @@ function App() {
           position: {
             x: shelf.position?.x || shelf.x || 0,
             y: shelf.position?.y || shelf.y || 0,
-            z: shelf.position?.z || 0
+            z: 0
           },
           dimensions: {
             length: shelf.dimensions?.length || shelf.length || 2.7,
@@ -377,12 +421,14 @@ function App() {
             positions: shelf.positions_per_level || 3,
             zone: shelf.zone || 'A',
             label: shelf.label || `Rack ${index + 1}`
-          }
+          },
+          layer: 'shelves'
         })
       })
     }
     
-    if (layout.docks) {
+    // Convertir MUELLES
+    if (layout.docks && layout.docks.length > 0) {
       layout.docks.forEach((dock, index) => {
         elements.push({
           id: dock.id || `dock-${index}`,
@@ -394,18 +440,20 @@ function App() {
           },
           dimensions: {
             width: dock.dimensions?.width || dock.width || 3.5,
-            depth: dock.dimensions?.depth || 0.3,
+            depth: dock.dimensions?.depth || dock.depth || 0.3,
             height: dock.dimensions?.height || 4.5
           },
           properties: {
             type: dock.type || 'carga',
             label: dock.label || `Muelle ${index + 1}`
-          }
+          },
+          layer: 'docks'
         })
       })
     }
     
-    if (layout.offices) {
+    // Convertir OFICINAS
+    if (layout.offices && layout.offices.length > 0) {
       layout.offices.forEach((office, index) => {
         elements.push({
           id: office.id || `office-${index}`,
@@ -416,18 +464,21 @@ function App() {
             z: 0
           },
           dimensions: {
-            length: office.dimensions?.length || office.length || 12,
-            width: office.dimensions?.width || office.width || 8,
+            length: office.dimensions?.length || office.length || office.largo || 12,
+            width: office.dimensions?.width || office.width || office.ancho || 8,
             height: office.dimensions?.height || 3
           },
           properties: {
-            label: office.label || 'Oficina'
-          }
+            label: office.label || 'Oficina',
+            floor: office.floor || 'ground'
+          },
+          layer: 'offices'
         })
       })
     }
     
-    if (layout.operational_zones) {
+    // Convertir ZONAS OPERATIVAS
+    if (layout.operational_zones && layout.operational_zones.length > 0) {
       layout.operational_zones.forEach((zone, index) => {
         elements.push({
           id: zone.id || `zone-${index}`,
@@ -438,16 +489,75 @@ function App() {
             z: 0
           },
           dimensions: {
-            length: zone.dimensions?.length || zone.length || 10,
-            width: zone.dimensions?.width || zone.width || 10
+            length: zone.dimensions?.length || zone.length || zone.largo || 10,
+            width: zone.dimensions?.width || zone.width || zone.ancho || 10,
+            height: 0.1
           },
           properties: {
             zoneType: zone.type || zone.zone_type || 'picking',
             label: zone.label || zone.name || `Zona ${index + 1}`
-          }
+          },
+          layer: 'zones'
         })
       })
     }
+    
+    // Convertir SALAS DE SERVICIO
+    if (layout.service_rooms && layout.service_rooms.length > 0) {
+      layout.service_rooms.forEach((room, index) => {
+        elements.push({
+          id: room.id || `service-${index}`,
+          type: 'service_room',
+          position: {
+            x: room.position?.x || room.x || 0,
+            y: room.position?.y || room.y || 0,
+            z: 0
+          },
+          dimensions: {
+            length: room.dimensions?.length || room.length || 6,
+            width: room.dimensions?.width || room.width || 4,
+            height: room.dimensions?.height || 3
+          },
+          properties: {
+            roomType: room.type || 'vestuarios',
+            label: room.label || room.name || `Servicio ${index + 1}`
+          },
+          layer: 'services'
+        })
+      })
+    }
+    
+    // Convertir SALA TÉCNICA
+    if (layout.technical_room) {
+      const room = layout.technical_room
+      elements.push({
+        id: room.id || 'technical-room',
+        type: 'technical_room',
+        position: {
+          x: room.position?.x || room.x || 0,
+          y: room.position?.y || room.y || 0,
+          z: 0
+        },
+        dimensions: {
+          length: room.dimensions?.length || room.length || 8,
+          width: room.dimensions?.width || room.width || 6,
+          height: room.dimensions?.height || 4
+        },
+        properties: {
+          label: 'Sala Técnica'
+        },
+        layer: 'services'
+      })
+    }
+    
+    console.log('🔄 Elementos convertidos del layout:', {
+      shelves: layout.shelves?.length || 0,
+      docks: layout.docks?.length || 0,
+      offices: layout.offices?.length || 0,
+      zones: layout.operational_zones?.length || 0,
+      services: layout.service_rooms?.length || 0,
+      total: elements.length
+    })
     
     return elements
   }
@@ -486,6 +596,12 @@ function App() {
         position: { x: el.position.x, y: el.position.y },
         dimensions: el.dimensions,
         type: el.properties?.zoneType
+      })),
+      service_rooms: editableElements.filter(el => el.type === 'service_room').map(el => ({
+        id: el.id,
+        position: { x: el.position.x, y: el.position.y },
+        dimensions: el.dimensions,
+        type: el.properties?.roomType
       }))
     }
     
@@ -498,7 +614,7 @@ function App() {
       })
     }
     
-    console.log('Layout guardado:', layout)
+    console.log('💾 Layout guardado:', layout)
     alert('✅ Cambios guardados correctamente')
   }
   
@@ -506,18 +622,17 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       
-      {/* ========== MODO WIZARD (DesignPage con scroll) ========== */}
+      {/* ========== MODO WIZARD (con scroll) ========== */}
       {mode === 'wizard' && (
         <Box sx={{ 
           width: '100vw', 
           minHeight: '100vh',
-          overflow: 'auto',  // ✅ SCROLL HABILITADO
+          overflow: 'auto',
           position: 'relative',
           bgcolor: 'background.default'
         }}>
           <DesignPage />
           
-          {/* Botón flotante para ir al Editor (solo si hay elementos) */}
           {elements && elements.length > 0 && (
             <Box sx={{
               position: 'fixed',
@@ -562,12 +677,12 @@ function App() {
         </Box>
       )}
       
-      {/* ========== MODO EDITOR (sin scroll, 100vh) ========== */}
+      {/* ========== MODO EDITOR ========== */}
       {mode === 'editor' && (
         <Box sx={{ 
           width: '100vw', 
           height: '100vh', 
-          overflow: 'hidden',  // Editor ocupa toda la pantalla
+          overflow: 'hidden',
           position: 'relative'
         }}>
           <Warehouse3DEditor
@@ -581,6 +696,7 @@ function App() {
             onElementsChange={handleElementsChange}
           />
           
+          {/* Botones de navegación - DERECHA ARRIBA */}
           <Box sx={{
             position: 'fixed',
             top: 70,
@@ -638,27 +754,27 @@ function App() {
             </Tooltip>
           </Box>
           
-          {/* Indicador de modo editor */}
+          {/* Banner MODO EDICIÓN - ABAJO IZQUIERDA (no bloquea menú) */}
           <Box sx={{
             position: 'fixed',
-            top: 20,
-            left: '50%',
-            transform: 'translateX(-50%)',
+            bottom: 20,
+            left: 20,
             bgcolor: 'rgba(59, 130, 246, 0.95)',
             color: 'white',
-            px: 3,
+            px: 2,
             py: 1,
             borderRadius: 2,
             fontWeight: 600,
+            fontSize: '14px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            zIndex: 1001
+            zIndex: 999
           }}>
             ✏️ MODO EDICIÓN - {editableElements.length} elementos
           </Box>
         </Box>
       )}
       
-      {/* ========== MODO MANUAL (sin scroll, 100vh) ========== */}
+      {/* ========== MODO MANUAL ========== */}
       {mode === 'manual' && (
         <Box sx={{ 
           width: '100vw', 
