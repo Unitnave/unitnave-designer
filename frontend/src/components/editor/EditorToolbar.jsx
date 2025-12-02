@@ -55,7 +55,7 @@ import {
   Warning as WarningIcon
 } from '@mui/icons-material'
 
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 
 export default function EditorToolbar() {
   const {

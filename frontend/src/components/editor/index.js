@@ -34,7 +34,7 @@ export {
 } from './AutoDimensions'
 
 // Transform
-export { default as TransformableElement, useTransformControls } from './TransformableElement.jsx'
+export { default as TransformableElement, useTransformControls } from './TransformableElement'
 
 // Guías de Snap (V2.2)
 export { default as SnapGuides, ShiftIndicator } from './SnapGuides'
@@ -47,4 +47,4 @@ export {
 } from './ValidationWarnings'
 
 // Re-export del store para conveniencia
-export { default as useEditorStore, AISLE_WIDTHS, ELEMENT_DEFAULTS } from '../stores/useEditorStore'
+export { default as useEditorStore, AISLE_WIDTHS, ELEMENT_DEFAULTS } from '../../stores/useEditorStore'

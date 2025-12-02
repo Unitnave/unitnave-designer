@@ -16,7 +16,7 @@ import { TransformControls } from '@react-three/drei'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 
 export default function TransformableElement({
   children,

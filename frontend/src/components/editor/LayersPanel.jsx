@@ -51,7 +51,7 @@ import {
   Warning
 } from '@mui/icons-material'
 
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 
 // Mapeo de iconos
 const LAYER_ICONS = {

@@ -25,7 +25,7 @@ import {
 import * as THREE from 'three'
 
 // Stores
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 // Asumimos que estos stores existen en tu proyecto
 // import useWarehouseStore from '../stores/useWarehouseStore'
 // import useUIStore from '../stores/useUIStore'
@@ -35,7 +35,7 @@ import EditorToolbar, { EditorToolbarMini } from './EditorToolbar'
 import LayersPanel from './LayersPanel'
 import EditorGrid, { SnapIndicator } from './EditorGrid'
 import AutoDimensions from './AutoDimensions'
-import TransformableElement from './TransformableElement.jsx'
+import TransformableElement from './TransformableElement'
 import { ValidationMarkers3D, ValidationPanel, DensityIndicator } from './ValidationWarnings'
 
 // 3D components (importar desde tu proyecto)

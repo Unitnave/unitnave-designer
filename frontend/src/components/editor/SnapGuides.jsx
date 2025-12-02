@@ -13,7 +13,7 @@
 import React from 'react'
 import { Line, Html } from '@react-three/drei'
 
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 
 // Colores por tipo de guía/snap
 const GUIDE_COLORS = {

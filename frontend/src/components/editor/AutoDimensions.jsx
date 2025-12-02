@@ -14,7 +14,7 @@ import React, { useMemo } from 'react'
 import { Line, Html } from '@react-three/drei'
 import * as THREE from 'three'
 
-import useEditorStore from '../stores/useEditorStore'
+import useEditorStore from '../../stores/useEditorStore'
 
 // Estilos de cota
 const DIMENSION_STYLE = {

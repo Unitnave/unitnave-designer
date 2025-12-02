@@ -37,7 +37,7 @@ import {
   Close as CloseIcon
 } from '@mui/icons-material'
 
-import useEditorStore, { AISLE_WIDTHS } from '../stores/useEditorStore'
+import useEditorStore, { AISLE_WIDTHS } from '../../stores/useEditorStore'
 
 // ==================== INDICADORES 3D EN EL CANVAS ====================
 
