@@ -1,12 +1,18 @@
 /**
- * UNITNAVE Designer - App.jsx MODIFICADO
+ * UNITNAVE Designer - App.jsx v3.0 CORREGIDO
  * 
- * Incluye 3 modos:
- * - wizard: Asistente paso a paso
- * - manual: Diseño manual existente (incluido aquí)
+ * FLUJO CORRECTO:
+ * 1. Wizard (6 pasos) → Optimizar
+ * 2. Ver Resultados (métricas, 3D, informe)
+ * 3. OPCIONAL: Editor AutoCAD para ajustes manuales
+ * 
+ * Incluye 4 modos:
+ * - wizard: Asistente paso a paso con DesignPage
+ * - results: Resultados de la optimización (NUEVO)
+ * - manual: Diseño manual existente
  * - editor: Editor profesional tipo AutoCAD
  * 
- * @version 2.1
+ * @version 3.0
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
@@ -27,6 +33,9 @@ import FloatingPanel from './components/FloatingPanel'
 import AddElementModal from './components/AddElementModal'
 import Notification from './components/Notification'
 import LegendPanel from './components/ui/LegendPanel'
+
+// Página de diseño completa (Wizard + Resultados)
+import DesignPage from './pages/DesignPage'
 
 // NUEVO: Editor profesional
 import { Warehouse3DEditor } from './components/editor'
@@ -305,11 +314,13 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
 // ============================================================
 function App() {
   // Estado del modo actual: 'wizard' | 'manual' | 'editor'
+  // NOTA: 'wizard' ahora usa DesignPage que incluye resultados
   const [mode, setMode] = useState('wizard')
   
   // Datos del warehouse store
   const { 
     dimensions,
+    elements,
     optimizationResult,
     machinery
   } = useWarehouseStore()
@@ -317,9 +328,30 @@ function App() {
   // Convertir resultado de optimización a elementos editables
   const [editableElements, setEditableElements] = useState([])
   
+  // Cuando hay elementos en el store, usarlos para el editor
+  useEffect(() => {
+    if (elements && elements.length > 0) {
+      // Convertir elementos del store al formato del editor
+      const converted = elements.map((el, index) => ({
+        id: el.id || `${el.type}-${index}`,
+        type: el.type,
+        position: {
+          x: el.position?.x ?? el.x ?? 0,
+          y: el.position?.y ?? el.y ?? 0,
+          z: el.position?.z ?? 0
+        },
+        dimensions: el.dimensions || {},
+        properties: el.properties || {},
+        rotation: el.rotation || 0,
+        layer: el.layer || el.type
+      }))
+      setEditableElements(converted)
+    }
+  }, [elements])
+  
+  // También escuchar optimizationResult.layout (por compatibilidad)
   useEffect(() => {
     if (optimizationResult?.layout) {
-      // Convertir layout del backend a formato del editor
       const converted = convertLayoutToElements(optimizationResult.layout)
       setEditableElements(converted)
     }
@@ -435,6 +467,10 @@ function App() {
   
   // Handler para guardar cambios del editor al store
   const handleSaveEditorChanges = () => {
+    // Guardar elementos en el store global
+    useWarehouseStore.getState().setElements(editableElements)
+    
+    // También actualizar optimizationResult si existe
     const layout = {
       shelves: editableElements.filter(el => el.type === 'shelf').map(el => ({
         id: el.id,
@@ -473,6 +509,7 @@ function App() {
     }
     
     console.log('Layout guardado:', layout)
+    alert('✅ Cambios guardados correctamente')
   }
   
   return (
@@ -486,51 +523,54 @@ function App() {
         position: 'relative'
       }}>
         
-        {/* ========== MODO WIZARD ========== */}
+        {/* ========== MODO WIZARD (Usa DesignPage completo) ========== */}
+        {/* DesignPage incluye: Wizard → Optimizar → Resultados */}
         {mode === 'wizard' && (
           <>
-            <WizardStepper 
-              onComplete={() => setMode('editor')}
-            />
+            <DesignPage />
             
-            <Box sx={{
-              position: 'fixed',
-              bottom: 20,
-              right: 20,
-              display: 'flex',
-              gap: 1,
-              zIndex: 1000
-            }}>
-              <Tooltip title="Abrir Editor Profesional">
-                <Button
-                  variant="contained"
-                  onClick={() => setMode('editor')}
-                  sx={{
-                    bgcolor: '#3b82f6',
-                    '&:hover': { bgcolor: '#2563eb' }
-                  }}
-                >
-                  📐 Editor
-                </Button>
-              </Tooltip>
-              
-              <Tooltip title="Modo Manual (legacy)">
-                <Button
-                  variant="outlined"
-                  onClick={() => setMode('manual')}
-                  sx={{
-                    borderColor: '#f59e0b',
-                    color: '#f59e0b',
-                    '&:hover': { 
-                      borderColor: '#d97706',
-                      bgcolor: 'rgba(245, 158, 11, 0.1)'
-                    }
-                  }}
-                >
-                  ✏️ Manual
-                </Button>
-              </Tooltip>
-            </Box>
+            {/* Botón flotante para ir al Editor (solo si hay elementos) */}
+            {elements && elements.length > 0 && (
+              <Box sx={{
+                position: 'fixed',
+                bottom: 20,
+                right: 20,
+                display: 'flex',
+                gap: 1,
+                zIndex: 1000
+              }}>
+                <Tooltip title="Editar Layout Manualmente">
+                  <Button
+                    variant="contained"
+                    onClick={() => setMode('editor')}
+                    sx={{
+                      bgcolor: '#3b82f6',
+                      '&:hover': { bgcolor: '#2563eb' }
+                    }}
+                  >
+                    📐 Editor AutoCAD
+                  </Button>
+                </Tooltip>
+                
+                <Tooltip title="Modo Manual (legacy)">
+                  <Button
+                    variant="outlined"
+                    onClick={() => setMode('manual')}
+                    sx={{
+                      borderColor: '#f59e0b',
+                      color: '#f59e0b',
+                      bgcolor: 'white',
+                      '&:hover': { 
+                        borderColor: '#d97706',
+                        bgcolor: 'rgba(245, 158, 11, 0.1)'
+                      }
+                    }}
+                  >
+                    ✏️ Manual
+                  </Button>
+                </Tooltip>
+              </Box>
+            )}
           </>
         )}
         
@@ -557,7 +597,7 @@ function App() {
               gap: 1,
               zIndex: 1001
             }}>
-              <Tooltip title="Volver al Wizard" placement="left">
+              <Tooltip title="Volver a Resultados" placement="left">
                 <Button
                   variant="contained"
                   size="small"
@@ -567,7 +607,7 @@ function App() {
                     '&:hover': { bgcolor: '#16a34a' }
                   }}
                 >
-                  ← Wizard
+                  ← Volver
                 </Button>
               </Tooltip>
               
@@ -603,6 +643,24 @@ function App() {
                   ✏️ Manual
                 </Button>
               </Tooltip>
+            </Box>
+            
+            {/* Indicador de modo editor */}
+            <Box sx={{
+              position: 'fixed',
+              top: 20,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              bgcolor: 'rgba(59, 130, 246, 0.95)',
+              color: 'white',
+              px: 3,
+              py: 1,
+              borderRadius: 2,
+              fontWeight: 600,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              zIndex: 1001
+            }}>
+              ✏️ MODO EDICIÓN - {editableElements.length} elementos
             </Box>
           </>
         )}
