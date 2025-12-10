@@ -13,4 +13,9 @@ python-dotenv==1.0.0
 httpx==0.26.0
 aiofiles==23.2.1
 python-json-logger==2.0.7
+# Geometría exacta
 shapely==2.0.6
+# Optimización (Google OR-Tools)
+ortools==9.10.4067
+# Export DXF profesional
+ezdxf==1.3.0

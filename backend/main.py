@@ -760,11 +760,12 @@ class LayoutAnalysisResponse(BaseModel):
     - Soporte para rotaciones arbitrarias
     - Clasificación automática de zonas (pasillos, circulación, etc.)
     - Métricas precisas de área
+    - Validación de normativa ERP
     
     Tipos de zona detectados:
-    - main_aisle: Pasillo principal (≥ 4m de ancho)
+    - main_aisle: Pasillo principal (≥ 3.5m de ancho)
     - cross_aisle: Pasillo transversal (≥ 3m)
-    - aisle: Pasillo operativo (< 3m)
+    - aisle: Pasillo operativo (≥ 2.5m)
     - circulation: Zona de circulación amplia
     - free_zone: Zona libre genérica
     """
@@ -798,18 +799,334 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== OR-TOOLS OPTIMIZATION ====================
+
+# Importar optimizador OR-Tools
+try:
+    from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer
+    ORTOOLS_AVAILABLE = True
+    logger.info("✅ Optimizador OR-Tools cargado")
+except ImportError as e:
+    ORTOOLS_AVAILABLE = False
+    ortools_optimize = None
+    logger.warning(f"⚠️ OR-Tools no disponible: {e}")
+
+
+class OptimizeLayoutRequest(BaseModel):
+    """Request para optimización de layout"""
+    dimensions: Dict[str, float] = Field(
+        ..., 
+        description="Dimensiones de la nave: {length, width}",
+        example={"length": 80, "width": 40}
+    )
+    elements: List[Dict] = Field(
+        ..., 
+        description="Lista de elementos"
+    )
+    moved_element_id: Optional[str] = Field(
+        None,
+        description="ID del elemento que se movió manualmente"
+    )
+    moved_position: Optional[Dict[str, float]] = Field(
+        None,
+        description="Nueva posición del elemento movido: {x, y}"
+    )
+    fixed_elements: Optional[List[str]] = Field(
+        None,
+        description="IDs de elementos que no deben moverse"
+    )
+
+
+class OptimizedElementResponse(BaseModel):
+    """Elemento optimizado"""
+    id: str
+    type: str
+    x: float
+    y: float
+    width: float
+    height: float
+    rotation: float = 0
+    was_moved: bool = False
+
+
+class OptimizeLayoutResponse(BaseModel):
+    """Response de optimización"""
+    success: bool
+    elements: List[OptimizedElementResponse]
+    solver_status: str
+    solve_time_ms: float
+    objective_value: float
+    messages: List[str]
+
+
+@app.post(
+    "/api/layout/optimize",
+    response_model=OptimizeLayoutResponse,
+    summary="Optimización con OR-Tools",
+    description="""
+    Optimiza el layout usando Google OR-Tools.
+    
+    Cuando mueves un elemento manualmente:
+    1. Fija ese elemento en la nueva posición
+    2. Recoloca automáticamente los demás elementos
+    3. Mantiene restricciones de pasillo mínimo (3.5m)
+    4. Evita solapamientos
+    5. Minimiza distancia de picking a muelles
+    
+    Tiempo máximo: 5 segundos
+    """
+)
+async def optimize_layout_ortools(request: OptimizeLayoutRequest):
+    """
+    Endpoint para optimización inteligente del layout
+    """
+    if not ORTOOLS_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="OR-Tools no disponible. Instalar: pip install ortools"
+        )
+    
+    try:
+        logger.info(f"🧮 Optimizando layout: {len(request.elements)} elementos")
+        
+        result = ortools_optimize(
+            dimensions=request.dimensions,
+            elements=request.elements,
+            moved_element_id=request.moved_element_id,
+            moved_position=request.moved_position,
+            fixed_elements=request.fixed_elements
+        )
+        
+        logger.info(f"✅ Optimización completada: {result['solver_status']}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error en optimización: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== DXF EXPORT ====================
+
+# Importar exportador DXF
+try:
+    from dxf_exporter import export_to_dxf, DXFExporter
+    DXF_AVAILABLE = True
+    logger.info("✅ Exportador DXF cargado")
+except ImportError as e:
+    DXF_AVAILABLE = False
+    export_to_dxf = None
+    logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
+
+
+class ExportDXFRequest(BaseModel):
+    """Request para exportar DXF"""
+    dimensions: Dict[str, float] = Field(
+        ..., 
+        description="Dimensiones de la nave"
+    )
+    elements: List[Dict] = Field(
+        ..., 
+        description="Lista de elementos"
+    )
+    zones: Optional[List[Dict]] = Field(
+        None,
+        description="Zonas auto-detectadas (opcional)"
+    )
+    include_dimensions: bool = Field(
+        True,
+        description="Incluir acotaciones"
+    )
+    include_grid: bool = Field(
+        True,
+        description="Incluir grid de referencia"
+    )
+    scale: str = Field(
+        "1:100",
+        description="Escala del plano"
+    )
+
+
+@app.post(
+    "/api/layout/export/dxf",
+    summary="Exportar a DXF",
+    description="""
+    Exporta el layout a formato DXF profesional.
+    
+    Características:
+    - Compatible con AutoCAD 2018+
+    - Capas separadas por tipo de elemento
+    - Acotaciones automáticas
+    - Escala 1:1 (metros)
+    - Cajetín con información del proyecto
+    """
+)
+async def export_layout_dxf(request: ExportDXFRequest):
+    """
+    Endpoint para exportar layout a DXF
+    """
+    if not DXF_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Exportador DXF no disponible. Instalar: pip install ezdxf"
+        )
+    
+    try:
+        logger.info(f"📐 Exportando DXF: {request.dimensions}")
+        
+        dxf_bytes = export_to_dxf(
+            dimensions=request.dimensions,
+            elements=request.elements,
+            zones=request.zones
+        )
+        
+        # Crear nombre de archivo
+        length = int(request.dimensions.get('length', 80))
+        width = int(request.dimensions.get('width', 40))
+        filename = f"plano_nave_{length}x{width}.dxf"
+        
+        logger.info(f"✅ DXF generado: {filename}")
+        
+        from fastapi.responses import Response
+        return Response(
+            content=dxf_bytes,
+            media_type="application/dxf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error exportando DXF: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== COMBINED ENDPOINT ====================
+
+class FullLayoutRequest(BaseModel):
+    """Request completo para análisis + optimización"""
+    dimensions: Dict[str, float]
+    elements: List[Dict]
+    moved_element_id: Optional[str] = None
+    moved_position: Optional[Dict[str, float]] = None
+    optimize: bool = True
+
+
+class FullLayoutResponse(BaseModel):
+    """Response completo"""
+    elements: List[Dict]
+    zones: List[Dict]
+    metrics: Dict
+    warnings: List[Dict]
+    optimization: Optional[Dict] = None
+
+
+@app.post(
+    "/api/layout/full",
+    response_model=FullLayoutResponse,
+    summary="Análisis Completo (Geometría + Optimización)",
+    description="""
+    Endpoint combinado que:
+    1. Optimiza posiciones si se especifica un elemento movido
+    2. Calcula geometría exacta
+    3. Detecta pasillos y zonas
+    4. Valida normativa ERP
+    5. Retorna todo en una sola llamada
+    """
+)
+async def full_layout_analysis(request: FullLayoutRequest):
+    """
+    Endpoint completo para frontend inteligente
+    """
+    try:
+        result_elements = request.elements
+        optimization_result = None
+        
+        # 1. Optimizar si hay movimiento
+        if request.optimize and request.moved_element_id and ORTOOLS_AVAILABLE:
+            logger.info(f"🧮 Optimizando por movimiento de {request.moved_element_id}")
+            
+            opt_result = ortools_optimize(
+                dimensions=request.dimensions,
+                elements=request.elements,
+                moved_element_id=request.moved_element_id,
+                moved_position=request.moved_position
+            )
+            
+            if opt_result['success']:
+                # Convertir elementos optimizados al formato original
+                result_elements = []
+                for opt_el in opt_result['elements']:
+                    # Buscar elemento original
+                    original = next(
+                        (e for e in request.elements if e.get('id') == opt_el['id']),
+                        {}
+                    )
+                    
+                    # Actualizar posición
+                    updated = {**original}
+                    if 'position' in updated:
+                        updated['position']['x'] = opt_el['x']
+                        updated['position']['y'] = opt_el['y']
+                    else:
+                        updated['x'] = opt_el['x']
+                        updated['y'] = opt_el['y']
+                    
+                    result_elements.append(updated)
+                
+                optimization_result = {
+                    'success': True,
+                    'solver_status': opt_result['solver_status'],
+                    'solve_time_ms': opt_result['solve_time_ms'],
+                    'messages': opt_result['messages']
+                }
+        
+        # 2. Analizar geometría
+        if GEOMETRY_AVAILABLE:
+            geometry_result = analyze_layout(
+                dimensions=request.dimensions,
+                elements=result_elements
+            )
+        else:
+            geometry_result = {
+                'zones': [],
+                'metrics': {},
+                'warnings': []
+            }
+        
+        return {
+            'elements': result_elements,
+            'zones': geometry_result.get('zones', []),
+            'metrics': geometry_result.get('metrics', {}),
+            'warnings': geometry_result.get('warnings', []),
+            'optimization': optimization_result
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error en análisis completo: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== STARTUP ====================
 
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 60)
-    logger.info("🏭 UNITNAVE Designer API v5.0 - Multi-Escenario")
+    logger.info("🏭 UNITNAVE Designer API v6.0 - Motor CAD Profesional")
     logger.info("=" * 60)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
     logger.info(f"🎯 Multi-Escenario: Activo")
     logger.info(f"📊 Fitness Evaluation: Activo")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
-    logger.info(f"📐 Geometría exacta: {GEOMETRY_AVAILABLE}")
+    logger.info(f"📐 Geometría exacta (Shapely): {GEOMETRY_AVAILABLE}")
+    logger.info(f"🧮 Optimizador (OR-Tools): {ORTOOLS_AVAILABLE}")
+    logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
     logger.info("=" * 60)
 
 

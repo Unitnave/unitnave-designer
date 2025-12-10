@@ -1,7 +1,7 @@
 {
   "name": "unitnave-designer-frontend",
-  "version": "1.0.0",
-  "description": "Diseñador 3D interactivo de naves industriales para UNITNAVE",
+  "version": "2.0.0",
+  "description": "Diseñador 2D/3D interactivo de naves industriales para UNITNAVE - Motor CAD Profesional",
   "private": true,
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -18,6 +18,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.66.1",
+    "react-moveable": "^0.56.0",
     "recharts": "^3.5.0",
     "three": "^0.160.0",
     "zod": "^4.1.12",
