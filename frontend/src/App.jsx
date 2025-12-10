@@ -31,8 +31,8 @@ import LegendPanel from './components/ui/LegendPanel'
 // Página de diseño completa (Wizard + Resultados)
 import DesignPage from './pages/DesignPage'
 
-// NUEVO: Editor profesional
-import { Warehouse3DEditor } from './components/editor'
+// NUEVO: Editor profesional con toggle 2D/3D
+import { Warehouse3DEditor, WarehouseEditorWithToggle } from './components/editor'
 
 // Tema de Material UI
 const theme = createTheme({
@@ -677,7 +677,7 @@ function App() {
         </Box>
       )}
       
-      {/* ========== MODO EDITOR ========== */}
+      {/* ========== MODO EDITOR (2D/3D) ========== */}
       {mode === 'editor' && (
         <Box sx={{ 
           width: '100vw', 
@@ -685,7 +685,7 @@ function App() {
           overflow: 'hidden',
           position: 'relative'
         }}>
-          <Warehouse3DEditor
+          <WarehouseEditorWithToggle
             dimensions={{
               length: dimensions?.length || 80,
               width: dimensions?.width || 40,
@@ -694,6 +694,7 @@ function App() {
             elements={editableElements}
             machinery={machinery || 'retractil'}
             onElementsChange={handleElementsChange}
+            initialMode="2d"
           />
           
           {/* Botones de navegación - DERECHA ARRIBA */}
