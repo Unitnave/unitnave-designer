@@ -750,7 +750,6 @@ class LayoutAnalysisResponse(BaseModel):
 
 @app.post(
     "/api/layout/analyze",
-    response_model=LayoutAnalysisResponse,
     summary="Análisis de Geometría Exacta",
     description="""
     Calcula espacios libres y pasillos usando operaciones booleanas exactas (Shapely/GEOS).
@@ -861,7 +860,6 @@ class OptimizeLayoutResponse(BaseModel):
 
 @app.post(
     "/api/layout/optimize",
-    response_model=OptimizeLayoutResponse,
     summary="Optimización con OR-Tools",
     description="""
     Optimiza el layout usando Google OR-Tools.
@@ -1027,7 +1025,6 @@ class FullLayoutResponse(BaseModel):
 
 @app.post(
     "/api/layout/full",
-    response_model=FullLayoutResponse,
     summary="Análisis Completo (Geometría + Optimización)",
     description="""
     Endpoint combinado que:
