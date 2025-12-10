@@ -1,24 +1,20 @@
 """
 UNITNAVE - Servicio de Geometría Exacta (Profesional)
-Operaciones booleanas precisas con Shapely/GEOS
+Operaciones booleanas precisas con Shapely/GEOS + Clasificación Scanline
 
-Características:
-- Cálculo exacto de espacios libres (diferencia booleana)
-- Soporte completo para rotaciones arbitrarias
-- Detección inteligente de pasillos (medial axis simplificado)
-- Validación de normativa ERP
-- Métricas precisas de área
+Solución híbrida:
+- Shapely: Cálculos exactos (áreas, solapamientos, validación ERP)
+- Scanline: Clasificación visual (pasillos, zonas de circulación)
 
-@version 2.0 - Profesional
+@version 2.2 - Algoritmo híbrido optimizado
 """
 
-import math
 import logging
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-from shapely.geometry import Polygon, MultiPolygon, box, Point, LineString
+from shapely.geometry import Polygon, MultiPolygon, box
 from shapely.ops import unary_union
 from shapely.affinity import rotate, translate
 from shapely.validation import make_valid
@@ -102,7 +98,7 @@ class DetectedZone:
     centroid_x: float = 0
     centroid_y: float = 0
     polygon_wkt: Optional[str] = None
-    polygon_points: Optional[List[List[float]]] = None  # [[x1,y1], [x2,y2], ...]
+    polygon_points: Optional[List[List[float]]] = None
     is_auto_generated: bool = True
 
     def to_dict(self):
@@ -162,8 +158,8 @@ class GeometryEngine:
             rotation = element.get('rotation', 0)
             
             # Posición (soporta tanto 'y' como 'z' para compatibilidad)
-            x = float(pos.get('x', 0))
-            y = float(pos.get('y', pos.get('z', 0)))
+            x = float(pos.get('x', element.get('x', 0)))
+            y = float(pos.get('y', pos.get('z', element.get('y', 0))))
             
             # Dimensiones según tipo de elemento
             if el_type == 'shelf':
@@ -178,6 +174,9 @@ class GeometryEngine:
             elif el_type in ('operational_zone', 'zone', 'dock_maneuver'):
                 w = float(dims.get('length', dims.get('largo', 10)))
                 h = float(dims.get('width', dims.get('ancho', 10)))
+            elif el_type in ('service_room', 'technical_room'):
+                w = float(dims.get('length', dims.get('largo', 5)))
+                h = float(dims.get('width', dims.get('ancho', 4)))
             else:
                 w = float(dims.get('length', dims.get('width', 3)))
                 h = float(dims.get('depth', dims.get('height', 3)))
@@ -209,33 +208,23 @@ class GeometryEngine:
     
     def calculate_free_space(self) -> MultiPolygon:
         """
-        Calcula el espacio libre EXACTO usando operaciones booleanas
+        Calcula el espacio libre EXACTO usando operaciones booleanas (Shapely)
         
         Fórmula: FreeSpace = Warehouse - Union(AllObstacles)
-        
-        Returns:
-            MultiPolygon con todas las zonas libres
         """
         if not self.obstacles:
             return MultiPolygon([self.warehouse_polygon])
         
         try:
-            # Unir todos los obstáculos en un solo polígono
             obstacles_union = unary_union(self.obstacles)
-            
-            # Diferencia booleana exacta
             free_space = self.warehouse_polygon.difference(obstacles_union)
-            
-            # Asegurar validez
             free_space = make_valid(free_space)
             
-            # Normalizar a MultiPolygon
             if isinstance(free_space, Polygon):
                 return MultiPolygon([free_space])
             elif isinstance(free_space, MultiPolygon):
                 return free_space
             else:
-                # GeometryCollection u otro
                 polygons = [g for g in free_space.geoms if isinstance(g, Polygon)]
                 return MultiPolygon(polygons) if polygons else MultiPolygon()
                 
@@ -243,71 +232,185 @@ class GeometryEngine:
             logger.error(f"Error calculando espacio libre: {e}")
             return MultiPolygon()
     
-    def classify_free_zone(self, polygon: Polygon) -> Tuple[ZoneType, str]:
+    def decompose_to_rectangles(self) -> List[Tuple[float, float, float, float]]:
         """
-        Clasifica una zona libre según su geometría y posición
-        
-        Usa análisis de forma (aspect ratio, área) y posición relativa
-        """
-        bounds = polygon.bounds  # minx, miny, maxx, maxy
-        minx, miny, maxx, maxy = bounds
-        
-        width = maxx - minx
-        height = maxy - miny
-        area = polygon.area
-        
-        centroid = polygon.centroid
-        cx, cy = centroid.x, centroid.y
-        
-        # Análisis de forma
-        is_narrow = min(width, height) < 5
-        is_vertical = height > width * 1.5
-        is_horizontal = width > height * 1.5
-        
-        # Clasificación jerárquica
-        
-        # 1. Pasillo vertical estrecho (entre columnas de estanterías)
-        if is_narrow and is_vertical:
-            if width >= ERPConstants.CROSS_AISLE_MIN_WIDTH:
-                return ZoneType.CROSS_AISLE, "Pasillo Transversal"
-            elif width >= ERPConstants.OPERATIVE_AISLE_MIN_WIDTH:
-                return ZoneType.AISLE, "Pasillo Operativo"
-            else:
-                return ZoneType.AISLE, f"Pasillo Estrecho ({width:.1f}m)"
-        
-        # 2. Pasillo horizontal (entre filas)
-        if is_narrow and is_horizontal:
-            if height >= ERPConstants.MAIN_AISLE_MIN_WIDTH:
-                return ZoneType.MAIN_AISLE, "Pasillo Principal"
-            elif height >= ERPConstants.CROSS_AISLE_MIN_WIDTH:
-                return ZoneType.CROSS_AISLE, "Pasillo Transversal"
-            else:
-                return ZoneType.AISLE, f"Pasillo ({height:.1f}m)"
-        
-        # 3. Zona de circulación amplia
-        if area > 50:
-            # Determinar posición para etiqueta descriptiva
-            if cy < self.width * 0.25:
-                return ZoneType.CIRCULATION, "Zona Muelles (Norte)"
-            elif cy > self.width * 0.75:
-                return ZoneType.CIRCULATION, "Circulación Sur"
-            elif cx < self.length * 0.15:
-                return ZoneType.CIRCULATION, "Circulación Oeste"
-            elif cx > self.length * 0.85:
-                return ZoneType.CIRCULATION, "Circulación Este"
-            else:
-                return ZoneType.CIRCULATION, "Zona Circulación Central"
-        
-        # 4. Zona libre pequeña
-        return ZoneType.FREE_ZONE, "Zona Libre"
-    
-    def detect_overlaps(self) -> List[Tuple[str, str, float]]:
-        """
-        Detecta solapamientos entre elementos
+        Descompone el espacio libre en rectángulos usando algoritmo scanline
+        (IDÉNTICO al algoritmo del frontend para consistencia visual)
         
         Returns:
-            Lista de tuplas (id1, id2, area_solapada)
+            Lista de tuplas (x, y, width, height)
         """
+        if not self.obstacles:
+            return [(0, 0, self.length, self.width)]
+        
+        W = self.length
+        H = self.width
+        
+        # Extraer rectángulos de obstáculos
+        obstacle_rects = []
+        for poly in self.obstacles:
+            bounds = poly.bounds  # minx, miny, maxx, maxy
+            obstacle_rects.append(bounds)
+        
+        # Crear líneas horizontales en cada borde de obstáculo
+        y_positions = set([0, H])
+        for (_, miny, _, maxy) in obstacle_rects:
+            if 0 <= miny <= H:
+                y_positions.add(miny)
+            if 0 <= maxy <= H:
+                y_positions.add(maxy)
+        
+        y_positions = sorted(list(y_positions))
+        
+        free_rectangles = []
+        
+        # Procesar cada franja horizontal
+        for i in range(len(y_positions) - 1):
+            y1 = y_positions[i]
+            y2 = y_positions[i + 1]
+            strip_height = y2 - y1
+            
+            if strip_height < 0.1:
+                continue
+            
+            # Encontrar huecos en esta franja
+            gaps = [(0, W)]
+            
+            for (ox1, oy1, ox2, oy2) in obstacle_rects:
+                if oy1 < y2 and oy2 > y1:
+                    new_gaps = []
+                    for (gap_start, gap_end) in gaps:
+                        if ox1 <= gap_start and ox2 >= gap_end:
+                            continue
+                        elif ox1 > gap_start and ox2 < gap_end:
+                            new_gaps.append((gap_start, ox1))
+                            new_gaps.append((ox2, gap_end))
+                        elif ox1 > gap_start and ox1 < gap_end:
+                            new_gaps.append((gap_start, ox1))
+                        elif ox2 > gap_start and ox2 < gap_end:
+                            new_gaps.append((ox2, gap_end))
+                        else:
+                            new_gaps.append((gap_start, gap_end))
+                    gaps = new_gaps
+            
+            for (gap_start, gap_end) in gaps:
+                gap_width = gap_end - gap_start
+                if gap_width > 0.5:
+                    free_rectangles.append((gap_start, y1, gap_width, strip_height))
+        
+        # Fusionar rectángulos adyacentes verticalmente
+        merged = self._merge_rectangles_vertical(free_rectangles)
+        
+        # Fusionar rectángulos adyacentes horizontalmente
+        merged = self._merge_rectangles_horizontal(merged)
+        
+        return merged
+    
+    def _merge_rectangles_vertical(self, rects: List[Tuple]) -> List[Tuple]:
+        """Fusiona rectángulos con mismo x y ancho que son contiguos verticalmente"""
+        if not rects:
+            return []
+        
+        # Agrupar por (x, width)
+        groups = {}
+        for (x, y, w, h) in rects:
+            key = (round(x, 1), round(w, 1))
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((x, y, w, h))
+        
+        merged = []
+        for key, group in groups.items():
+            group.sort(key=lambda r: r[1])  # Ordenar por y
+            
+            current = list(group[0])
+            for i in range(1, len(group)):
+                next_rect = group[i]
+                # Si son contiguos verticalmente
+                if abs(next_rect[1] - (current[1] + current[3])) < 0.2:
+                    current[3] = (next_rect[1] + next_rect[3]) - current[1]
+                else:
+                    merged.append(tuple(current))
+                    current = list(next_rect)
+            merged.append(tuple(current))
+        
+        return merged
+    
+    def _merge_rectangles_horizontal(self, rects: List[Tuple]) -> List[Tuple]:
+        """Fusiona rectángulos con mismo y y altura que son contiguos horizontalmente"""
+        if not rects:
+            return []
+        
+        # Agrupar por (y, height)
+        groups = {}
+        for (x, y, w, h) in rects:
+            key = (round(y, 1), round(h, 1))
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((x, y, w, h))
+        
+        merged = []
+        for key, group in groups.items():
+            group.sort(key=lambda r: r[0])  # Ordenar por x
+            
+            current = list(group[0])
+            for i in range(1, len(group)):
+                next_rect = group[i]
+                # Si son contiguos horizontalmente
+                if abs(next_rect[0] - (current[0] + current[2])) < 0.2:
+                    current[2] = (next_rect[0] + next_rect[2]) - current[0]
+                else:
+                    merged.append(tuple(current))
+                    current = list(next_rect)
+            merged.append(tuple(current))
+        
+        return merged
+    
+    def classify_free_zone(self, rect: Tuple[float, float, float, float]) -> Tuple[ZoneType, str]:
+        """
+        Clasifica un rectángulo según sus dimensiones y posición
+        (MISMA LÓGICA QUE EL FRONTEND para consistencia)
+        """
+        x, y, width, height = rect
+        area = width * height
+        
+        # Pasillos: estrechos y largos (igual que frontend)
+        if width <= 4 and height > 6:
+            # Pasillo vertical
+            if width >= 3:
+                return ZoneType.CROSS_AISLE, "Pasillo Transversal"
+            else:
+                return ZoneType.AISLE, "Pasillo Operativo"
+        
+        elif height <= 4 and width > 6:
+            # Pasillo horizontal
+            if height >= 3:
+                return ZoneType.MAIN_AISLE, "Pasillo Principal"
+            else:
+                return ZoneType.AISLE, "Pasillo Operativo"
+        
+        elif width <= 5 or height <= 5:
+            # Pasillo pequeño
+            return ZoneType.AISLE, "Pasillo"
+        
+        elif area > 100:
+            # Zona grande de circulación - clasificar por posición
+            if y < 10:
+                return ZoneType.CIRCULATION, "Zona Circulación Norte"
+            elif y > self.width - 15:
+                return ZoneType.CIRCULATION, "Zona Circulación Sur"
+            elif x < 10:
+                return ZoneType.CIRCULATION, "Recepción"
+            elif x > self.length - 15:
+                return ZoneType.CIRCULATION, "Expedición"
+            else:
+                return ZoneType.CIRCULATION, "Zona Circulación"
+        
+        else:
+            return ZoneType.FREE_ZONE, "Zona Libre"
+    
+    def detect_overlaps(self) -> List[Tuple[str, str, float]]:
+        """Detecta solapamientos entre elementos usando Shapely"""
         overlaps = []
         element_ids = list(self.element_polygons.keys())
         
@@ -318,20 +421,13 @@ class GeometryEngine:
                 
                 if poly1.intersects(poly2):
                     intersection = poly1.intersection(poly2)
-                    if intersection.area > 0.01:  # > 1cm²
+                    if intersection.area > 0.01:
                         overlaps.append((id1, id2, intersection.area))
         
         return overlaps
     
     def validate_erp(self) -> List[ValidationWarning]:
-        """
-        Valida el layout contra normativa ERP
-        
-        Comprueba:
-        - Anchos mínimos de pasillo
-        - Distancias de seguridad
-        - Solapamientos
-        """
+        """Valida el layout contra normativa ERP usando Shapely"""
         warnings = []
         
         # 1. Detectar solapamientos
@@ -345,38 +441,30 @@ class GeometryEngine:
                 value=area
             ))
         
-        # 2. Calcular espacio libre y verificar pasillos
-        free_space = self.calculate_free_space()
-        
-        for polygon in free_space.geoms:
-            if polygon.is_empty or polygon.area < 1:
-                continue
+        # 2. Verificar anchos de pasillo
+        free_rects = self.decompose_to_rectangles()
+        for rect in free_rects:
+            x, y, w, h = rect
+            zone_type, _ = self.classify_free_zone(rect)
+            min_dim = min(w, h)
             
-            bounds = polygon.bounds
-            width = bounds[2] - bounds[0]
-            height = bounds[3] - bounds[1]
-            min_dimension = min(width, height)
-            
-            zone_type, _ = self.classify_free_zone(polygon)
-            
-            # Verificar anchos mínimos según tipo
             if zone_type == ZoneType.MAIN_AISLE:
-                if min_dimension < ERPConstants.MAIN_AISLE_MIN_WIDTH:
+                if min_dim < ERPConstants.MAIN_AISLE_MIN_WIDTH:
                     warnings.append(ValidationWarning(
                         code="AISLE_WIDTH",
                         severity="error",
-                        message=f"Pasillo principal de {min_dimension:.2f}m < {ERPConstants.MAIN_AISLE_MIN_WIDTH}m mínimo",
-                        value=min_dimension,
+                        message=f"Pasillo principal de {min_dim:.2f}m < {ERPConstants.MAIN_AISLE_MIN_WIDTH}m mínimo",
+                        value=min_dim,
                         min_value=ERPConstants.MAIN_AISLE_MIN_WIDTH
                     ))
             
             elif zone_type in (ZoneType.CROSS_AISLE, ZoneType.AISLE):
-                if min_dimension < ERPConstants.OPERATIVE_AISLE_MIN_WIDTH:
+                if min_dim < ERPConstants.OPERATIVE_AISLE_MIN_WIDTH:
                     warnings.append(ValidationWarning(
                         code="AISLE_WIDTH",
                         severity="warning",
-                        message=f"Pasillo de {min_dimension:.2f}m < {ERPConstants.OPERATIVE_AISLE_MIN_WIDTH}m recomendado",
-                        value=min_dimension,
+                        message=f"Pasillo de {min_dim:.2f}m < {ERPConstants.OPERATIVE_AISLE_MIN_WIDTH}m recomendado",
+                        value=min_dim,
                         min_value=ERPConstants.OPERATIVE_AISLE_MIN_WIDTH
                     ))
         
@@ -399,7 +487,7 @@ class GeometryEngine:
                     warnings.append(ValidationWarning(
                         code="DOCK_DISTANCE",
                         severity="warning",
-                        message=f"{el.get('id')} a {distance:.2f}m del muelle {dock.get('id')} (mín {ERPConstants.MIN_DOCK_DISTANCE}m)",
+                        message=f"{el.get('id')} a {distance:.2f}m del muelle (mín {ERPConstants.MIN_DOCK_DISTANCE}m)",
                         element_id=el.get('id'),
                         value=distance,
                         min_value=ERPConstants.MIN_DOCK_DISTANCE
@@ -408,29 +496,28 @@ class GeometryEngine:
         return warnings
     
     def calculate_metrics(self) -> GeometryMetrics:
-        """
-        Calcula métricas exactas del layout
-        """
+        """Calcula métricas exactas usando Shapely"""
         total_area = self.length * self.width
         
-        # Área ocupada por obstáculos
+        # Área ocupada (Shapely - exacto)
         occupied_area = sum(poly.area for poly in self.obstacles)
         
-        # Calcular áreas por tipo
-        free_space = self.calculate_free_space()
+        # Clasificar áreas libres
+        free_rects = self.decompose_to_rectangles()
         aisle_area = 0
         circulation_area = 0
         
-        for polygon in free_space.geoms:
-            if polygon.is_empty:
-                continue
-            zone_type, _ = self.classify_free_zone(polygon)
+        for rect in free_rects:
+            x, y, w, h = rect
+            area = w * h
+            zone_type, _ = self.classify_free_zone(rect)
+            
             if zone_type in (ZoneType.AISLE, ZoneType.MAIN_AISLE, ZoneType.CROSS_AISLE):
-                aisle_area += polygon.area
+                aisle_area += area
             elif zone_type == ZoneType.CIRCULATION:
-                circulation_area += polygon.area
+                circulation_area += area
         
-        # Área de almacenamiento (estanterías)
+        # Área de almacenamiento
         storage_area = sum(
             self.element_polygons[e.get('id')].area 
             for e in self.elements 
@@ -455,20 +542,16 @@ class GeometryEngine:
         """
         Ejecuta análisis completo del layout
         
-        Returns:
-            Dict con zones, metrics, warnings
+        Combina:
+        - Shapely para precisión matemática
+        - Scanline para clasificación visual
         """
         logger.info(f"🔍 Analizando layout: {self.length}x{self.width}m, {len(self.elements)} elementos")
         
-        # 1. Calcular espacio libre exacto
-        free_space = self.calculate_free_space()
-        
-        # 2. Clasificar zonas
         zones: List[DetectedZone] = []
         
-        # Helper para extraer puntos del polígono
+        # Helper para extraer puntos del polígono Shapely
         def get_polygon_points(poly) -> List[List[float]]:
-            """Extrae los puntos del polígono como [[x1,y1], [x2,y2], ...]"""
             try:
                 if hasattr(poly, 'exterior'):
                     coords = list(poly.exterior.coords)
@@ -477,7 +560,7 @@ class GeometryEngine:
             except Exception:
                 return []
         
-        # Añadir elementos como zonas (con sus polígonos reales)
+        # 1. Añadir elementos como zonas (polígonos Shapely exactos)
         for el in self.elements:
             poly = self.element_polygons.get(el.get('id'))
             if not poly:
@@ -489,7 +572,7 @@ class GeometryEngine:
             zones.append(DetectedZone(
                 id=el.get('id'),
                 type=el.get('type'),
-                label=el.get('label', el.get('id')),
+                label=el.get('properties', {}).get('label', el.get('id')),
                 x=round(bounds[0], 2),
                 y=round(bounds[1], 2),
                 width=round(bounds[2] - bounds[0], 2),
@@ -502,35 +585,44 @@ class GeometryEngine:
                 is_auto_generated=False
             ))
         
-        # Añadir zonas libres auto-detectadas (con polígonos exactos)
-        for idx, polygon in enumerate(free_space.geoms):
-            if polygon.is_empty or polygon.area < 0.5:
+        # 2. Añadir zonas libres (algoritmo scanline para clasificación)
+        free_rects = self.decompose_to_rectangles()
+        
+        for idx, rect in enumerate(free_rects):
+            x, y, w, h = rect
+            area = w * h
+            
+            if area < 1:
                 continue
             
-            zone_type, label = self.classify_free_zone(polygon)
-            bounds = polygon.bounds
-            polygon_points = get_polygon_points(polygon)
+            zone_type, label = self.classify_free_zone(rect)
+            
+            points = [
+                [round(x, 2), round(y, 2)],
+                [round(x + w, 2), round(y, 2)],
+                [round(x + w, 2), round(y + h, 2)],
+                [round(x, 2), round(y + h, 2)]
+            ]
             
             zones.append(DetectedZone(
-                id=f"auto-{zone_type.value}-{idx}",
+                id=f"free-{idx}",
                 type=zone_type.value,
                 label=label,
-                x=round(bounds[0], 2),
-                y=round(bounds[1], 2),
-                width=round(bounds[2] - bounds[0], 2),
-                height=round(bounds[3] - bounds[1], 2),
-                area=round(polygon.area, 2),
-                centroid_x=round(polygon.centroid.x, 2),
-                centroid_y=round(polygon.centroid.y, 2),
-                polygon_wkt=polygon.wkt,
-                polygon_points=polygon_points if polygon_points else None,
+                x=round(x, 2),
+                y=round(y, 2),
+                width=round(w, 2),
+                height=round(h, 2),
+                area=round(area, 2),
+                centroid_x=round(x + w / 2, 2),
+                centroid_y=round(y + h / 2, 2),
+                polygon_points=points,
                 is_auto_generated=True
             ))
         
-        # 3. Calcular métricas
+        # 3. Métricas (Shapely - exacto)
         metrics = self.calculate_metrics()
         
-        # 4. Validar normativa
+        # 4. Validación ERP (Shapely - exacto)
         warnings = self.validate_erp()
         
         logger.info(f"✅ Layout analizado: {len(zones)} zonas, {len(warnings)} warnings")
@@ -552,13 +644,6 @@ class GeometryEngine:
 def analyze_layout(dimensions: Dict[str, float], elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Función de conveniencia para analizar un layout completo
-    
-    Args:
-        dimensions: {'length': float, 'width': float}
-        elements: Lista de elementos
-        
-    Returns:
-        Resultado del análisis con zones, metrics, warnings
     """
     engine = GeometryEngine(
         length=dimensions.get('length', 80),

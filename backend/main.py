@@ -1,9 +1,8 @@
 """
-UNITNAVE API v5.0 - Multi-Escenario
-Backend con Optimizador V5 + Evaluación Fitness + Informes Detallados
+UNITNAVE API v6.0 - Motor CAD Profesional
+Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF
 
 ARCHIVO: backend/main.py
-ACCIÓN: REEMPLAZAR contenido completo
 """
 
 import os
@@ -14,6 +13,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel, Field
 
 # ==================== LOGGING ====================
@@ -46,11 +46,41 @@ except ImportError as e:
     GAConfig = None
     logger.warning(f"⚠️ Optimizador GA no disponible: {e}")
 
+# Importar Geometría (Shapely)
+try:
+    from geometry_service import analyze_layout, GeometryService
+    GEOMETRY_AVAILABLE = True
+    logger.info("✅ Servicio de geometría exacta cargado (Shapely)")
+except ImportError as e:
+    GEOMETRY_AVAILABLE = False
+    analyze_layout = None
+    logger.warning(f"⚠️ Servicio de geometría no disponible: {e}")
+
+# Importar OR-Tools
+try:
+    from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer
+    ORTOOLS_AVAILABLE = True
+    logger.info("✅ Optimizador OR-Tools cargado")
+except ImportError as e:
+    ORTOOLS_AVAILABLE = False
+    ortools_optimize = None
+    logger.warning(f"⚠️ OR-Tools no disponible: {e}")
+
+# Importar DXF
+try:
+    from dxf_exporter import export_to_dxf, DXFExporter
+    DXF_AVAILABLE = True
+    logger.info("✅ Exportador DXF cargado")
+except ImportError as e:
+    DXF_AVAILABLE = False
+    export_to_dxf = None
+    logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
+
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="UNITNAVE Designer API",
-    description="API para diseño y optimización de naves industriales - V5 Multi-Escenario",
-    version="5.0.0",
+    description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
+    version="6.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -58,7 +88,7 @@ app = FastAPI(
 # ==================== CORS ====================
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com"
+    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
 ).split(",")
 
 app.add_middleware(
@@ -73,15 +103,14 @@ app.add_middleware(
 
 class OfficeConfigRequest(BaseModel):
     """Configuración de oficinas V5.2"""
-    floor: str = Field(default="mezzanine")  # ground, mezzanine
-    position: str = Field(default="front_left")  # front_left, front_right, side_left, side_right
-    height_under: float = Field(default=4.0, ge=2.5, le=8.0)  # Altura libre bajo oficina
-    floor_height: float = Field(default=3.0, ge=2.5, le=4.0)  # Altura por planta
-    num_floors: int = Field(default=1, ge=1, le=5)  # Número de plantas
-    area_per_floor: float = Field(default=100, ge=30, le=500)  # m² por planta
+    floor: str = Field(default="mezzanine")
+    position: str = Field(default="front_left")
+    height_under: float = Field(default=4.0, ge=2.5, le=8.0)
+    floor_height: float = Field(default=3.0, ge=2.5, le=4.0)
+    num_floors: int = Field(default=1, ge=1, le=5)
+    area_per_floor: float = Field(default=100, ge=30, le=500)
     has_elevator: bool = Field(default=True)
     has_stairs: bool = Field(default=True)
-    # Legacy
     area: Optional[float] = Field(default=None)
     mezzanine_height: Optional[float] = Field(default=None)
 
@@ -89,7 +118,7 @@ class OfficeConfigRequest(BaseModel):
 class DockConfigRequest(BaseModel):
     """Configuración de muelles"""
     count: int = Field(default=4, ge=1, le=20)
-    position: str = Field(default="center")  # center, left, right, distributed
+    position: str = Field(default="center")
     maneuver_zone: float = Field(default=4.0, ge=3.0, le=12.0)
     dock_width: float = Field(default=3.5, ge=3.0, le=5.0)
     dock_depth: float = Field(default=4.0, ge=3.0, le=6.0)
@@ -101,17 +130,13 @@ class PreferencesRequest(BaseModel):
     include_services: bool = Field(default=True)
     include_docks: bool = Field(default=True)
     include_technical: bool = Field(default=True)
-    
-    priority: str = Field(default="balance")  # capacity, balance, operations
+    priority: str = Field(default="balance")
     warehouse_type: str = Field(default="industrial")
     layout_complexity: str = Field(default="medio")
-    
-    # ABC Zoning (NUEVO)
     enable_abc_zones: bool = Field(default=False)
     abc_zone_a_pct: float = Field(default=0.20, ge=0.1, le=0.4)
     abc_zone_b_pct: float = Field(default=0.40, ge=0.2, le=0.6)
     abc_zone_c_pct: float = Field(default=0.40, ge=0.1, le=0.6)
-    
     forbidden_zones: List[Dict] = Field(default=[])
     min_free_area_center: float = Field(default=0)
     high_rotation_pct: float = Field(default=0.20, ge=0, le=1)
@@ -129,12 +154,9 @@ class GAConfigRequest(BaseModel):
 
 class OptimizeRequest(BaseModel):
     """Request para optimización"""
-    # Dimensiones
     length: float = Field(..., gt=10, le=500)
     width: float = Field(..., gt=10, le=500)
     height: float = Field(..., gt=3, le=20)
-    
-    # Operativa
     n_docks: int = Field(default=4, ge=1, le=50)
     machinery: str = Field(default="retractil")
     pallet_type: str = Field(default="EUR")
@@ -142,18 +164,12 @@ class OptimizeRequest(BaseModel):
     custom_pallet: Optional[Dict[str, float]] = None
     activity_type: str = Field(default="industrial")
     workers: Optional[int] = Field(default=None, ge=1, le=500)
-    
-    # Configuración oficinas (legacy)
     office_floor: str = Field(default="mezzanine")
     office_height: float = Field(default=3.5, ge=2.5, le=5)
     has_elevator: bool = Field(default=True)
-    
-    # Nuevas configs V5 (opcionales)
     office_config: Optional[OfficeConfigRequest] = None
     dock_config: Optional[DockConfigRequest] = None
     preferences: Optional[PreferencesRequest] = None
-    
-    # GA (opcional)
     ga_config: Optional[GAConfigRequest] = None
 
 
@@ -164,54 +180,89 @@ class CalculateRequest(BaseModel):
     elements: List[Dict]
 
 
+class LayoutAnalysisRequest(BaseModel):
+    """Request para análisis de geometría exacta"""
+    dimensions: Dict[str, float] = Field(
+        ..., 
+        description="Dimensiones de la nave: {length, width}",
+        example={"length": 80, "width": 40}
+    )
+    elements: List[Dict] = Field(
+        ..., 
+        description="Lista de elementos con type, position, dimensions, rotation"
+    )
+
+
+class OptimizeLayoutRequest(BaseModel):
+    """Request para optimización de layout"""
+    dimensions: Dict[str, float] = Field(
+        ..., 
+        description="Dimensiones de la nave: {length, width}",
+        example={"length": 80, "width": 40}
+    )
+    elements: List[Dict] = Field(
+        ..., 
+        description="Lista de elementos"
+    )
+    moved_element_id: Optional[str] = Field(
+        None,
+        description="ID del elemento que se movió manualmente"
+    )
+    moved_position: Optional[Dict[str, float]] = Field(
+        None,
+        description="Nueva posición del elemento movido: {x, y}"
+    )
+    fixed_elements: Optional[List[str]] = Field(
+        None,
+        description="IDs de elementos que no deben moverse"
+    )
+
+
+class ExportDXFRequest(BaseModel):
+    """Request para exportar DXF"""
+    dimensions: Dict[str, float] = Field(
+        ..., 
+        description="Dimensiones de la nave"
+    )
+    elements: List[Dict] = Field(
+        ..., 
+        description="Lista de elementos"
+    )
+    zones: Optional[List[Dict]] = Field(
+        None,
+        description="Zonas auto-detectadas (opcional)"
+    )
+    include_dimensions: bool = Field(
+        True,
+        description="Incluir acotaciones"
+    )
+    include_grid: bool = Field(
+        True,
+        description="Incluir grid de referencia"
+    )
+    scale: str = Field(
+        "1:100",
+        description="Escala del plano"
+    )
+
+
+class FullLayoutRequest(BaseModel):
+    """Request completo para análisis + optimización"""
+    dimensions: Dict[str, float]
+    elements: List[Dict]
+    moved_element_id: Optional[str] = None
+    moved_position: Optional[Dict[str, float]] = None
+    optimize: bool = True
+
+
 # ==================== BASE DE DATOS (Memoria) ====================
 designs_db: Dict[str, Dict] = {}
-
-# ==================== ENDPOINTS ====================
-
-@app.get("/")
-async def root():
-    return {
-        "name": "UNITNAVE Designer API",
-        "version": "5.0.0",
-        "status": "running",
-        "features": {
-            "multi_scenario": True,
-            "fitness_evaluation": True,
-            "detailed_report": True,
-            "reduced_maneuver_zone": True
-        },
-        "endpoints": {
-            "optimize": "/api/optimize",
-            "scenarios": "/api/scenarios",
-            "compare": "/api/optimize/compare",
-            "optimize_ga": "/api/optimize/ga",
-            "calculate": "/api/calculate",
-            "docs": "/api/docs"
-        }
-    }
-
-
-@app.get("/api/health")
-async def health():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "5.0.0",
-        "optimizers": {
-            "v5_multi_scenario": True,
-            "ga": GA_AVAILABLE
-        }
-    }
 
 
 # ==================== FUNCIONES AUXILIARES ====================
 
 def build_office_config_dict(request: OptimizeRequest) -> Optional[Dict]:
-    """
-    Construye diccionario de office_config desde request.
-    Maneja tanto el nuevo modelo V5.2 como el legacy.
-    """
+    """Construye diccionario de office_config desde request."""
     if not request.office_config:
         return None
     
@@ -229,9 +280,7 @@ def build_office_config_dict(request: OptimizeRequest) -> Optional[Dict]:
 
 
 def build_warehouse_input(request: OptimizeRequest) -> WarehouseInput:
-    """
-    Construye WarehouseInput desde request con soporte V5.2.
-    """
+    """Construye WarehouseInput desde request con soporte V5.2."""
     office_config_dict = build_office_config_dict(request)
     
     return WarehouseInput(
@@ -245,9 +294,7 @@ def build_warehouse_input(request: OptimizeRequest) -> WarehouseInput:
         custom_pallet=request.custom_pallet,
         activity_type=request.activity_type,
         workers=request.workers,
-        # V5.2: Pasar office_config completo
         office_config=office_config_dict,
-        # Legacy fallback
         office_floor=request.office_config.floor if request.office_config else request.office_floor,
         office_height=getattr(request.office_config, 'floor_height', 3.5) if request.office_config else (request.office_height or 3.5),
         has_elevator=request.office_config.has_elevator if request.office_config else request.has_elevator
@@ -255,9 +302,7 @@ def build_warehouse_input(request: OptimizeRequest) -> WarehouseInput:
 
 
 def build_preferences(request: OptimizeRequest) -> Optional[DesignPreferences]:
-    """
-    Construye DesignPreferences desde request.
-    """
+    """Construye DesignPreferences desde request."""
     if not request.preferences:
         return None
     
@@ -269,15 +314,60 @@ def build_preferences(request: OptimizeRequest) -> Optional[DesignPreferences]:
         priority=request.preferences.priority,
         warehouse_type=request.preferences.warehouse_type,
         layout_complexity=getattr(request.preferences, 'layout_complexity', 'medio'),
-        # ABC Zoning
         enable_abc_zones=request.preferences.enable_abc_zones,
         abc_zone_a_pct=request.preferences.abc_zone_a_pct,
         abc_zone_b_pct=request.preferences.abc_zone_b_pct,
         abc_zone_c_pct=request.preferences.abc_zone_c_pct,
-        # Resto
         forbidden_zones=request.preferences.forbidden_zones,
         high_rotation_pct=request.preferences.high_rotation_pct
     )
+
+
+# ==================== ENDPOINTS BÁSICOS ====================
+
+@app.get("/")
+async def root():
+    return {
+        "name": "UNITNAVE Designer API",
+        "version": "6.0.0",
+        "status": "running",
+        "features": {
+            "multi_scenario": True,
+            "fitness_evaluation": True,
+            "detailed_report": True,
+            "geometry_exact": GEOMETRY_AVAILABLE,
+            "ortools_optimizer": ORTOOLS_AVAILABLE,
+            "dxf_export": DXF_AVAILABLE,
+            "ga_optimizer": GA_AVAILABLE
+        },
+        "endpoints": {
+            "optimize": "/api/optimize",
+            "scenarios": "/api/scenarios",
+            "compare": "/api/optimize/compare",
+            "optimize_ga": "/api/optimize/ga",
+            "calculate": "/api/calculate",
+            "layout_analyze": "/api/layout/analyze",
+            "layout_optimize": "/api/layout/optimize",
+            "layout_export_dxf": "/api/layout/export/dxf",
+            "layout_full": "/api/layout/full",
+            "docs": "/api/docs"
+        }
+    }
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "6.0.0",
+        "services": {
+            "geometry": GEOMETRY_AVAILABLE,
+            "ortools": ORTOOLS_AVAILABLE,
+            "dxf": DXF_AVAILABLE,
+            "ga": GA_AVAILABLE
+        }
+    }
 
 
 # ==================== ENDPOINTS DE OPTIMIZACIÓN ====================
@@ -295,13 +385,9 @@ async def optimize_layout(request: OptimizeRequest):
     - V5.2: Configuración completa de oficinas por plantas
     """
     try:
-        # Construir input usando función auxiliar
         input_data = build_warehouse_input(request)
-        
-        # Construir preferencias usando función auxiliar
         prefs = build_preferences(request)
         
-        # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)
         result = optimizer.optimize()
         
@@ -411,7 +497,6 @@ async def compare_priorities(request: OptimizeRequest):
                 "scenario": result.metadata.get("scenario_name", "")
             }
         
-        # Determinar recomendación
         scores = {k: v["score"] for k, v in comparison.items()}
         recommended = max(scores, key=scores.get)
         
@@ -515,13 +600,14 @@ async def optimize_scenarios(request: OptimizeRequest):
             }
         
         logger.info(f"✅ Comparación completada: {len(scenarios)} escenarios")
-        
         return scenarios
         
     except Exception as e:
         logger.error(f"❌ Error en comparación: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ==================== CALCULATE ====================
 
 @app.post("/api/calculate")
 async def calculate_capacity(request: CalculateRequest):
@@ -601,7 +687,7 @@ async def delete_design(design_id: str):
     return {"message": "Diseño eliminado"}
 
 
-# ==================== ENDPOINT DE INFORME DETALLADO ====================
+# ==================== INFORME DETALLADO ====================
 
 @app.post("/api/report")
 async def generate_detailed_report(request: OptimizeRequest):
@@ -618,21 +704,14 @@ async def generate_detailed_report(request: OptimizeRequest):
     try:
         from report_generator import ReportGenerator
         
-        # Construir input usando función auxiliar
         input_data = build_warehouse_input(request)
-        
-        # Construir preferencias usando función auxiliar
         prefs = build_preferences(request)
         
-        # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)
         result = optimizer.optimize()
         
-        # Generar informe
         generator = ReportGenerator(result, input_data, prefs)
         report = generator.generate()
-        
-        # Convertir a diccionario
         report_dict = generator.to_dict()
         
         logger.info(f"📋 Informe generado: {report_dict.get('resumen_palets', {}).get('total_palets', 0)} palets")
@@ -655,21 +734,14 @@ async def generate_pdf_report(request: OptimizeRequest):
     """
     try:
         from report_generator import generate_pdf_report as gen_pdf
-        from fastapi.responses import FileResponse
         import tempfile
-        import os
         
-        # Construir input usando función auxiliar
         input_data = build_warehouse_input(request)
-        
-        # Construir preferencias usando función auxiliar
         prefs = build_preferences(request)
         
-        # Optimizar
         optimizer = WarehouseOptimizer(input_data, prefs)
         result = optimizer.optimize()
         
-        # Generar PDF
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
             pdf_path = tmp.name
         
@@ -690,63 +762,7 @@ async def generate_pdf_report(request: OptimizeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== GEOMETRY ANALYSIS (EXACT) ====================
-
-# Importar servicio de geometría
-try:
-    from geometry_service import analyze_layout, GeometryService
-    GEOMETRY_AVAILABLE = True
-    logger.info("✅ Servicio de geometría exacta cargado (Shapely)")
-except ImportError as e:
-    GEOMETRY_AVAILABLE = False
-    analyze_layout = None
-    logger.warning(f"⚠️ Servicio de geometría no disponible: {e}")
-
-
-class LayoutAnalysisRequest(BaseModel):
-    """Request para análisis de geometría exacta"""
-    dimensions: Dict[str, float] = Field(
-        ..., 
-        description="Dimensiones de la nave: {length, width}",
-        example={"length": 80, "width": 40}
-    )
-    elements: List[Dict] = Field(
-        ..., 
-        description="Lista de elementos con type, position, dimensions, rotation"
-    )
-
-
-class ZoneResult(BaseModel):
-    """Zona detectada"""
-    id: str
-    type: str
-    label: str
-    area: float
-    x: float
-    y: float
-    width: float
-    height: float
-    centroid: Dict[str, float]
-    isAutoGenerated: bool = True
-
-
-class MetricsResult(BaseModel):
-    """Métricas calculadas"""
-    totalArea: float
-    occupiedArea: float
-    freeArea: float
-    aisleArea: float
-    circulationArea: float
-    efficiency: float
-    freePercentage: float
-
-
-class LayoutAnalysisResponse(BaseModel):
-    """Response del análisis de geometría"""
-    zones: List[ZoneResult]
-    metrics: MetricsResult
-    dimensions: Dict[str, float]
-
+# ==================== GEOMETRÍA EXACTA (SHAPELY) ====================
 
 @app.post(
     "/api/layout/analyze",
@@ -770,9 +786,7 @@ class LayoutAnalysisResponse(BaseModel):
     """
 )
 async def analyze_layout_geometry(request: LayoutAnalysisRequest):
-    """
-    Endpoint para análisis de geometría exacta del layout
-    """
+    """Endpoint para análisis de geometría exacta del layout"""
     if not GEOMETRY_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -788,7 +802,6 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
         )
         
         logger.info(f"✅ Análisis completado: {len(result['zones'])} zonas detectadas")
-        
         return result
         
     except Exception as e:
@@ -799,64 +812,6 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
 
 
 # ==================== OR-TOOLS OPTIMIZATION ====================
-
-# Importar optimizador OR-Tools
-try:
-    from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer
-    ORTOOLS_AVAILABLE = True
-    logger.info("✅ Optimizador OR-Tools cargado")
-except ImportError as e:
-    ORTOOLS_AVAILABLE = False
-    ortools_optimize = None
-    logger.warning(f"⚠️ OR-Tools no disponible: {e}")
-
-
-class OptimizeLayoutRequest(BaseModel):
-    """Request para optimización de layout"""
-    dimensions: Dict[str, float] = Field(
-        ..., 
-        description="Dimensiones de la nave: {length, width}",
-        example={"length": 80, "width": 40}
-    )
-    elements: List[Dict] = Field(
-        ..., 
-        description="Lista de elementos"
-    )
-    moved_element_id: Optional[str] = Field(
-        None,
-        description="ID del elemento que se movió manualmente"
-    )
-    moved_position: Optional[Dict[str, float]] = Field(
-        None,
-        description="Nueva posición del elemento movido: {x, y}"
-    )
-    fixed_elements: Optional[List[str]] = Field(
-        None,
-        description="IDs de elementos que no deben moverse"
-    )
-
-
-class OptimizedElementResponse(BaseModel):
-    """Elemento optimizado"""
-    id: str
-    type: str
-    x: float
-    y: float
-    width: float
-    height: float
-    rotation: float = 0
-    was_moved: bool = False
-
-
-class OptimizeLayoutResponse(BaseModel):
-    """Response de optimización"""
-    success: bool
-    elements: List[OptimizedElementResponse]
-    solver_status: str
-    solve_time_ms: float
-    objective_value: float
-    messages: List[str]
-
 
 @app.post(
     "/api/layout/optimize",
@@ -875,9 +830,7 @@ class OptimizeLayoutResponse(BaseModel):
     """
 )
 async def optimize_layout_ortools(request: OptimizeLayoutRequest):
-    """
-    Endpoint para optimización inteligente del layout
-    """
+    """Endpoint para optimización inteligente del layout"""
     if not ORTOOLS_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -896,7 +849,6 @@ async def optimize_layout_ortools(request: OptimizeLayoutRequest):
         )
         
         logger.info(f"✅ Optimización completada: {result['solver_status']}")
-        
         return result
         
     except Exception as e:
@@ -907,45 +859,6 @@ async def optimize_layout_ortools(request: OptimizeLayoutRequest):
 
 
 # ==================== DXF EXPORT ====================
-
-# Importar exportador DXF
-try:
-    from dxf_exporter import export_to_dxf, DXFExporter
-    DXF_AVAILABLE = True
-    logger.info("✅ Exportador DXF cargado")
-except ImportError as e:
-    DXF_AVAILABLE = False
-    export_to_dxf = None
-    logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
-
-
-class ExportDXFRequest(BaseModel):
-    """Request para exportar DXF"""
-    dimensions: Dict[str, float] = Field(
-        ..., 
-        description="Dimensiones de la nave"
-    )
-    elements: List[Dict] = Field(
-        ..., 
-        description="Lista de elementos"
-    )
-    zones: Optional[List[Dict]] = Field(
-        None,
-        description="Zonas auto-detectadas (opcional)"
-    )
-    include_dimensions: bool = Field(
-        True,
-        description="Incluir acotaciones"
-    )
-    include_grid: bool = Field(
-        True,
-        description="Incluir grid de referencia"
-    )
-    scale: str = Field(
-        "1:100",
-        description="Escala del plano"
-    )
-
 
 @app.post(
     "/api/layout/export/dxf",
@@ -962,9 +875,7 @@ class ExportDXFRequest(BaseModel):
     """
 )
 async def export_layout_dxf(request: ExportDXFRequest):
-    """
-    Endpoint para exportar layout a DXF
-    """
+    """Endpoint para exportar layout a DXF"""
     if not DXF_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -980,20 +891,16 @@ async def export_layout_dxf(request: ExportDXFRequest):
             zones=request.zones
         )
         
-        # Crear nombre de archivo
         length = int(request.dimensions.get('length', 80))
         width = int(request.dimensions.get('width', 40))
         filename = f"plano_nave_{length}x{width}.dxf"
         
         logger.info(f"✅ DXF generado: {filename}")
         
-        from fastapi.responses import Response
         return Response(
             content=dxf_bytes,
             media_type="application/dxf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
-            }
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
         
     except Exception as e:
@@ -1003,25 +910,7 @@ async def export_layout_dxf(request: ExportDXFRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== COMBINED ENDPOINT ====================
-
-class FullLayoutRequest(BaseModel):
-    """Request completo para análisis + optimización"""
-    dimensions: Dict[str, float]
-    elements: List[Dict]
-    moved_element_id: Optional[str] = None
-    moved_position: Optional[Dict[str, float]] = None
-    optimize: bool = True
-
-
-class FullLayoutResponse(BaseModel):
-    """Response completo"""
-    elements: List[Dict]
-    zones: List[Dict]
-    metrics: Dict
-    warnings: List[Dict]
-    optimization: Optional[Dict] = None
-
+# ==================== ENDPOINT COMBINADO ====================
 
 @app.post(
     "/api/layout/full",
@@ -1036,9 +925,7 @@ class FullLayoutResponse(BaseModel):
     """
 )
 async def full_layout_analysis(request: FullLayoutRequest):
-    """
-    Endpoint completo para frontend inteligente
-    """
+    """Endpoint completo para frontend inteligente"""
     try:
         result_elements = request.elements
         optimization_result = None
@@ -1055,16 +942,12 @@ async def full_layout_analysis(request: FullLayoutRequest):
             )
             
             if opt_result['success']:
-                # Convertir elementos optimizados al formato original
                 result_elements = []
                 for opt_el in opt_result['elements']:
-                    # Buscar elemento original
                     original = next(
                         (e for e in request.elements if e.get('id') == opt_el['id']),
                         {}
                     )
-                    
-                    # Actualizar posición
                     updated = {**original}
                     if 'position' in updated:
                         updated['position']['x'] = opt_el['x']
@@ -1072,7 +955,6 @@ async def full_layout_analysis(request: FullLayoutRequest):
                     else:
                         updated['x'] = opt_el['x']
                         updated['y'] = opt_el['y']
-                    
                     result_elements.append(updated)
                 
                 optimization_result = {
