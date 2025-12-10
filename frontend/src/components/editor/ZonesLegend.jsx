@@ -60,6 +60,9 @@ const TYPE_ICONS = {
   service_room: ServiceIcon,
   technical_room: TechnicalIcon,
   aisle: DimensionIcon,
+  main_aisle: DimensionIcon,
+  cross_aisle: DimensionIcon,
+  circulation: AreaIcon,
   free_zone: AreaIcon
 }
 
@@ -90,6 +93,12 @@ const TYPE_GROUPS = {
     types: ['office', 'service_room', 'technical_room'],
     icon: OfficeIcon,
     color: '#a855f7'
+  },
+  aisles: {
+    label: 'Pasillos y Circulación',
+    types: ['aisle', 'main_aisle', 'cross_aisle', 'circulation'],
+    icon: DimensionIcon,
+    color: '#f59e0b'
   }
 }
 
