@@ -566,3 +566,7 @@ def analyze_layout(dimensions: Dict[str, float], elements: List[Dict[str, Any]])
     )
     engine.add_elements(elements)
     return engine.calculate_layout()
+
+
+# Alias para compatibilidad con main.py
+GeometryService = GeometryEngine
