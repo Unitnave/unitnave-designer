@@ -415,279 +415,279 @@ function processElementsToZones(elements, dimensions) {
 }
 
 // ============================================================
-// FUNCIÓN PARA DETECTAR PASILLOS Y ZONAS LIBRES
-// Algoritmo Geométrico Directo - Spatial Slicing
+// ALGORITMO DE DETECCIÓN DE ESPACIOS LIBRES
+// Usando operaciones booleanas de polígonos (sin dependencias externas)
+// Implementación propia de Sutherland-Hodgman + scanline
 // ============================================================
+
+/**
+ * Convierte un elemento a polígono [x, y, width, height]
+ */
+function elementToRect(el) {
+  const x = el.position?.x ?? 0
+  const y = el.position?.y ?? el.position?.z ?? 0
+  let w, h
+  
+  switch (el.type) {
+    case 'shelf':
+      w = el.dimensions?.length ?? 2.7
+      h = el.dimensions?.depth ?? 1.1
+      break
+    case 'dock':
+      w = el.dimensions?.width ?? 3.5
+      h = (el.dimensions?.depth ?? 0.5) + 4 // Incluir zona maniobra
+      break
+    case 'office':
+      w = el.dimensions?.length ?? el.dimensions?.largo ?? 12
+      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 8
+      break
+    case 'operational_zone':
+    case 'zone':
+      w = el.dimensions?.length ?? el.dimensions?.largo ?? 10
+      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 10
+      break
+    case 'service_room':
+    case 'technical_room':
+      w = el.dimensions?.length ?? el.dimensions?.largo ?? 5
+      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 4
+      break
+    default:
+      w = el.dimensions?.length ?? 3
+      h = el.dimensions?.depth ?? el.dimensions?.width ?? 3
+  }
+  
+  return { x, y, w, h, x2: x + w, y2: y + h, type: el.type }
+}
+
+/**
+ * Algoritmo Scanline para detectar espacios libres
+ * Divide el espacio en franjas horizontales y detecta huecos
+ */
 function detectAisles(shelves, dimensions, allElements) {
   const zones = []
+  const PRECISION = 0.5 // Resolución de 0.5m
   
-  // Convertir todos los elementos a rectángulos con bounds
-  const allRects = allElements.map(el => {
-    const x = el.position?.x ?? 0
-    const y = el.position?.y ?? el.position?.z ?? 0
-    let w, h
-    
-    switch (el.type) {
-      case 'shelf':
-        w = el.dimensions?.length ?? 2.7
-        h = el.dimensions?.depth ?? 1.1
-        break
-      case 'dock':
-        w = el.dimensions?.width ?? 3.5
-        h = (el.dimensions?.depth ?? 0.5) + 4 // Incluir zona maniobra
-        break
-      case 'office':
-        w = el.dimensions?.length ?? el.dimensions?.largo ?? 12
-        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 8
-        break
-      case 'operational_zone':
-      case 'zone':
-        w = el.dimensions?.length ?? el.dimensions?.largo ?? 10
-        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 10
-        break
-      case 'service_room':
-      case 'technical_room':
-        w = el.dimensions?.length ?? el.dimensions?.largo ?? 5
-        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 4
-        break
-      default:
-        w = el.dimensions?.length ?? 3
-        h = el.dimensions?.depth ?? el.dimensions?.width ?? 3
-    }
-    
-    return {
-      x, y, w, h,
-      x2: x + w,
-      y2: y + h,
-      type: el.type
+  // Convertir todos los elementos a rectángulos
+  const obstacles = allElements.map(elementToRect)
+  
+  // Añadir zonas de maniobra de muelles como obstáculos
+  allElements.forEach(el => {
+    if (el.type === 'dock') {
+      const x = el.position?.x ?? 0
+      const y = el.position?.y ?? 0
+      const w = el.dimensions?.width ?? 3.5
+      const maneuverDepth = 4
+      obstacles.push({
+        x, y: y + (el.dimensions?.depth ?? 0.5),
+        w, h: maneuverDepth,
+        x2: x + w, y2: y + (el.dimensions?.depth ?? 0.5) + maneuverDepth,
+        type: 'dock_maneuver'
+      })
     }
   })
   
-  // ============================================================
-  // 1. DETECTAR PASILLOS ENTRE FILAS DE ESTANTERÍAS
-  // ============================================================
-  const shelfRects = allRects.filter(r => r.type === 'shelf')
+  // Obtener todos los puntos Y únicos (bordes horizontales)
+  const yPoints = new Set([0, dimensions.width])
+  obstacles.forEach(obs => {
+    yPoints.add(Math.max(0, obs.y))
+    yPoints.add(Math.min(dimensions.width, obs.y2))
+  })
+  const sortedY = [...yPoints].sort((a, b) => a - b)
   
-  if (shelfRects.length > 0) {
-    // Agrupar estanterías por filas (tolerancia de 0.5m en Y)
-    const rows = []
-    const tolerance = 0.5
+  // Para cada franja horizontal, encontrar espacios libres
+  const freeRects = []
+  
+  for (let i = 0; i < sortedY.length - 1; i++) {
+    const y1 = sortedY[i]
+    const y2 = sortedY[i + 1]
+    const stripHeight = y2 - y1
     
-    shelfRects.forEach(shelf => {
-      let foundRow = rows.find(row => Math.abs(row.y - shelf.y) < tolerance)
-      if (foundRow) {
-        foundRow.shelves.push(shelf)
-        foundRow.minX = Math.min(foundRow.minX, shelf.x)
-        foundRow.maxX = Math.max(foundRow.maxX, shelf.x2)
-        foundRow.maxY2 = Math.max(foundRow.maxY2, shelf.y2)
-      } else {
-        rows.push({
-          y: shelf.y,
-          y2: shelf.y2,
-          maxY2: shelf.y2,
-          shelves: [shelf],
-          minX: shelf.x,
-          maxX: shelf.x2
+    if (stripHeight < PRECISION) continue
+    
+    // Encontrar obstáculos que intersectan esta franja
+    const stripObstacles = obstacles.filter(obs => 
+      obs.y < y2 && obs.y2 > y1
+    ).sort((a, b) => a.x - b.x)
+    
+    // Encontrar huecos en X dentro de esta franja
+    let currentX = 0
+    
+    stripObstacles.forEach(obs => {
+      if (obs.x > currentX) {
+        // Hay un hueco desde currentX hasta obs.x
+        freeRects.push({
+          x: currentX,
+          y: y1,
+          width: obs.x - currentX,
+          height: stripHeight
         })
       }
+      currentX = Math.max(currentX, obs.x2)
     })
     
-    // Ordenar filas por Y
-    rows.sort((a, b) => a.y - b.y)
-    
-    // Crear pasillos HORIZONTALES entre filas
-    for (let i = 0; i < rows.length - 1; i++) {
-      const currentRow = rows[i]
-      const nextRow = rows[i + 1]
-      
-      const aisleY = currentRow.maxY2
-      const aisleHeight = nextRow.y - currentRow.maxY2
-      
-      if (aisleHeight > 0.5) { // Mínimo 0.5m para considerar pasillo
-        // Extender el pasillo a todo el ancho donde hay estanterías
-        const aisleX = Math.min(currentRow.minX, nextRow.minX)
-        const aisleX2 = Math.max(currentRow.maxX, nextRow.maxX)
-        const aisleWidth = aisleX2 - aisleX
-        
-        zones.push({
-          id: `aisle-h-${i}`,
-          originalId: `aisle-h-${i}`,
-          type: aisleHeight >= 4 ? 'main_aisle' : 'aisle',
-          x: aisleX,
-          y: aisleY,
-          width: aisleWidth,
-          height: aisleHeight,
-          rotation: 0,
-          label: aisleHeight >= 4 ? 'Pasillo Principal' : `Pasillo Op. ${i + 1}`,
-          area: aisleWidth * aisleHeight,
-          isAutoGenerated: true
-        })
-      }
-    }
-    
-    // ============================================================
-    // 2. DETECTAR PASILLOS VERTICALES ENTRE ESTANTERÍAS
-    // ============================================================
-    rows.forEach((row, rowIndex) => {
-      // Ordenar estanterías de la fila por X
-      const sortedShelves = [...row.shelves].sort((a, b) => a.x - b.x)
-      
-      for (let i = 0; i < sortedShelves.length - 1; i++) {
-        const current = sortedShelves[i]
-        const next = sortedShelves[i + 1]
-        
-        const gap = next.x - current.x2
-        
-        if (gap > 0.3) { // Mínimo 0.3m para considerar pasillo
-          // Calcular altura del pasillo vertical
-          // Desde el inicio de esta fila hasta el final (o siguiente fila)
-          let aisleY = row.y
-          let aisleHeight = row.maxY2 - row.y
-          
-          // Si hay fila anterior, extender hacia arriba
-          if (rowIndex > 0) {
-            const prevRow = rows[rowIndex - 1]
-            aisleY = prevRow.maxY2
-            aisleHeight = row.maxY2 - prevRow.maxY2
-          }
-          
-          // Si hay fila siguiente, extender hacia abajo
-          if (rowIndex < rows.length - 1) {
-            const nextRow = rows[rowIndex + 1]
-            aisleHeight = nextRow.y - aisleY
-          }
-          
-          zones.push({
-            id: `aisle-v-${rowIndex}-${i}`,
-            originalId: `aisle-v-${rowIndex}-${i}`,
-            type: gap >= 3 ? 'cross_aisle' : 'aisle',
-            x: current.x2,
-            y: aisleY,
-            width: gap,
-            height: aisleHeight,
-            rotation: 0,
-            label: gap >= 3 ? 'Pasillo Transversal' : `Pasillo ${i + 1}`,
-            area: gap * aisleHeight,
-            isAutoGenerated: true
-          })
-        }
-      }
-    })
-    
-    // ============================================================
-    // 3. ZONA DE CIRCULACIÓN SUPERIOR (entre muelles y estanterías)
-    // ============================================================
-    const firstRow = rows[0]
-    const docks = allRects.filter(r => r.type === 'dock')
-    
-    if (docks.length > 0) {
-      const docksMaxY = Math.max(...docks.map(d => d.y2))
-      const gapToShelves = firstRow.y - docksMaxY
-      
-      if (gapToShelves > 1) {
-        zones.push({
-          id: 'circulation-top',
-          originalId: 'circulation-top',
-          type: 'circulation',
-          x: firstRow.minX,
-          y: docksMaxY,
-          width: firstRow.maxX - firstRow.minX,
-          height: gapToShelves,
-          rotation: 0,
-          label: 'Zona Circulación Norte',
-          area: (firstRow.maxX - firstRow.minX) * gapToShelves,
-          isAutoGenerated: true
-        })
-      }
-    }
-    
-    // ============================================================
-    // 4. ZONA DE CIRCULACIÓN INFERIOR
-    // ============================================================
-    const lastRow = rows[rows.length - 1]
-    const bottomGap = dimensions.width - lastRow.maxY2
-    
-    if (bottomGap > 1) {
-      zones.push({
-        id: 'circulation-bottom',
-        originalId: 'circulation-bottom',
-        type: 'circulation',
-        x: lastRow.minX,
-        y: lastRow.maxY2,
-        width: lastRow.maxX - lastRow.minX,
-        height: bottomGap,
-        rotation: 0,
-        label: 'Zona Circulación Sur',
-        area: (lastRow.maxX - lastRow.minX) * bottomGap,
-        isAutoGenerated: true
+    // Hueco final hasta el borde derecho
+    if (currentX < dimensions.length) {
+      freeRects.push({
+        x: currentX,
+        y: y1,
+        width: dimensions.length - currentX,
+        height: stripHeight
       })
-    }
-    
-    // ============================================================
-    // 5. ZONAS LATERALES (izquierda y derecha de estanterías)
-    // ============================================================
-    const allShelvesMinX = Math.min(...rows.map(r => r.minX))
-    const allShelvesMaxX = Math.max(...rows.map(r => r.maxX))
-    const allShelvesMinY = rows[0].y
-    const allShelvesMaxY = lastRow.maxY2
-    
-    // Zona lateral izquierda
-    if (allShelvesMinX > 1) {
-      // Verificar que no haya oficinas/servicios ahí
-      const leftObstacles = allRects.filter(r => 
-        r.type !== 'shelf' && r.x2 <= allShelvesMinX && 
-        r.y < allShelvesMaxY && r.y2 > allShelvesMinY
-      )
-      
-      if (leftObstacles.length === 0) {
-        zones.push({
-          id: 'circulation-left',
-          originalId: 'circulation-left',
-          type: 'circulation',
-          x: 0,
-          y: allShelvesMinY,
-          width: allShelvesMinX,
-          height: allShelvesMaxY - allShelvesMinY,
-          rotation: 0,
-          label: 'Zona Circulación Oeste',
-          area: allShelvesMinX * (allShelvesMaxY - allShelvesMinY),
-          isAutoGenerated: true
-        })
-      }
-    }
-    
-    // Zona lateral derecha
-    if (allShelvesMaxX < dimensions.length - 1) {
-      // Verificar que no haya otros elementos ahí
-      const rightObstacles = allRects.filter(r => 
-        r.type !== 'shelf' && r.x >= allShelvesMaxX &&
-        r.y < allShelvesMaxY && r.y2 > allShelvesMinY
-      )
-      
-      if (rightObstacles.length === 0) {
-        zones.push({
-          id: 'circulation-right',
-          originalId: 'circulation-right',
-          type: 'circulation',
-          x: allShelvesMaxX,
-          y: allShelvesMinY,
-          width: dimensions.length - allShelvesMaxX,
-          height: allShelvesMaxY - allShelvesMinY,
-          rotation: 0,
-          label: 'Zona Circulación Este',
-          area: (dimensions.length - allShelvesMaxX) * (allShelvesMaxY - allShelvesMinY),
-          isAutoGenerated: true
-        })
-      }
     }
   }
   
   // ============================================================
-  // 6. DETECTAR ESPACIOS RESIDUALES (esquinas, etc.)
+  // FUSIONAR RECTÁNGULOS ADYACENTES VERTICALMENTE
   // ============================================================
-  // Esto se puede mejorar con un algoritmo más sofisticado si es necesario
+  const mergedRects = mergeVerticalRects(freeRects, PRECISION)
+  
+  // ============================================================
+  // CLASIFICAR CADA RECTÁNGULO LIBRE
+  // ============================================================
+  mergedRects.forEach((rect, index) => {
+    const { x, y, width, height } = rect
+    const area = width * height
+    
+    // Ignorar espacios muy pequeños
+    if (area < 1) return
+    
+    // Clasificar según forma y tamaño
+    const aspectRatio = width / height
+    let type, label
+    
+    // Pasillos: estrechos y largos
+    if (width <= 4 && height > 6) {
+      // Pasillo vertical (entre columnas de estanterías)
+      type = width >= 3 ? 'cross_aisle' : 'aisle'
+      label = width >= 3 ? 'Pasillo Transversal' : 'Pasillo Operativo'
+    } else if (height <= 4 && width > 6) {
+      // Pasillo horizontal (entre filas)
+      type = height >= 3 ? 'main_aisle' : 'aisle'
+      label = height >= 3 ? 'Pasillo Principal' : 'Pasillo Operativo'
+    } else if (width <= 5 || height <= 5) {
+      // Pasillo pequeño
+      type = 'aisle'
+      label = 'Pasillo'
+    } else if (area > 100) {
+      // Zona grande de circulación
+      type = 'circulation'
+      // Determinar posición para etiqueta
+      if (y < 10) label = 'Zona Circulación Norte'
+      else if (y > dimensions.width - 15) label = 'Zona Circulación Sur'
+      else if (x < 10) label = 'Zona Circulación Oeste'
+      else if (x > dimensions.length - 15) label = 'Zona Circulación Este'
+      else label = 'Zona Circulación'
+    } else {
+      // Zona libre genérica
+      type = 'free_zone'
+      label = 'Zona Libre'
+    }
+    
+    zones.push({
+      id: `free-${index}`,
+      originalId: `free-${index}`,
+      type,
+      x,
+      y,
+      width,
+      height,
+      rotation: 0,
+      label,
+      area,
+      isAutoGenerated: true
+    })
+  })
   
   return zones
+}
+
+/**
+ * Fusiona rectángulos que son adyacentes verticalmente y tienen el mismo X y ancho
+ */
+function mergeVerticalRects(rects, tolerance) {
+  if (rects.length === 0) return []
+  
+  // Agrupar por X y ancho similares
+  const groups = new Map()
+  
+  rects.forEach(rect => {
+    // Crear clave basada en X y ancho (con tolerancia)
+    const keyX = Math.round(rect.x / tolerance) * tolerance
+    const keyW = Math.round(rect.width / tolerance) * tolerance
+    const key = `${keyX}-${keyW}`
+    
+    if (!groups.has(key)) {
+      groups.set(key, [])
+    }
+    groups.get(key).push(rect)
+  })
+  
+  const merged = []
+  
+  groups.forEach(group => {
+    // Ordenar por Y
+    group.sort((a, b) => a.y - b.y)
+    
+    let current = { ...group[0] }
+    
+    for (let i = 1; i < group.length; i++) {
+      const next = group[i]
+      
+      // Si son adyacentes (o casi), fusionar
+      if (Math.abs(next.y - (current.y + current.height)) <= tolerance) {
+        current.height = (next.y + next.height) - current.y
+      } else {
+        merged.push(current)
+        current = { ...next }
+      }
+    }
+    merged.push(current)
+  })
+  
+  // Segunda pasada: fusionar horizontalmente rectángulos con misma Y y altura
+  return mergeHorizontalRects(merged, tolerance)
+}
+
+/**
+ * Fusiona rectángulos que son adyacentes horizontalmente y tienen el mismo Y y altura
+ */
+function mergeHorizontalRects(rects, tolerance) {
+  if (rects.length === 0) return []
+  
+  const groups = new Map()
+  
+  rects.forEach(rect => {
+    const keyY = Math.round(rect.y / tolerance) * tolerance
+    const keyH = Math.round(rect.height / tolerance) * tolerance
+    const key = `${keyY}-${keyH}`
+    
+    if (!groups.has(key)) {
+      groups.set(key, [])
+    }
+    groups.get(key).push(rect)
+  })
+  
+  const merged = []
+  
+  groups.forEach(group => {
+    group.sort((a, b) => a.x - b.x)
+    
+    let current = { ...group[0] }
+    
+    for (let i = 1; i < group.length; i++) {
+      const next = group[i]
+      
+      if (Math.abs(next.x - (current.x + current.width)) <= tolerance) {
+        current.width = (next.x + next.width) - current.x
+      } else {
+        merged.push(current)
+        current = { ...next }
+      }
+    }
+    merged.push(current)
+  })
+  
+  return merged
 }
 
 // ============================================================
@@ -699,7 +699,8 @@ export default function Warehouse2DView({
   onZoneSelect,
   onZoneHover,
   selectedZoneId,
-  hoveredZoneId
+  hoveredZoneId,
+  externalZones = null  // Zonas precalculadas del backend (geometría exacta)
 }) {
   const containerRef = useRef(null)
   const [viewBox, setViewBox] = useState({ width: 800, height: 500 })
@@ -710,10 +711,28 @@ export default function Warehouse2DView({
   const effectiveHover = hoveredZoneId ?? internalHover
   const effectiveSelected = selectedZoneId ?? internalSelected
   
-  // Procesar elementos a zonas
-  const zones = useMemo(() => {
+  // Procesar elementos a zonas (local)
+  const localZones = useMemo(() => {
     return processElementsToZones(elements, dimensions)
   }, [elements, dimensions])
+  
+  // Usar zonas externas (backend) si están disponibles, sino locales
+  const zones = useMemo(() => {
+    if (externalZones && externalZones.length > 0) {
+      // Combinar zonas de elementos (no auto-generadas) + zonas del backend
+      const elementZones = localZones.filter(z => !z.isAutoGenerated)
+      const backendAutoZones = externalZones.filter(z => z.isAutoGenerated)
+      const result = [...elementZones, ...backendAutoZones]
+      
+      // Copiar métricas
+      result.freeArea = externalZones.freeArea || localZones.freeArea
+      result.totalArea = externalZones.totalArea || localZones.totalArea
+      result.occupiedArea = externalZones.occupiedArea || localZones.occupiedArea
+      
+      return result
+    }
+    return localZones
+  }, [externalZones, localZones])
   
   // Calcular escala y offset para centrar
   const { scale, offset } = useMemo(() => {
