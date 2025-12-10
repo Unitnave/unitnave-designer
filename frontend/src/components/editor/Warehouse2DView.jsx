@@ -415,168 +415,177 @@ function processElementsToZones(elements, dimensions) {
 }
 
 // ============================================================
-// FUNCIÓN PARA DETECTAR PASILLOS
+// FUNCIÓN PARA DETECTAR PASILLOS Y ZONAS LIBRES
+// Algoritmo de cobertura total usando grid
 // ============================================================
 function detectAisles(shelves, dimensions, allElements) {
-  const aisles = []
+  const zones = []
+  const CELL_SIZE = 1 // 1 metro por celda
   
-  if (shelves.length === 0) return aisles
+  const gridWidth = Math.ceil(dimensions.length / CELL_SIZE)
+  const gridHeight = Math.ceil(dimensions.width / CELL_SIZE)
   
-  // 1. Agrupar estanterías por filas (misma coordenada Y aproximada)
-  const tolerance = 0.5 // Tolerancia para agrupar en misma fila
-  const rows = []
+  // Crear grid de ocupación (0 = libre, 1 = ocupado)
+  const grid = Array(gridHeight).fill(null).map(() => Array(gridWidth).fill(0))
   
-  shelves.forEach(shelf => {
-    // Buscar si ya existe una fila con esta Y
-    let foundRow = rows.find(row => Math.abs(row.y - shelf.y) < tolerance)
-    if (foundRow) {
-      foundRow.shelves.push(shelf)
-      foundRow.minX = Math.min(foundRow.minX, shelf.x)
-      foundRow.maxX = Math.max(foundRow.maxX, shelf.x + shelf.width)
+  // Procesar TODOS los elementos para marcar ocupación
+  allElements.forEach(el => {
+    const x = el.position?.x ?? 0
+    const y = el.position?.y ?? el.position?.z ?? 0
+    let w, h
+    
+    switch (el.type) {
+      case 'shelf':
+        w = el.dimensions?.length ?? 2.7
+        h = el.dimensions?.depth ?? 1.1
+        break
+      case 'dock':
+        w = el.dimensions?.width ?? 3.5
+        h = (el.dimensions?.depth ?? 0.5) + 4 // Incluir zona maniobra
+        break
+      case 'office':
+        w = el.dimensions?.length ?? el.dimensions?.largo ?? 12
+        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 8
+        break
+      case 'operational_zone':
+      case 'zone':
+        w = el.dimensions?.length ?? el.dimensions?.largo ?? 10
+        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 10
+        break
+      case 'service_room':
+      case 'technical_room':
+        w = el.dimensions?.length ?? el.dimensions?.largo ?? 5
+        h = el.dimensions?.width ?? el.dimensions?.ancho ?? 4
+        break
+      default:
+        w = el.dimensions?.length ?? 3
+        h = el.dimensions?.depth ?? el.dimensions?.width ?? 3
+    }
+    
+    // Marcar celdas ocupadas
+    const startCol = Math.floor(x / CELL_SIZE)
+    const endCol = Math.ceil((x + w) / CELL_SIZE)
+    const startRow = Math.floor(y / CELL_SIZE)
+    const endRow = Math.ceil((y + h) / CELL_SIZE)
+    
+    for (let row = startRow; row < endRow && row < gridHeight; row++) {
+      for (let col = startCol; col < endCol && col < gridWidth; col++) {
+        if (row >= 0 && col >= 0) {
+          grid[row][col] = 1
+        }
+      }
+    }
+  })
+  
+  // Encontrar regiones libres conectadas usando flood fill
+  const visited = Array(gridHeight).fill(null).map(() => Array(gridWidth).fill(false))
+  const freeRegions = []
+  
+  for (let row = 0; row < gridHeight; row++) {
+    for (let col = 0; col < gridWidth; col++) {
+      if (grid[row][col] === 0 && !visited[row][col]) {
+        // Encontrar región conectada
+        const region = floodFill(grid, visited, row, col, gridWidth, gridHeight)
+        if (region.cells.length > 0) {
+          freeRegions.push(region)
+        }
+      }
+    }
+  }
+  
+  // Convertir regiones a zonas
+  freeRegions.forEach((region, index) => {
+    const { minX, maxX, minY, maxY, cells } = region
+    
+    const x = minX * CELL_SIZE
+    const y = minY * CELL_SIZE
+    const width = (maxX - minX + 1) * CELL_SIZE
+    const height = (maxY - minY + 1) * CELL_SIZE
+    const area = cells.length * CELL_SIZE * CELL_SIZE
+    
+    // Clasificar según forma y tamaño
+    const aspectRatio = width / height
+    let type, label
+    
+    if (width <= 4 && height > width * 2) {
+      // Pasillo vertical estrecho
+      type = 'aisle'
+      label = `Pasillo Op. ${index + 1}`
+    } else if (height <= 4 && width > height * 2) {
+      // Pasillo horizontal estrecho
+      type = 'aisle'
+      label = `Pasillo Op. ${index + 1}`
+    } else if (width >= 6 || height >= 6) {
+      if (aspectRatio > 3 || aspectRatio < 0.33) {
+        // Pasillo principal (largo y relativamente ancho)
+        type = 'main_aisle'
+        label = 'Pasillo Principal'
+      } else {
+        // Zona de circulación amplia
+        type = 'circulation'
+        label = 'Zona Circulación'
+      }
+    } else if (area > 20) {
+      // Zona transversal mediana
+      type = 'cross_aisle'
+      label = 'Pasillo Transversal'
     } else {
-      rows.push({
-        y: shelf.y,
-        height: shelf.height,
-        shelves: [shelf],
-        minX: shelf.x,
-        maxX: shelf.x + shelf.width
+      // Zona libre pequeña
+      type = 'free_zone'
+      label = 'Zona Libre'
+    }
+    
+    // Solo añadir si tiene área significativa
+    if (area >= 2) {
+      zones.push({
+        id: `auto-zone-${index}`,
+        originalId: `auto-zone-${index}`,
+        type,
+        x,
+        y,
+        width,
+        height,
+        rotation: 0,
+        label,
+        area,
+        isAutoGenerated: true,
+        cellCount: cells.length
       })
     }
   })
   
-  // Ordenar filas por Y
-  rows.sort((a, b) => a.y - b.y)
+  return zones
+}
+
+// Flood fill para encontrar regiones conectadas
+function floodFill(grid, visited, startRow, startCol, gridWidth, gridHeight) {
+  const cells = []
+  const stack = [[startRow, startCol]]
+  let minX = startCol, maxX = startCol
+  let minY = startRow, maxY = startRow
   
-  // 2. Detectar pasillos entre filas de estanterías
-  for (let i = 0; i < rows.length - 1; i++) {
-    const currentRow = rows[i]
-    const nextRow = rows[i + 1]
+  while (stack.length > 0) {
+    const [row, col] = stack.pop()
     
-    const currentRowBottom = currentRow.y + currentRow.height
-    const nextRowTop = nextRow.y
-    const aisleHeight = nextRowTop - currentRowBottom
+    if (row < 0 || row >= gridHeight || col < 0 || col >= gridWidth) continue
+    if (visited[row][col] || grid[row][col] === 1) continue
     
-    // Si hay espacio entre filas, es un pasillo
-    if (aisleHeight > 1.5) { // Mínimo 1.5m para considerar pasillo
-      const aisleX = Math.min(currentRow.minX, nextRow.minX)
-      const aisleWidth = Math.max(currentRow.maxX, nextRow.maxX) - aisleX
-      
-      // Determinar tipo de pasillo según ancho
-      let aisleType = 'aisle'
-      let aisleLabel = 'Pasillo Operativo'
-      
-      if (aisleHeight >= 6) {
-        aisleType = 'main_aisle'
-        aisleLabel = 'Pasillo Principal'
-      } else if (aisleHeight >= 4) {
-        aisleType = 'cross_aisle'
-        aisleLabel = 'Pasillo Transversal'
-      }
-      
-      aisles.push({
-        id: `aisle-row-${i}`,
-        originalId: `aisle-row-${i}`,
-        type: aisleType,
-        x: aisleX,
-        y: currentRowBottom,
-        width: aisleWidth,
-        height: aisleHeight,
-        rotation: 0,
-        label: aisleLabel,
-        area: aisleWidth * aisleHeight,
-        isAutoGenerated: true
-      })
-    }
+    visited[row][col] = true
+    cells.push([row, col])
+    
+    minX = Math.min(minX, col)
+    maxX = Math.max(maxX, col)
+    minY = Math.min(minY, row)
+    maxY = Math.max(maxY, row)
+    
+    // 4-conectividad (arriba, abajo, izquierda, derecha)
+    stack.push([row - 1, col])
+    stack.push([row + 1, col])
+    stack.push([row, col - 1])
+    stack.push([row, col + 1])
   }
   
-  // 3. Detectar pasillo perimetral superior (zona de muelles)
-  const docks = allElements.filter(el => el.type === 'dock')
-  if (docks.length > 0 && rows.length > 0) {
-    const firstRowY = rows[0].y
-    const docksMaxY = Math.max(...docks.map(d => (d.position?.y ?? 0) + (d.dimensions?.depth ?? 0.5) + 4))
-    
-    if (firstRowY - docksMaxY > 2) {
-      // Hay espacio entre muelles y primera fila de estanterías
-      const perimeterHeight = firstRowY - docksMaxY
-      aisles.push({
-        id: 'aisle-perimeter-top',
-        originalId: 'aisle-perimeter-top',
-        type: 'circulation',
-        x: 0,
-        y: docksMaxY,
-        width: dimensions.length,
-        height: perimeterHeight,
-        rotation: 0,
-        label: 'Zona Circulación',
-        area: dimensions.length * perimeterHeight,
-        isAutoGenerated: true
-      })
-    }
-  }
-  
-  // 4. Detectar pasillo perimetral inferior
-  if (rows.length > 0) {
-    const lastRow = rows[rows.length - 1]
-    const lastRowBottom = lastRow.y + lastRow.height
-    const bottomSpace = dimensions.width - lastRowBottom
-    
-    if (bottomSpace > 2) {
-      aisles.push({
-        id: 'aisle-perimeter-bottom',
-        originalId: 'aisle-perimeter-bottom',
-        type: 'circulation',
-        x: 0,
-        y: lastRowBottom,
-        width: dimensions.length,
-        height: bottomSpace,
-        rotation: 0,
-        label: 'Zona Circulación Sur',
-        area: dimensions.length * bottomSpace,
-        isAutoGenerated: true
-      })
-    }
-  }
-  
-  // 5. Detectar pasillos verticales (entre columnas de estanterías)
-  if (rows.length > 0) {
-    // Tomar la fila con más estanterías como referencia
-    const referenceRow = rows.reduce((max, row) => 
-      row.shelves.length > max.shelves.length ? row : max, rows[0])
-    
-    // Ordenar estanterías por X
-    const sortedShelves = [...referenceRow.shelves].sort((a, b) => a.x - b.x)
-    
-    for (let i = 0; i < sortedShelves.length - 1; i++) {
-      const currentShelf = sortedShelves[i]
-      const nextShelf = sortedShelves[i + 1]
-      
-      const currentRight = currentShelf.x + currentShelf.width
-      const gap = nextShelf.x - currentRight
-      
-      // Si hay un hueco significativo, es un pasillo vertical
-      if (gap > 3) {
-        // Calcular altura del pasillo (desde primera a última fila)
-        const aisleTop = rows[0].y
-        const aisleBottom = rows[rows.length - 1].y + rows[rows.length - 1].height
-        
-        aisles.push({
-          id: `aisle-vertical-${i}`,
-          originalId: `aisle-vertical-${i}`,
-          type: gap >= 6 ? 'main_aisle' : 'cross_aisle',
-          x: currentRight,
-          y: aisleTop,
-          width: gap,
-          height: aisleBottom - aisleTop,
-          rotation: 0,
-          label: gap >= 6 ? 'Pasillo Principal' : 'Pasillo Transversal',
-          area: gap * (aisleBottom - aisleTop),
-          isAutoGenerated: true
-        })
-      }
-    }
-  }
-  
-  return aisles
+  return { cells, minX, maxX, minY, maxY }
 }
 
 // ============================================================
