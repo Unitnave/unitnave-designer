@@ -508,7 +508,12 @@ async def handle_action(data: dict, session_id: str, client_id: str, engine: Int
     
     logger.info(f"🎬 Acción '{action}' de {client_id} en elemento {element_id}")
     
-    if action == 'move':
+    # ✅ PING/PONG - Heartbeat del frontend
+    if action == 'ping':
+        logger.debug(f"🏓 Ping recibido de {client_id} (vía action)")
+        return {'type': 'pong', 'timestamp': datetime.now().isoformat()}
+    
+    elif action == 'move':
         return await handle_move(data, session_id, client_id, engine)
     
     elif action == 'select':
