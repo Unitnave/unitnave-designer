@@ -401,5 +401,5 @@ class WebSocketManager:
         }
 
 
-# Instancia global
-ws_manager = WebSocketManager()
+# Instancia global - CORREGIDA para importar como 'manager'
+manager = WebSocketManager()

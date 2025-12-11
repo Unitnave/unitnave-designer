@@ -1,14 +1,6 @@
 """
 UNITNAVE Designer - WebSocket Routes (V1.3 PRODUCTION + LOGGING)
 Endpoints WebSocket para edición interactiva en tiempo real.
-
-CHANGES FOR PRODUCTION:
-- ✅ Fixed element_locked/element_unlocked messages
-- ✅ Added all REST endpoints for Railway fallback
-- ✅ Added CORS headers for Vercel
-- ✅ Redis-ready (comentado para habilitar)
-- ✅ Railway env vars support
-- ✅ LOGGING ULTRA-DETALLADO en WebSocket handshake
 """
 
 import os
@@ -31,21 +23,11 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN DE PRODUCCIÓN
 # ============================================================
 
-# Railway: Usa variables de entorno
 DEFAULT_LENGTH = float(os.getenv("WAREHOUSE_LENGTH", 80))
 DEFAULT_WIDTH = float(os.getenv("WAREHOUSE_WIDTH", 40))
 
-# Redis (descomentar cuando estés listo)
-# import redis
-# redis_client = redis.Redis(
-#     host=os.getenv("REDIS_HOST", "localhost"),
-#     port=int(os.getenv("REDIS_PORT", 6379)),
-#     password=os.getenv("REDIS_PASSWORD", None),
-#     decode_responses=True
-# )
-
 # ============================================================
-# STORAGE DE ENGINES (En producción usar Redis)
+# STORAGE DE ENGINES
 # ============================================================
 
 layout_engines: Dict[str, InteractiveLayoutEngine] = {}
@@ -59,13 +41,11 @@ def get_or_create_engine(session_id: str,
         logger.info(f"🏭 Nuevo engine creado para sesión {session_id}")
     return layout_engines[session_id]
 
-
 # ============================================================
 # ROUTER
 # ============================================================
 
 router = APIRouter(tags=["Interactive Layout"])
-
 
 # ============================================================
 # WEBSOCKET PRINCIPAL (RAILWAY + VERCEL) - CON LOGGING DETALLADO
@@ -73,35 +53,24 @@ router = APIRouter(tags=["Interactive Layout"])
 
 @router.websocket("/ws/layout/{session_id}")
 async def layout_websocket(websocket: WebSocket, session_id: str):
-    """WebSocket principal para edición interactiva - CON LOGGING ULTRA-DETALLADO"""
+    """WebSocket principal para edición interactiva"""
     
-    # ============================================================
-    # 🎯 LOGGING ULTRA-DETALLADO DEL HANDSHAKE
-    # ============================================================
     logger.info("=" * 80)
     logger.info(f"🔌 WEBSOCKET HANDSHAKE INICIADO")
     logger.info(f"🔌 Session ID: {session_id}")
     logger.info(f"🔌 Cliente IP: {websocket.client.host if websocket.client else 'UNKNOWN'}")
-    logger.info(f"🔌 Cliente Port: {websocket.client.port if websocket.client else 'UNKNOWN'}")
     logger.info(f"🔌 Query Params: {dict(websocket.query_params)}")
     logger.info(f"🔌 Headers RAW:")
     for key, value in websocket.headers.items():
         logger.info(f"    {key}: {value}")
-    logger.info(f"🔌 Scope type: {websocket.scope.get('type')}")
-    logger.info(f"🔌 Scope path: {websocket.scope.get('path')}")
-    logger.info(f"🔌 Scope scheme: {websocket.scope.get('scheme')}")
     logger.info("=" * 80)
     
-    # Extraer user de query params
     user_name = websocket.query_params.get('user', 'Anónimo')
     client_id = f"{session_id}_{uuid.uuid4().hex[:8]}"
     
     logger.info(f"🔌 User name extraído: {user_name}")
     logger.info(f"🔌 Client ID generado: {client_id}")
     
-    # ============================================================
-    # INTENTAR ACCEPT
-    # ============================================================
     logger.info("🔌 Intentando websocket.accept()...")
     
     try:
@@ -113,9 +82,6 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
     
     logger.info("=" * 80)
     
-    # ============================================================
-    # CONEXIÓN AL MANAGER
-    # ============================================================
     try:
         logger.info(f"🔌 Conectando al manager: client_id={client_id}, session={session_id}")
         connected = await manager.connect(websocket, session_id, client_id, user_name)
@@ -130,7 +96,6 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
         engine = get_or_create_engine(session_id)
         logger.info(f"✅ Engine obtenido para sesión {session_id}")
         
-        # Enviar estado inicial con users
         users = manager.get_session_users(session_id)
         logger.info(f"📤 Enviando mensaje 'connected' con {len(users)} usuarios")
         
@@ -144,9 +109,6 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
         
         logger.info(f"✅ Mensaje 'connected' enviado a {client_id}")
         
-        # ============================================================
-        # LOOP DE MENSAJES
-        # ============================================================
         message_count = 0
         while True:
             logger.debug(f"⏳ Esperando mensaje de {client_id}...")
@@ -173,7 +135,6 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
         logger.info(f"🧹 Limpiando conexión de {client_id}")
         manager.disconnect(client_id)
         
-        # Broadcast desconexión a otros usuarios
         users = manager.get_session_users(session_id)
         logger.info(f"📢 Broadcasting user_left a sesión {session_id} ({len(users)} usuarios restantes)")
         await manager.broadcast_to_session(
@@ -186,17 +147,15 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
         )
         logger.info(f"✅ Cleanup completado para {client_id}")
 
-
 # ============================================================
 # RUTA ALTERNATIVA (por si el frontend usa otra URL)
 # ============================================================
 
 @router.websocket("/realtime/layout/{session_id}")
 async def layout_websocket_alt(websocket: WebSocket, session_id: str):
-    """Ruta alternativa - redirige a la principal"""
+    """Ruta alternativa - redirige a la handler principal"""
     logger.info(f"🔄 Ruta alternativa /realtime/layout/{session_id} - redirigiendo a handler principal")
     await layout_websocket(websocket, session_id)
-
 
 # ============================================================
 # MESSAGE HANDLERS
@@ -206,7 +165,6 @@ async def handle_websocket_message(data: dict, session_id: str, client_id: str, 
     """Manejador central de mensajes"""
     message_type = data.get('type')
     
-    # ❌ CRITICAL FIX: Manejar mensajes sin 'type' (compatibilidad con tu frontend)
     if message_type is None and data.get('action'):
         message_type = 'action'
     
@@ -243,7 +201,6 @@ async def handle_initialize(data: dict, session_id: str, engine: InteractiveLayo
     
     result = engine.initialize_from_elements(elements)
     
-    # ✅ CRITICAL FIX: Enviar users actualizados
     users = manager.get_session_users(session_id)
     
     logger.info(f"📢 Broadcasting state_update a sesión {session_id}")
@@ -295,7 +252,6 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
     
     logger.info(f"📦 Move: {element_id} -> ({x}, {y}) por {client_id}")
     
-    # Intentar bloquear elemento
     can_lock = await manager.try_lock_element(session_id, element_id, client_id)
     if not can_lock:
         logger.warning(f"🔒 Elemento {element_id} bloqueado, rechazando move de {client_id}")
@@ -305,17 +261,14 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
             'message': f'Elemento {element_id} está bloqueado'
         }
     
-    # Mover elemento
     result = await engine.move_element(element_id, x, y)
     
     if 'error' in result:
         logger.error(f"❌ Error moviendo elemento: {result['error']}")
         return result
     
-    # ✅ CRITICAL FIX: Preparar users actualizados
     users = manager.get_session_users(session_id)
     
-    # Broadcast a TODOS
     logger.info(f"📢 Broadcasting element_moved a sesión {session_id}")
     await manager.broadcast_to_session(
         session_id,
@@ -338,10 +291,8 @@ async def handle_select(data: dict, session_id: str, client_id: str) -> dict:
     
     logger.info(f"🔒 Select: {element_id} por {client_id}")
     
-    # Intentar bloquear
     can_lock = await manager.try_lock_element(session_id, element_id, client_id)
     
-    # ✅ CRITICAL FIX: Preparar users actualizados
     users = manager.get_session_users(session_id)
     
     if can_lock:
@@ -377,7 +328,6 @@ async def handle_deselect(data: dict, session_id: str, client_id: str) -> dict:
     
     manager.unlock_element(client_id, element_id)
     
-    # ✅ CRITICAL FIX: Preparar users actualizados
     users = manager.get_session_users(session_id)
     
     await manager.broadcast_to_session(
@@ -411,7 +361,6 @@ async def handle_cursor(data: dict, session_id: str, client_id: str) -> dict:
     )
     
     return None
-
 
 # ============================================================
 # REST ENDPOINTS (Vercel Fallback)
@@ -458,53 +407,3 @@ async def get_stats():
     }
     logger.info(f"📊 Stats: {stats}")
     return stats
-
-# ============================================================
-# HEALTH CHECK (Railway necesita esto)
-# ============================================================
-
-@router.get("/health")
-async def health_check():
-    """Health check para Railway"""
-    return {
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "connections": len(manager.clients)
-    }
-
-@router.get("/ws/health")
-async def ws_health_check():
-    """Health check específico para WebSocket"""
-    return {
-        "status": "ok",
-        "websocket": "enabled",
-        "timestamp": datetime.now().isoformat(),
-        "active_sessions": len(layout_engines),
-        "active_clients": len(manager.clients)
-    }
-
-# ============================================================
-# INSTRUCCIONES
-# ============================================================
-
-"""
-CÓMO AÑADIR A main.py:
-
-1. Importar al inicio:
-   from websocket_routes import router as ws_router
-
-2. Incluir router después de crear app:
-   app.include_router(ws_router)
-
-3. Asegurarse de tener websockets instalado:
-   pip install websockets
-
-ENDPOINTS DISPONIBLES:
-- WebSocket: /ws/layout/{session_id}?user=NombreUsuario
-- WebSocket (alt): /realtime/layout/{session_id}?user=NombreUsuario
-- REST: /api/layout/move/{session_id}
-- REST: /api/layout/state/{session_id}
-- REST: /api/sessions/stats
-- Health: /health
-- Health WS: /ws/health
-"""
