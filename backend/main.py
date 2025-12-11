@@ -204,7 +204,7 @@ async def websocket_cors_middleware(request: Request, call_next):
 # ==================== CORS ESTÁNDAR (para REST API) ====================
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
+    "http://localhost:5173,http://localhost:3000,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
 ).split(",")
 
 app.add_middleware(
