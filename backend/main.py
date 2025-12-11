@@ -1,7 +1,7 @@
 """
-UNITNAVE API v6.2 - Motor CAD Profesional
+UNITNAVE API v6.3 - Motor CAD Profesional
 Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF + WebSocket
-+ LOGGING ULTRA-DETALLADO + CORS WEBSOCKET
++ LOGGING ULTRA-DETALLADO + CORS WEBSOCKET + DEBUG ENDPOINT
 
 ARCHIVO: backend/main.py
 """
@@ -93,7 +93,7 @@ except ImportError as e:
 app = FastAPI(
     title="UNITNAVE Designer API",
     description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
-    version="6.2.0",
+    version="6.3.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -204,7 +204,7 @@ async def websocket_cors_middleware(request: Request, call_next):
 # ==================== CORS ESTÁNDAR (para REST API) ====================
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
+    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
 ).split(",")
 
 app.add_middleware(
@@ -215,10 +215,85 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== WEBSOCKET ROUTER (NUEVO) ====================
+
+# ==================== DEBUG ENDPOINT (NO NECESITA CONSOLA) ====================
+@app.get("/debug/websocket-diagnosis")
+async def websocket_diagnosis(request: Request):
+    """
+    Endpoint que te dice EXACTAMENTE qué está pasando con WebSocket.
+    Accesible desde: https://unitnave-designer-production.up.railway.app/debug/websocket-diagnosis
+    """
+    logger.info("=" * 100)
+    logger.info("🔍 DIAGNÓSTICO WEBSOCKET SOLICITADO")
+    logger.info("=" * 100)
+    
+    # Verificar si el router está montado
+    routes = [route.path for route in app.routes if hasattr(route, "path")]
+    websocket_routes = ["/ws/layout/{session_id}", "/realtime/layout/{session_id}"]
+    
+    mounted_routes = []
+    for ws_route in websocket_routes:
+        if ws_route in routes:
+            mounted_routes.append(ws_route)
+    
+    is_mounted = len(mounted_routes) > 0
+    
+    logger.info(f"📍 Router WebSocket montado: {is_mounted}")
+    if is_mounted:
+        logger.info(f"✅ Rutas encontradas: {mounted_routes}")
+    else:
+        logger.error(f"❌ Rutas WebSocket NO encontradas en: {routes}")
+    
+    # Log de headers recibidos (esto es CRÍTICO)
+    logger.info(f"🔑 Origin recibido: {request.headers.get('origin', 'NO ORIGIN')}")
+    logger.info(f"🔑 Connection: {request.headers.get('connection', 'NO CONNECTION')}")
+    logger.info(f"🔑 Upgrade: {request.headers.get('upgrade', 'NO UPGRADE')}")
+    logger.info(f"🔑 Sec-WebSocket-Key: {request.headers.get('sec-websocket-key', 'NO KEY')}")
+    logger.info(f"🔑 Sec-WebSocket-Version: {request.headers.get('sec-websocket-version', 'NO VERSION')}")
+    
+    logger.info("=" * 100)
+    
+    return {
+        "status": "diagnosis_complete",
+        "websocket_available": WEBSOCKET_AVAILABLE,
+        "websocket_route_mounted": is_mounted,
+        "mounted_routes": mounted_routes,
+        "all_routes": routes,
+        "headers_received": {
+            "origin": request.headers.get("origin"),
+            "connection": request.headers.get("connection"),
+            "upgrade": request.headers.get("upgrade"),
+            "sec_websocket_key": request.headers.get("sec-websocket-key"),
+            "sec_websocket_version": request.headers.get("sec-websocket-version"),
+        },
+        "cors_config": {
+            "allowed_origins": ALLOWED_ORIGINS,
+            "has_spaces": any(" " in origin for origin in ALLOWED_ORIGINS),
+            "clean_origins": [origin.strip() for origin in ALLOWED_ORIGINS],
+        },
+        "services": {
+            "geometry": GEOMETRY_AVAILABLE,
+            "ortools": ORTOOLS_AVAILABLE,
+            "dxf": DXF_AVAILABLE,
+            "ga": GA_AVAILABLE,
+            "websocket": WEBSOCKET_AVAILABLE
+        },
+        "recommendation": (
+            "Si 'websocket_route_mounted' es false, el router no está incluido. "
+            "Si 'origin' es null, CORS no está configurado. "
+            "Si 'websocket_available' es false, hay error de import en websocket_routes.py"
+        )
+    }
+# ==================== FIN DEBUG ENDPOINT ====================
+
+
+# ==================== WEBSOCKET ROUTER ====================
 if WEBSOCKET_AVAILABLE and ws_router:
     app.include_router(ws_router)
     logger.info("✅ Router WebSocket incluido")
+else:
+    logger.warning("⚠️ Router WebSocket NO incluido - WEBSOCKET_AVAILABLE=" + str(WEBSOCKET_AVAILABLE))
+
 
 # ==================== MODELOS REQUEST ====================
 
@@ -451,7 +526,7 @@ async def root():
     logger.info("🏠 Root endpoint llamado")
     return {
         "name": "UNITNAVE Designer API",
-        "version": "6.2.0",
+        "version": "6.3.0",
         "status": "running",
         "features": {
             "multi_scenario": True,
@@ -462,7 +537,8 @@ async def root():
             "dxf_export": DXF_AVAILABLE,
             "ga_optimizer": GA_AVAILABLE,
             "websocket_interactive": WEBSOCKET_AVAILABLE,
-            "websocket_cors": True
+            "websocket_cors": True,
+            "debug_endpoint": True
         },
         "endpoints": {
             "optimize": "/api/optimize",
@@ -475,6 +551,7 @@ async def root():
             "layout_export_dxf": "/api/layout/export/dxf",
             "layout_full": "/api/layout/full",
             "websocket": "/ws/layout/{session_id}",
+            "debug": "/debug/websocket-diagnosis",
             "docs": "/api/docs"
         }
     }
@@ -486,7 +563,7 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "6.2.0",
+        "version": "6.3.0",
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
             "ortools": ORTOOLS_AVAILABLE,
@@ -1086,9 +1163,10 @@ async def full_layout_analysis(request: FullLayoutRequest):
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 80)
-    logger.info("🏭 UNITNAVE Designer API v6.2 - Motor CAD Profesional")
+    logger.info("🏭 UNITNAVE Designer API v6.3 - Motor CAD Profesional")
     logger.info("🎯 LOGGING ULTRA-DETALLADO ACTIVADO")
     logger.info("🌐 CORS WEBSOCKET MIDDLEWARE ACTIVADO")
+    logger.info("🔍 DEBUG ENDPOINT ACTIVADO: /debug/websocket-diagnosis")
     logger.info("=" * 80)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
     logger.info(f"🎯 Multi-Escenario: Activo")
