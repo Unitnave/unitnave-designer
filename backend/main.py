@@ -1,7 +1,7 @@
 """
-UNITNAVE API v6.1 - Motor CAD Profesional
+UNITNAVE API v6.2 - Motor CAD Profesional
 Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF + WebSocket
-+ LOGGING ULTRA-DETALLADO
++ LOGGING ULTRA-DETALLADO + CORS WEBSOCKET
 
 ARCHIVO: backend/main.py
 """
@@ -93,7 +93,7 @@ except ImportError as e:
 app = FastAPI(
     title="UNITNAVE Designer API",
     description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
-    version="6.1.0",
+    version="6.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -141,7 +141,67 @@ async def log_every_single_request(request: Request, call_next):
         logger.info("=" * 80)
         raise
 
-# ==================== CORS ====================
+
+# ==================== MIDDLEWARE CORS PARA WEBSOCKET (CRÍTICO) ====================
+@app.middleware("http")
+async def websocket_cors_middleware(request: Request, call_next):
+    """
+    FastAPI no aplica CORS al handshake WebSocket de forma nativa.
+    Este middleware manual inyecta los headers necesarios para que
+    el navegador permita la conexión.
+    """
+    # Dominios permitidos (tu frontend en Vercel + desarrollo local)
+    allowed_origins = [
+        "https://unitnave-designer.vercel.app",
+        "https://unitnave.vercel.app",
+        "https://unitnave.com",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000"
+    ]
+    
+    # Obtener el Origin del request
+    origin = request.headers.get("origin", "")
+    
+    logger.debug(f"🌐 CORS Check - Origin: {origin}, Path: {request.url.path}")
+    
+    # Manejar preflight OPTIONS primero
+    if request.method == "OPTIONS":
+        logger.info(f"🔄 Preflight OPTIONS request desde {origin}")
+        response = Response(status_code=200)
+        if origin in allowed_origins or origin == "":
+            response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
+                "Connection, Upgrade, Sec-WebSocket-Key, Sec-WebSocket-Version, "
+                "Sec-WebSocket-Extensions, Sec-WebSocket-Protocol"
+            )
+            response.headers["Access-Control-Max-Age"] = "86400"
+        return response
+    
+    # Procesar la petición normal
+    response = await call_next(request)
+    
+    # Si el Origin está en la lista permitida, inyectar headers
+    if origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
+            "Connection, Upgrade, Sec-WebSocket-Key, Sec-WebSocket-Version, "
+            "Sec-WebSocket-Extensions, Sec-WebSocket-Protocol"
+        )
+    
+    return response
+# ==================== FIN MIDDLEWARE CORS WEBSOCKET ====================
+
+
+# ==================== CORS ESTÁNDAR (para REST API) ====================
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
@@ -391,7 +451,7 @@ async def root():
     logger.info("🏠 Root endpoint llamado")
     return {
         "name": "UNITNAVE Designer API",
-        "version": "6.1.0",
+        "version": "6.2.0",
         "status": "running",
         "features": {
             "multi_scenario": True,
@@ -401,7 +461,8 @@ async def root():
             "ortools_optimizer": ORTOOLS_AVAILABLE,
             "dxf_export": DXF_AVAILABLE,
             "ga_optimizer": GA_AVAILABLE,
-            "websocket_interactive": WEBSOCKET_AVAILABLE
+            "websocket_interactive": WEBSOCKET_AVAILABLE,
+            "websocket_cors": True
         },
         "endpoints": {
             "optimize": "/api/optimize",
@@ -425,13 +486,14 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "6.1.0",
+        "version": "6.2.0",
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
             "ortools": ORTOOLS_AVAILABLE,
             "dxf": DXF_AVAILABLE,
             "ga": GA_AVAILABLE,
-            "websocket": WEBSOCKET_AVAILABLE
+            "websocket": WEBSOCKET_AVAILABLE,
+            "websocket_cors": True
         },
         "active_sessions": len(layout_engines) if WEBSOCKET_AVAILABLE else 0
     }
@@ -1024,8 +1086,9 @@ async def full_layout_analysis(request: FullLayoutRequest):
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 80)
-    logger.info("🏭 UNITNAVE Designer API v6.1 - Motor CAD Profesional")
+    logger.info("🏭 UNITNAVE Designer API v6.2 - Motor CAD Profesional")
     logger.info("🎯 LOGGING ULTRA-DETALLADO ACTIVADO")
+    logger.info("🌐 CORS WEBSOCKET MIDDLEWARE ACTIVADO")
     logger.info("=" * 80)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
     logger.info(f"🎯 Multi-Escenario: Activo")
