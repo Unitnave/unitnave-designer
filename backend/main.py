@@ -78,16 +78,11 @@ except ImportError as e:
     logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
 
 # ==================== WEBSOCKET (NUEVO) ====================
-try:
-    from websocket_routes import router as ws_router
-    from interactive_layout_engine import layout_engines
-    WEBSOCKET_AVAILABLE = True
-    logger.info("✅ WebSocket para edición interactiva cargado")
-except ImportError as e:
-    WEBSOCKET_AVAILABLE = False
-    ws_router = None
-    layout_engines = {}
-    logger.warning(f"⚠️ WebSocket no disponible: {e}")
+# NOTA: El import real y montaje se hace en el bloque DEBUG más abajo
+# Este bloque solo inicializa las variables por si el DEBUG falla
+WEBSOCKET_AVAILABLE = False
+ws_router = None
+layout_engines = {}
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -319,9 +314,10 @@ async def websocket_diagnosis(request: Request):
 
 
 # ==================== WEBSOCKET ROUTER ====================
-if WEBSOCKET_AVAILABLE and ws_router:
-    app.include_router(ws_router)
-    logger.info("✅ Router WebSocket incluido")
+# NOTA: El router ya está montado en el bloque DEBUG más arriba (línea ~116)
+# Este bloque solo hace logging del estado
+if WEBSOCKET_AVAILABLE:
+    logger.info("✅ Router WebSocket está activo")
 else:
     logger.warning("⚠️ Router WebSocket NO incluido - WEBSOCKET_AVAILABLE=" + str(WEBSOCKET_AVAILABLE))
 
