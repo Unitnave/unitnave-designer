@@ -1,6 +1,11 @@
 /**
- * UNITNAVE Designer - Layout Store (V1.0)
+ * UNITNAVE Designer - Layout Store (V1.1)
  * State management con Zustand para edición interactiva
+ * 
+ * CHANGES:
+- - Fixed element_locked/element_unlocked handlers to update onlineUsers and lockedElements
+- - Added proper state validation for undefined users
+- - Removed process.env.NODE_ENV dependency
  */
 
 import { create } from 'zustand'
@@ -58,6 +63,7 @@ export interface Metrics {
   storage_area: number
   efficiency: number
   aisle_percentage: number
+  storage_percentage: number
   element_count: number
   zone_count: number
 }
@@ -74,9 +80,11 @@ export interface OnlineUser {
 export interface Warning {
   type: string
   severity: 'warning' | 'error' | 'info'
-  zone_id?: string
-  element_id?: string
   message: string
+  element_id?: string
+  zone_id?: string
+  value?: number
+  min_value?: number
 }
 
 // ============================================================
@@ -84,20 +92,13 @@ export interface Warning {
 // ============================================================
 
 interface LayoutState {
-  // Identificación
   sessionId: string | null
   clientId: string | null
-  
-  // Dimensiones de la nave
   dimensions: { length: number; width: number; height: number }
-  
-  // Elementos y zonas
   elements: WarehouseElement[]
   zones: Zone[]
   metrics: Metrics | null
   warnings: Warning[]
-  
-  // UI State
   selectedElementId: string | null
   hoveredElementId: string | null
   isDragging: boolean
@@ -105,18 +106,12 @@ interface LayoutState {
   isRotating: boolean
   isProcessing: boolean
   isInitializing: boolean
-  
-  // Conexión
   isConnected: boolean
   reconnectAttempts: number
   lastSyncTimestamp: number | null
   lastError: string | null
-  
-  // Colaboración
   onlineUsers: OnlineUser[]
   lockedElements: Record<string, string>
-  
-  // Undo/Redo
   canUndo: boolean
   canRedo: boolean
 }
@@ -126,30 +121,17 @@ interface LayoutState {
 // ============================================================
 
 interface LayoutActions {
-  // Session
   setSession: (sessionId: string, clientId: string) => void
-  
-  // Dimensions
   setDimensions: (dims: { length: number; width: number; height?: number }) => void
-  
-  // Elements
   setElements: (elements: WarehouseElement[]) => void
   addElement: (element: WarehouseElement) => void
   updateElement: (id: string, updates: Partial<WarehouseElement>) => void
   deleteElement: (id: string) => void
   moveElementOptimistic: (id: string, x: number, y: number) => void
-  
-  // Zones
   setZones: (zones: Zone[]) => void
   updateZones: (zones: Zone[], metrics?: Metrics | null) => void
-  
-  // Metrics
   setMetrics: (metrics: Metrics | null) => void
-  
-  // Warnings
   setWarnings: (warnings: Warning[]) => void
-  
-  // UI State
   setSelectedElement: (id: string | null) => void
   setHoveredElement: (id: string | null) => void
   setDragging: (isDragging: boolean) => void
@@ -157,32 +139,22 @@ interface LayoutActions {
   setRotating: (isRotating: boolean) => void
   setProcessing: (isProcessing: boolean) => void
   setInitializing: (isInitializing: boolean) => void
-  
-  // Conexión
   setConnected: (isConnected: boolean) => void
   incrementReconnectAttempts: () => void
   resetReconnectAttempts: () => void
   setLastSync: (timestamp: number) => void
   setError: (error: string | null) => void
-  
-  // Colaboración
   setOnlineUsers: (users: OnlineUser[]) => void
   addOnlineUser: (user: OnlineUser) => void
   removeOnlineUser: (clientId: string) => void
   updateUserCursor: (clientId: string, position: { x: number; y: number }) => void
   updateUserSelection: (clientId: string, elementId: string | null) => void
-  
-  // Locking
   setLockedElements: (locked: Record<string, string>) => void
   lockElement: (elementId: string, clientId: string) => void
   unlockElement: (elementId: string) => void
   isElementLockedByOther: (elementId: string) => boolean
-  
-  // Undo/Redo
   setCanUndo: (canUndo: boolean) => void
   setCanRedo: (canRedo: boolean) => void
-  
-  // Reset
   reset: () => void
 }
 
@@ -224,10 +196,8 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
     subscribeWithSelector((set, get) => ({
       ...initialState,
       
-      // Session
       setSession: (sessionId, clientId) => set({ sessionId, clientId }, false, 'setSession'),
       
-      // Dimensions
       setDimensions: (dims) => set({ 
         dimensions: { 
           length: dims.length, 
@@ -236,7 +206,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         } 
       }, false, 'setDimensions'),
       
-      // Elements
       setElements: (elements) => set({ elements }, false, 'setElements'),
       
       addElement: (element) => set((state) => ({
@@ -260,7 +229,6 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         )
       }), false, 'moveElementOptimistic'),
       
-      // Zones
       setZones: (zones) => set({ zones }, false, 'setZones'),
       
       updateZones: (zones, metrics) => set((state) => ({
@@ -268,32 +236,50 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         metrics: metrics ?? state.metrics
       }), false, 'updateZones'),
       
-      // Metrics
       setMetrics: (metrics) => set({ metrics }, false, 'setMetrics'),
       
-      // Warnings
       setWarnings: (warnings) => set({ warnings }, false, 'setWarnings'),
       
-      // UI State
       setSelectedElement: (id) => set({ selectedElementId: id }, false, 'setSelectedElement'),
+      
       setHoveredElement: (id) => set({ hoveredElementId: id }, false, 'setHoveredElement'),
+      
       setDragging: (isDragging) => set({ isDragging }, false, 'setDragging'),
+      
       setResizing: (isResizing) => set({ isResizing }, false, 'setResizing'),
+      
       setRotating: (isRotating) => set({ isRotating }, false, 'setRotating'),
+      
       setProcessing: (isProcessing) => set({ isProcessing }, false, 'setProcessing'),
+      
       setInitializing: (isInitializing) => set({ isInitializing }, false, 'setInitializing'),
       
-      // Conexión
       setConnected: (isConnected) => set({ isConnected }, false, 'setConnected'),
+      
       incrementReconnectAttempts: () => set((state) => ({ 
         reconnectAttempts: state.reconnectAttempts + 1 
       }), false, 'incrementReconnectAttempts'),
-      resetReconnectAttempts: () => set({ reconnectAttempts: 0 }, false, 'resetReconnectAttempts'),
-      setLastSync: (timestamp) => set({ lastSyncTimestamp: timestamp }, false, 'setLastSync'),
-      setError: (error) => set({ lastError: error }, false, 'setError'),
       
-      // Colaboración
-      setOnlineUsers: (users) => set({ onlineUsers: users }, false, 'setOnlineUsers'),
+      resetReconnectAttempts: () => set({ reconnectAttempts: 0 }, false, 'resetReconnectAttempts'),
+      
+      setLastSync: (timestamp) => set({ lastSyncTimestamp: timestamp }, false, 'setLastSync'),
+      
+      setError: (error) => {
+        set({ lastError: error }, false, 'setError')
+        if (error) {
+          setTimeout(() => set({ lastError: null }, false, 'clearError'), 5000)
+        }
+      },
+      
+      setOnlineUsers: (users) => set({ 
+        onlineUsers: users || [],
+        lockedElements: (users || []).reduce((acc: Record<string, string>, u: any) => {
+          if (u.selected_element) {
+            acc[u.selected_element] = u.client_id
+          }
+          return acc
+        }, {})
+      }, false, 'setOnlineUsers'),
       
       addOnlineUser: (user) => set((state) => ({
         onlineUsers: state.onlineUsers.some(u => u.client_id === user.client_id)
@@ -301,9 +287,19 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
           : [...state.onlineUsers, user]
       }), false, 'addOnlineUser'),
       
-      removeOnlineUser: (clientId) => set((state) => ({
-        onlineUsers: state.onlineUsers.filter(u => u.client_id !== clientId)
-      }), false, 'removeOnlineUser'),
+      removeOnlineUser: (clientId) => set((state) => {
+        const updatedUsers = state.onlineUsers.filter(u => u.client_id !== clientId)
+        const updatedLocked = { ...state.lockedElements }
+        Object.keys(updatedLocked).forEach(elId => {
+          if (updatedLocked[elId] === clientId) {
+            delete updatedLocked[elId]
+          }
+        })
+        return {
+          onlineUsers: updatedUsers,
+          lockedElements: updatedLocked
+        }
+      }, false, 'removeOnlineUser'),
       
       updateUserCursor: (clientId, position) => set((state) => ({
         onlineUsers: state.onlineUsers.map(u =>
@@ -314,10 +310,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
       updateUserSelection: (clientId, elementId) => set((state) => ({
         onlineUsers: state.onlineUsers.map(u =>
           u.client_id === clientId ? { ...u, selected_element: elementId } : u
-        )
+        ),
+        lockedElements: elementId ? 
+          { ...state.lockedElements, [elementId]: clientId } : 
+          Object.fromEntries(Object.entries(state.lockedElements).filter(([_, cid]) => cid !== clientId))
       }), false, 'updateUserSelection'),
       
-      // Locking
       setLockedElements: (locked) => set({ lockedElements: locked }, false, 'setLockedElements'),
       
       lockElement: (elementId, clientId) => set((state) => ({
@@ -335,16 +333,15 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         return lockedBy !== undefined && lockedBy !== state.clientId
       },
       
-      // Undo/Redo
       setCanUndo: (canUndo) => set({ canUndo }, false, 'setCanUndo'),
+      
       setCanRedo: (canRedo) => set({ canRedo }, false, 'setCanRedo'),
       
-      // Reset
       reset: () => set(initialState, false, 'reset')
     })),
     {
       name: 'unitnave-layout-store',
-      enabled: true  // ✅ CORREGIDO: sin process.env.NODE_ENV
+      enabled: true  // Sin process.env para evitar problemas
     }
   )
 )
@@ -357,7 +354,7 @@ export const selectElements = (state: LayoutState) => state.elements
 export const selectZones = (state: LayoutState) => state.zones
 export const selectMetrics = (state: LayoutState) => state.metrics
 export const selectSelectedElement = (state: LayoutState) => 
-  state.elements.find(el => el.id === state.selectedElementId)
+  state.elements.find(el => el.id === state.selectedElementId) || null
 export const selectIsConnected = (state: LayoutState) => state.isConnected
 export const selectOnlineUsers = (state: LayoutState) => state.onlineUsers
 
