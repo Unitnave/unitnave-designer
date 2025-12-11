@@ -98,6 +98,37 @@ app = FastAPI(
     redoc_url="/api/redoc"
 )
 
+# ==================== DEBUG WEBSOCKET (NO TOCAR) ====================
+
+print("=" * 60)
+print("🔍 DEBUG: Verificando WebSocket...")
+
+# Intentar importar y montar FORZADAMENTE
+try:
+    from websocket_routes import router as ws_router
+    print("✅ websocket_routes.py importado correctamente")
+    
+    # Verificar rutas
+    routes = [r.path for r in ws_router.routes]
+    print(f"✅ Rutas en el router: {routes}")
+    
+    # Montar en FastAPI
+    app.include_router(ws_router)
+    print("✅ Router montado en app")
+    
+    WEBSOCKET_AVAILABLE = True  # Forzar True
+    
+except Exception as e:
+    print(f"❌ ERROR AL IMPORTAR/MONTAR: {e}")
+    import traceback
+    traceback.print_exc()
+    WEBSOCKET_AVAILABLE = False
+    
+print(f"🔌 Estado final WEBSOCKET_AVAILABLE: {WEBSOCKET_AVAILABLE}")
+print("=" * 60)
+
+# ==================== FIN DEBUG ====================
+
 # ==================== 🎯 MIDDLEWARE DE LOGGING ULTRA-DETALLADO ====================
 @app.middleware("http")
 async def log_every_single_request(request: Request, call_next):
