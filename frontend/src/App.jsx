@@ -1,10 +1,10 @@
 /**
- * UNITNAVE Designer - App.jsx v3.3 COMPLETO CON WEBSOCKET
+ * UNITNAVE Designer - App.jsx v3.4 PRODUCCIÓN
  * 
  * INTEGRACIÓN WEBSOCKET EN MODO EDITOR - PRESERVA TODAS LAS FUNCIONALIDADES
  * 
- * CORRECCIONES v3.3:
- * - WebSocket integrado en modo Editor
+ * CORRECCIONES v3.4:
+ * - WebSocket URL apunta al backend Railway: unitnave-designer-production.up.railway.app
  * - Estado de conexión visible en header del Editor
  * - SessionId persistente en localStorage
  * - UserName configurable en el header
@@ -12,11 +12,11 @@
  * - Botón de guardar deshabilitado cuando no hay conexión
  * - Mantiene Wizard, Manual y todos los modos originales
  * - Conversión de elementos completa preservada
- * @version 3.3
+ * @version 3.4
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { ThemeProvider, createTheme, CssBaseline, Box, Button, Tooltip, Chip, TextField, CircularProgress } from '@mui/material'
+import React, { useState, useEffect, useCallback } from 'react'
+import { ThemeProvider, createTheme, CssBaseline, Box, Button, Tooltip, Chip, TextField, Alert } from '@mui/material'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei'
 
@@ -24,7 +24,7 @@ import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-thr
 import useWarehouseStore from './stores/useWarehouseStore'
 import useUIStore from './stores/useUIStore'
 import useCalculationsStore from './stores/useCalculationsStore'
-import useLayoutStore from './store/useLayoutStore' // ← NUEVO: para WebSocket
+import useLayoutStore from './store/useLayoutStore'
 
 // Componentes existentes
 import WizardStepper from './components/wizard/WizardStepper'
@@ -38,7 +38,20 @@ import DesignPage from './pages/DesignPage'
 import { WarehouseEditorWithToggle } from './components/editor'
 
 // WebSocket Manager
-import wsManager from './services/WebSocketManager' // ← NUEVO
+import wsManager from './services/WebSocketManager'
+
+// ============================================================
+// ✅ CONFIGURACIÓN WEBSOCKET CON TU DOMINIO REAL DE RAILWAY
+// ============================================================
+const WS_BACKEND_URL = 'wss://unitnave-designer-production.up.railway.app'
+
+const getWebSocketUrl = () => {
+  if (window.location.hostname === 'localhost' || 
+      window.location.hostname === '127.0.0.1') {
+    return `ws://localhost:8000`
+  }
+  return WS_BACKEND_URL
+}
 
 // Tema de Material UI
 const theme = createTheme({
@@ -303,7 +316,7 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
 }
 
 // ============================================================
-// APP PRINCIPAL (COMPLETO CON WEBSOCKET)
+// APP PRINCIPAL (COMPLETO - 850 LÍNEAS)
 // ============================================================
 function App() {
   const [mode, setMode] = useState('wizard')
@@ -321,13 +334,15 @@ function App() {
     lastError, 
     onlineUsers,
     clientId 
-  } = useLayoutStore() // ← WebSocket state
+  } = useLayoutStore()
   
   const [editableElements, setEditableElements] = useState([])
   const [sessionId, setSessionId] = useState(null)
   const [connectionBanner, setConnectionBanner] = useState('')
 
-  // Generar sessionId persistente
+  // ============================================================
+  // SESSION ID PERSISTENTE
+  // ============================================================
   useEffect(() => {
     const stored = localStorage.getItem('unitnave_session')
     if (stored) {
@@ -376,8 +391,8 @@ function App() {
           }
         } else if (type === 'zone' || type === 'operational_zone') {
           dims = {
-            length: el.dimensions?.length ?? el.dimensions?.largo ?? 10,
-            width: el.dimensions?.width ?? el.dimensions?.ancho ?? 10,
+            length: el.dimensions?.length ?? el.dimensions?.largo ?? el.largo ?? 10,
+            width: el.dimensions?.width ?? el.dimensions?.ancho ?? el.ancho ?? 10,
             height: 0.1
           }
         } else if (type === 'service_room' || type === 'technical_room') {
@@ -463,7 +478,7 @@ function App() {
           dimensions: {
             width: dock.dimensions?.width || dock.width || 3.5,
             depth: dock.dimensions?.depth || dock.depth || 0.3,
-            height: dock.dimensions?.height || 4.5
+            height: dock.dimensions?.height || dock.height || 4.5
           },
           properties: {
             type: dock.type || 'carga',
@@ -581,7 +596,7 @@ function App() {
   }, [])
   
   // ============================================================
-  // HANDLERS (PRESERVADOS)
+  // HANDLERS (PRESERVADOS COMPLETOS)
   // ============================================================
   const handleElementsChange = useCallback((newElements) => {
     setEditableElements(newElements)
@@ -638,13 +653,22 @@ function App() {
   }, [editableElements, optimizationResult])
   
   // ============================================================
-  // CONEXIÓN WEBSOCKET (NUEVO - SOLO EN MODO EDITOR)
+  // ✅ CONEXIÓN WEBSOCKET CON URL CORRECTA
   // ============================================================
   useEffect(() => {
     if (mode === 'editor' && sessionId) {
-      console.log('🔗 Conectando WebSocket:', sessionId, 'User:', userName)
+      const wsUrl = getWebSocketUrl()
+      
+      console.log('🔗 [PRODUCCIÓN] Conectando WebSocket:', {
+        sessionId,
+        userName,
+        wsUrl: wsUrl,
+        hostname: window.location.hostname
+      })
+      
       setConnectionBanner('Conectando...')
-      wsManager.connect(sessionId, userName)
+      
+      wsManager.connect(sessionId, userName, wsUrl)
       
       return () => {
         console.log('🔌 Desconectando WebSocket')
@@ -790,6 +814,22 @@ function App() {
             </Box>
           </Box>
           
+          {/* Alerta en caso de error de conexión */}
+          {!isConnected && lastError && (
+            <Alert 
+              severity="error" 
+              sx={{ 
+                position: 'absolute', 
+                top: 65, 
+                left: 10, 
+                right: 10,
+                zIndex: 1000 
+              }}
+            >
+              Error de conexión: {lastError}. Reconectando...
+            </Alert>
+          )}
+          
           {/* Editor principal */}
           <Box sx={{ width: '100%', height: '100%', pt: '60px' }}>
             <WarehouseEditorWithToggle
@@ -857,7 +897,8 @@ function App() {
             fontWeight: 600,
             fontSize: '14px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            zIndex: 999
+            zIndex: 999,
+            maxWidth: '300px'
           }}>
             {connectionBanner || (isConnected ? '✏️ MODO EDICIÓN' : '❌ SIN CONEXIÓN')}
             {onlineUsers.length > 0 && isConnected && (

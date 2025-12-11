@@ -1,13 +1,8 @@
 /**
- * UNITNAVE Designer - WebSocket Manager (V1.0)
- * Cliente WebSocket con reconexión automática
+ * UNITNAVE Designer - WebSocket Manager (V2.0)
+ * Cliente WebSocket con URL configurable para Railway
  * 
- * Características:
- * - Reconexión automática con backoff exponencial
- * - Heartbeat para mantener conexión
- * - Cola de mensajes cuando está desconectado
- * - Event emitter para handlers personalizados
- * - Rate limiting de mensajes salientes
+ * @version 2.0
  */
 
 // ============================================================
@@ -35,7 +30,7 @@ const DEFAULT_CONFIG = {
   heartbeatInterval: 30000,
   heartbeatTimeout: 5000,
   messageQueueSize: 100,
-  rateLimitMs: 33 // ~30 mensajes por segundo
+  rateLimitMs: 33
 }
 
 // ============================================================
@@ -46,6 +41,7 @@ class WebSocketManager {
   private ws: WebSocket | null = null
   private sessionId: string | null = null
   private userName: string = 'Anónimo'
+  private baseUrl: string = ''
   private config = { ...DEFAULT_CONFIG }
   
   // Reconexión
@@ -68,7 +64,7 @@ class WebSocketManager {
   private messageHandlers: Map<string, Set<MessageHandler>> = new Map()
   private globalHandlers: Set<MessageHandler> = new Set()
   
-  // Store updater callback - REEMPLAZA el import directo
+  // Store updater callback
   private storeUpdater: StoreUpdater | null = null
   private onConnectedCallback: (() => void) | null = null
   private onDisconnectedCallback: (() => void) | null = null
@@ -78,40 +74,33 @@ class WebSocketManager {
   // STORE CALLBACK REGISTRATION
   // ============================================================
   
-  /**
-   * Registra el callback que actualiza el store
-   * Llamar desde el componente principal
-   */
   setStoreUpdater(updater: StoreUpdater): void {
     this.storeUpdater = updater
   }
   
-  /**
-   * Callback cuando se conecta
-   */
   setOnConnected(callback: () => void): void {
     this.onConnectedCallback = callback
   }
   
-  /**
-   * Callback cuando se desconecta
-   */
   setOnDisconnected(callback: () => void): void {
     this.onDisconnectedCallback = callback
   }
   
-  /**
-   * Callback durante reconexión
-   */
   setOnReconnecting(callback: (attempt: number) => void): void {
     this.onReconnectingCallback = callback
   }
   
   // ============================================================
-  // CONEXIÓN
+  // CONEXIÓN - ACEPTA URL PERSONALIZADA
   // ============================================================
   
-  connect(sessionId: string, userName: string = 'Anónimo'): void {
+  /**
+   * Conectar al WebSocket
+   * @param sessionId - ID de sesión único
+   * @param userName - Nombre del usuario
+   * @param customBaseUrl - URL base del backend (ej: wss://tu-backend.railway.app)
+   */
+  connect(sessionId: string, userName: string = 'Anónimo', customBaseUrl?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.warn('⚠️ WebSocket ya está conectado')
       return
@@ -122,6 +111,18 @@ class WebSocketManager {
     this.reconnectAttempts = 0
     this.currentReconnectDelay = this.config.reconnectDelay
     
+    // Determinar URL base
+    if (customBaseUrl) {
+      this.baseUrl = customBaseUrl
+    } else {
+      // Fallback: usar window.location
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const host = window.location.host
+      this.baseUrl = `${protocol}//${host}`
+    }
+    
+    console.log('🔗 WebSocket baseUrl configurada:', this.baseUrl)
+    
     this._createConnection()
   }
   
@@ -131,11 +132,7 @@ class WebSocketManager {
       return
     }
     
-    // URL del WebSocket - usa window.location directamente
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const baseUrl = `${protocol}//${host}`
-    const wsUrl = `${baseUrl}/ws/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`
+    const wsUrl = `${this.baseUrl}/ws/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`
     
     console.log(`🔌 Conectando WebSocket: ${wsUrl}`)
     
@@ -164,20 +161,13 @@ class WebSocketManager {
   private _handleOpen(): void {
     console.log('✅ WebSocket conectado')
     
-    // Notificar via callback
     this.onConnectedCallback?.()
     
-    // Resetear reconexión
     this.reconnectAttempts = 0
     this.currentReconnectDelay = this.config.reconnectDelay
     
-    // Iniciar heartbeat
     this._startHeartbeat()
-    
-    // Enviar mensajes pendientes
     this._flushMessageQueue()
-    
-    // Notificar handlers
     this._emit('connected', { sessionId: this.sessionId })
   }
   
@@ -185,28 +175,23 @@ class WebSocketManager {
     try {
       const data: WSMessage = JSON.parse(event.data)
       
-      // Manejar pong
       if (data.type === 'pong' || data.type === 'ping') {
         this.lastPongTime = Date.now()
         this._clearHeartbeatTimeout()
-        // Responder ping con pong
         if (data.type === 'ping') {
           this.send({ action: 'pong' })
         }
         return
       }
       
-      // Actualizar store via callback
       if (this.storeUpdater) {
         this.storeUpdater(data)
       }
       
-      // Notificar handlers específicos
       if (data.type) {
         this._emit(data.type, data)
       }
       
-      // Notificar handlers globales
       this.globalHandlers.forEach(handler => handler(data))
       
     } catch (error) {
@@ -217,16 +202,10 @@ class WebSocketManager {
   private _handleClose(event: CloseEvent): void {
     console.log(`🔌 WebSocket cerrado: ${event.code} - ${event.reason}`)
     
-    // Notificar via callback
     this.onDisconnectedCallback?.()
-    
-    // Parar heartbeat
     this._stopHeartbeat()
-    
-    // Notificar handlers
     this._emit('disconnected', { code: event.code, reason: event.reason })
     
-    // Programar reconexión si no fue cierre intencional
     if (event.code !== 1000) {
       this._scheduleReconnect()
     }
@@ -242,10 +221,8 @@ class WebSocketManager {
   // ============================================================
   
   send(message: WSMessage): boolean {
-    // Rate limiting
     const now = Date.now()
     if (now - this.lastMessageTime < this.config.rateLimitMs) {
-      // Encolar si estamos enviando muy rápido
       this._queueMessage(message)
       return false
     }
@@ -272,9 +249,6 @@ class WebSocketManager {
     }
   }
   
-  /**
-   * Envío con rate limiting específico para cursores
-   */
   sendThrottled(message: WSMessage, throttleMs: number = 100): boolean {
     const now = Date.now()
     if (now - this.lastMessageTime < throttleMs) {
@@ -298,7 +272,6 @@ class WebSocketManager {
     this.messageQueue = []
     
     queue.forEach((message, index) => {
-      // Espaciar mensajes para no saturar
       setTimeout(() => {
         this.send(message)
       }, index * this.config.rateLimitMs)
@@ -309,9 +282,6 @@ class WebSocketManager {
   // ACCIONES DE ALTO NIVEL
   // ============================================================
   
-  /**
-   * Inicializar sesión con elementos y dimensiones
-   */
   initialize(elements: any[], dimensions?: { length: number; width: number }): void {
     this.send({
       action: 'init',
@@ -320,9 +290,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Mover elemento
-   */
   moveElement(elementId: string, x: number, y: number): void {
     this.send({
       action: 'move',
@@ -331,9 +298,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Redimensionar elemento
-   */
   resizeElement(elementId: string, width: number, height: number, anchor: string = 'center'): void {
     this.send({
       action: 'resize',
@@ -343,9 +307,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Rotar elemento
-   */
   rotateElement(elementId: string, rotation: number): void {
     this.send({
       action: 'rotate',
@@ -354,9 +315,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Añadir elemento
-   */
   addElement(element: any): void {
     this.send({
       action: 'add',
@@ -364,9 +322,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Eliminar elemento
-   */
   deleteElement(elementId: string): void {
     this.send({
       action: 'delete',
@@ -374,23 +329,14 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Deshacer
-   */
   undo(): void {
     this.send({ action: 'undo' })
   }
   
-  /**
-   * Rehacer
-   */
   redo(): void {
     this.send({ action: 'redo' })
   }
   
-  /**
-   * Actualizar posición del cursor (throttled)
-   */
   updateCursor(x: number, y: number): void {
     this.sendThrottled({
       action: 'cursor',
@@ -399,9 +345,6 @@ class WebSocketManager {
     }, 100)
   }
   
-  /**
-   * Seleccionar elemento
-   */
   selectElement(elementId: string | null): void {
     this.send({
       action: 'select',
@@ -409,9 +352,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Bloquear elemento para edición exclusiva
-   */
   lockElement(elementId: string): Promise<boolean> {
     return new Promise((resolve) => {
       const handler = (data: WSMessage) => {
@@ -428,7 +368,6 @@ class WebSocketManager {
         element_id: elementId
       })
       
-      // Timeout
       setTimeout(() => {
         this.off('lock_result', handler)
         resolve(false)
@@ -436,9 +375,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Desbloquear elemento
-   */
   unlockElement(elementId: string): void {
     this.send({
       action: 'unlock',
@@ -446,9 +382,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Enviar mensaje de chat
-   */
   sendChatMessage(message: string): void {
     this.send({
       action: 'chat',
@@ -456,16 +389,10 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Solicitar estado actual
-   */
   requestState(): void {
     this.send({ action: 'get_state' })
   }
   
-  /**
-   * Resetear layout
-   */
   resetLayout(): void {
     this.send({ action: 'reset' })
   }
@@ -474,9 +401,6 @@ class WebSocketManager {
   // EVENT EMITTER
   // ============================================================
   
-  /**
-   * Suscribirse a un tipo de mensaje específico
-   */
   on(event: string, handler: MessageHandler): void {
     if (!this.messageHandlers.has(event)) {
       this.messageHandlers.set(event, new Set())
@@ -484,30 +408,18 @@ class WebSocketManager {
     this.messageHandlers.get(event)!.add(handler)
   }
   
-  /**
-   * Desuscribirse de un tipo de mensaje
-   */
   off(event: string, handler: MessageHandler): void {
     this.messageHandlers.get(event)?.delete(handler)
   }
   
-  /**
-   * Suscribirse a todos los mensajes
-   */
   onAny(handler: MessageHandler): void {
     this.globalHandlers.add(handler)
   }
   
-  /**
-   * Desuscribirse de todos los mensajes
-   */
   offAny(handler: MessageHandler): void {
     this.globalHandlers.delete(handler)
   }
   
-  /**
-   * Emitir evento a handlers
-   */
   private _emit(event: string, data: any): void {
     this.messageHandlers.get(event)?.forEach(handler => {
       try {
@@ -518,9 +430,6 @@ class WebSocketManager {
     })
   }
   
-  /**
-   * Esperar a un tipo de mensaje específico (Promise)
-   */
   waitFor(event: string, timeout: number = 5000): Promise<WSMessage> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -555,15 +464,12 @@ class WebSocketManager {
     
     console.log(`🔄 Reconectando en ${this.currentReconnectDelay}ms... (intento ${this.reconnectAttempts + 1})`)
     
-    // Notificar via callback
     this.onReconnectingCallback?.(this.reconnectAttempts + 1)
     
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectAttempts++
-      
       this._createConnection()
       
-      // Aumentar delay para siguiente intento
       this.currentReconnectDelay = Math.min(
         this.currentReconnectDelay * this.config.reconnectMultiplier,
         this.config.maxReconnectDelay
@@ -571,9 +477,6 @@ class WebSocketManager {
     }, this.currentReconnectDelay)
   }
   
-  /**
-   * Forzar reconexión manual
-   */
   reconnect(): void {
     this.disconnect()
     this.reconnectAttempts = 0
@@ -595,7 +498,6 @@ class WebSocketManager {
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.send({ action: 'ping' })
         
-        // Timeout para esperar pong
         this.heartbeatTimeout = setTimeout(() => {
           const timeSinceLastPong = Date.now() - this.lastPongTime
           if (timeSinceLastPong > this.config.heartbeatInterval + this.config.heartbeatTimeout) {
@@ -629,25 +531,19 @@ class WebSocketManager {
   disconnect(): void {
     console.log('🔌 Desconectando WebSocket manualmente')
     
-    // Cancelar reconexión pendiente
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
     
-    // Parar heartbeat
     this._stopHeartbeat()
     
-    // Cerrar conexión
     if (this.ws) {
       this.ws.close(1000, 'Desconexión manual')
       this.ws = null
     }
     
-    // Limpiar cola
     this.messageQueue = []
-    
-    // Notificar
     this.onDisconnectedCallback?.()
   }
   
@@ -669,6 +565,10 @@ class WebSocketManager {
   
   getUserName(): string {
     return this.userName
+  }
+  
+  getBaseUrl(): string {
+    return this.baseUrl
   }
   
   getQueueSize(): number {
@@ -693,20 +593,15 @@ class WebSocketManager {
     }
   }
   
-  /**
-   * Configurar opciones
-   */
   configure(options: Partial<typeof DEFAULT_CONFIG>): void {
     this.config = { ...this.config, ...options }
   }
   
-  /**
-   * Obtener estadísticas
-   */
   getStats(): object {
     return {
       sessionId: this.sessionId,
       userName: this.userName,
+      baseUrl: this.baseUrl,
       connected: this.isConnected(),
       readyState: this.getReadyStateString(),
       queueSize: this.messageQueue.length,
