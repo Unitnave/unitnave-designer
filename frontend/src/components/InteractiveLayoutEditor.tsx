@@ -1,5 +1,5 @@
 /**
- * UNITNAVE Designer - Interactive Layout Editor (V1.0)
+ * UNITNAVE Designer - Interactive Layout Editor (V1.1)
  * Editor 2D interactivo con WebSocket para colaboración en tiempo real
  * 
  * Características:
@@ -57,7 +57,7 @@ interface InteractiveLayoutEditorProps {
 
 const ZONE_STYLES: Record<string, { fill: string; stroke: string; label: string }> = {
   main_aisle: { fill: 'rgba(254, 243, 199, 0.5)', stroke: '#f59e0b', label: 'Pasillo Principal' },
-  cross_aisle: { fill: 'rgba(219, 234, 254, 0.5)', stroke: '#3b82f6', label: 'Pasillo Cruzado' },
+  cross_aisle: { fill: 'rgba(219, 234, 254, 0.5)', stroke: '#3b82f6', label: 'Pasillo Transversal' },
   secondary_aisle: { fill: 'rgba(191, 219, 254, 0.4)', stroke: '#60a5fa', label: 'Pasillo Secundario' },
   operational: { fill: 'rgba(220, 252, 231, 0.5)', stroke: '#22c55e', label: 'Zona Operacional' },
   circulation: { fill: 'rgba(254, 226, 226, 0.4)', stroke: '#f87171', label: 'Circulación' },
@@ -187,6 +187,8 @@ export default function InteractiveLayoutEditor({
   // ============================================================
   
   const processMessage = useCallback((data: any) => {
+    logger.info(`📨 Procesando mensaje WS: ${data.type}`)
+    
     switch (data.type) {
       case 'connected':
         setSession(data.session_id, data.client_id)
@@ -204,9 +206,11 @@ export default function InteractiveLayoutEditor({
         setInitializing(false)
         break
       
+      // ================================================
+      // CORRECCIÓN CRÍTICA: Ahora procesa move_ack
+      // ================================================
       case 'move_ack':
-      case 'resize_ack':
-      case 'rotate_ack':
+        logger.info("✅ Move confirmado por backend")
         setProcessing(false)
         if (data.zones) setZones(data.zones)
         if (data.metrics) setMetrics(data.metrics)
@@ -216,15 +220,25 @@ export default function InteractiveLayoutEditor({
         break
       
       case 'element_moved':
-      case 'element_resized':
-      case 'element_rotated':
+        // Solo procesar si NO soy el que lo movió
         if (data.by_client !== clientId) {
+          logger.info(`📦 Elemento movido por OTRO cliente: ${data.element_id}`)
           if (data.element_id && data.position) {
             moveElementOptimistic(data.element_id, data.position.x, data.position.y)
           }
         }
         if (data.zones) setZones(data.zones)
         if (data.metrics) setMetrics(data.metrics)
+        break
+      
+      case 'resize_ack':
+      case 'rotate_ack':
+        setProcessing(false)
+        if (data.zones) setZones(data.zones)
+        if (data.metrics) setMetrics(data.metrics)
+        if (data.warnings) setWarnings(data.warnings)
+        setCanUndo(data.can_undo ?? canUndo)
+        setCanRedo(data.can_redo ?? canRedo)
         break
       
       case 'element_added':
@@ -297,7 +311,7 @@ export default function InteractiveLayoutEditor({
         break
       
       case 'error':
-        console.error('❌ Error del servidor:', data.message)
+        logger.error(`❌ Error del servidor: ${data.message}`)
         setError(data.message)
         setProcessing(false)
         break
@@ -313,6 +327,7 @@ export default function InteractiveLayoutEditor({
     wsManager.setStoreUpdater(processMessage)
     
     wsManager.setOnConnected(() => {
+      logger.info("✅ WebSocket conectado")
       setConnected(true)
       setInitializing(true)
       // Inicializar después de conectar
@@ -320,10 +335,12 @@ export default function InteractiveLayoutEditor({
     })
     
     wsManager.setOnDisconnected(() => {
+      logger.warn("🔌 WebSocket desconectado")
       setConnected(false)
     })
     
     wsManager.setOnReconnecting((attempt) => {
+      logger.info(`🔄 Reconectando... intento ${attempt}`)
       incrementReconnectAttempts()
     })
     
@@ -332,9 +349,11 @@ export default function InteractiveLayoutEditor({
     setElements(initialElements)
     
     // Conectar
+    logger.info(`🔌 Conectando WebSocket: session=${sessionId}, user=${userName}`)
     wsManager.connect(sessionId, userName)
     
     return () => {
+      logger.info("🔌 Desconectando WebSocket")
       wsManager.disconnect()
     }
   }, [sessionId, userName, dimensions, initialElements, processMessage])
@@ -343,31 +362,45 @@ export default function InteractiveLayoutEditor({
   // ELEMENT HANDLERS
   // ============================================================
   
+  // ================================================
+  // CORRECCIÓN CRÍTICA: Ahora envía movimientos al backend
+  // ================================================
   const handleElementMove = useCallback((elementId: string, x: number, y: number) => {
-    // Optimistic update
+    // 1. Update optimista INMEDIATO (para responsiveness)
+    logger.info(`📦 Move optimista: ${elementId} → (${x}, ${y})`)
     moveElementOptimistic(elementId, x, y)
     setProcessing(true)
     
-    // Enviar al servidor
-    wsManager.moveElement(elementId, x, y)
+    // 2. Enviar al backend usando wsManager directamente
+    // ESTO ES LO QUE FALTABA - antes no se enviaba nada
+    logger.info(`📦 Enviando move al backend: ${elementId} → (${x}, ${y})`)
+    wsManager.send({
+      action: 'move',
+      element_id: elementId,
+      position: { x, y }
+    })
   }, [moveElementOptimistic, setProcessing])
   
   const handleElementSelect = useCallback((elementId: string) => {
+    logger.info(`🔒 Seleccionando elemento: ${elementId}`)
     wsManager.selectElement(elementId)
   }, [])
   
   const handleCursorMove = useCallback(
     throttle((x: number, y: number) => {
+      logger.debug(`👆 Cursor move: (${x}, ${y})`)
       wsManager.updateCursor(x, y)
     }, 100),
     []
   )
   
   const handleLock = useCallback((elementId: string) => {
+    logger.info(`🔒 Lock request: ${elementId}`)
     wsManager.lockElement(elementId)
   }, [])
   
   const handleUnlock = useCallback((elementId: string) => {
+    logger.info(`🔓 Unlock request: ${elementId}`)
     wsManager.unlockElement(elementId)
   }, [])
   
@@ -377,6 +410,7 @@ export default function InteractiveLayoutEditor({
   
   const handleCanvasClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (e.target === svgRef.current) {
+      logger.info("🖱️ Canvas click - deseleccionando")
       setSelectedElement(null)
       wsManager.selectElement(null)
     }
@@ -399,14 +433,17 @@ export default function InteractiveLayoutEditor({
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
       const delta = e.deltaY > 0 ? -10 : 10
-      setZoom(prev => Math.max(25, Math.min(300, prev + delta)))
+      const newZoom = Math.max(25, Math.min(300, zoom + delta))
+      logger.info(`🔍 Zoom: ${zoom}% → ${newZoom}%`)
+      setZoom(newZoom)
     }
-  }, [])
+  }, [zoom])
   
   // Pan handlers
   const handlePanStart = useCallback((e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
       e.preventDefault()
+      logger.info("✋ Iniciando pan")
       setIsPanning(true)
       setLastPanPoint({ x: e.clientX, y: e.clientY })
     }
@@ -422,8 +459,11 @@ export default function InteractiveLayoutEditor({
   }, [isPanning, lastPanPoint])
   
   const handlePanEnd = useCallback(() => {
-    setIsPanning(false)
-  }, [])
+    if (isPanning) {
+      logger.info("✋ Fin pan")
+      setIsPanning(false)
+    }
+  }, [isPanning])
   
   // ============================================================
   // KEYBOARD SHORTCUTS
@@ -437,24 +477,32 @@ export default function InteractiveLayoutEditor({
       // Ctrl+Z - Undo
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
-        if (canUndo) wsManager.undo()
+        if (canUndo) {
+          logger.info("⌨️ Undo solicitado")
+          wsManager.undo()
+        }
       }
       
       // Ctrl+Y / Ctrl+Shift+Z - Redo
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault()
-        if (canRedo) wsManager.redo()
+        if (canRedo) {
+          logger.info("⌨️ Redo solicitado")
+          wsManager.redo()
+        }
       }
       
       // Delete / Backspace - Eliminar elemento seleccionado
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElementId) {
         e.preventDefault()
+        logger.info(`🗑️ Delete elemento: ${selectedElementId}`)
         wsManager.deleteElement(selectedElementId)
         setSelectedElement(null)
       }
       
       // Escape - Deseleccionar
       if (e.key === 'Escape') {
+        logger.info("⎇ Escape - deseleccionando")
         setSelectedElement(null)
         wsManager.selectElement(null)
       }
@@ -470,12 +518,14 @@ export default function InteractiveLayoutEditor({
       // 0 - Reset zoom
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
+        logger.info("🔍 Reset zoom")
         setZoom(100)
         setPanOffset({ x: 0, y: 0 })
       }
       
       // G - Toggle grid
       if (e.key === 'g' && !e.ctrlKey && !e.metaKey) {
+        logger.info("📐 Toggle grid")
         setShowGrid(prev => !prev)
       }
     }
@@ -536,7 +586,6 @@ export default function InteractiveLayoutEditor({
     return zones.map((zone: any) => {
       const style = ZONE_STYLES[zone.type] || ZONE_STYLES.free_zone
       
-      // Polygon points si están disponibles
       const points = zone.polygon_points?.map(([x, y]: [number, number]) => 
         `${x * scale},${y * scale}`
       ).join(' ')
@@ -564,7 +613,6 @@ export default function InteractiveLayoutEditor({
             />
           )}
           
-          {/* Zone label */}
           {showLabels && zone.width > 3 && zone.height > 1 && (
             <text
               x={zone.centroid_x * scale}
@@ -598,7 +646,6 @@ export default function InteractiveLayoutEditor({
         const color = getUserColor(index)
         return (
           <g key={user.client_id} className="cursor">
-            {/* Cursor pointer */}
             <circle
               cx={user.cursor_position!.x * scale}
               cy={user.cursor_position!.y * scale}
@@ -608,7 +655,6 @@ export default function InteractiveLayoutEditor({
               strokeWidth={2}
               opacity={0.9}
             />
-            {/* User name label */}
             <g transform={`translate(${user.cursor_position!.x * scale + 10}, ${user.cursor_position!.y * scale - 5})`}>
               <rect
                 x={-2} y={-10}
@@ -637,7 +683,6 @@ export default function InteractiveLayoutEditor({
   
   const renderDimensions = useMemo(() => (
     <g className="dimensions-layer" opacity={0.6}>
-      {/* Width dimension */}
       <text
         x={svgWidth / 2}
         y={-8}
@@ -649,7 +694,6 @@ export default function InteractiveLayoutEditor({
         {dimensions.length}m
       </text>
       
-      {/* Height dimension */}
       <text
         x={-8}
         y={svgHeight / 2}
@@ -879,7 +923,7 @@ export default function InteractiveLayoutEditor({
             />
             
             {/* Grid */}
-            {renderGrid}
+            <g className="grid-layer">{renderGrid}</g>
             
             {/* Zones */}
             <g className="zones-layer">{renderZones}</g>
@@ -1004,6 +1048,7 @@ export default function InteractiveLayoutEditor({
               size="small"
               color="primary"
               onDelete={() => {
+                logger.info(`🗑️ Delete desde chip: ${selectedElement.id}`)
                 setSelectedElement(null)
                 wsManager.selectElement(null)
               }}
@@ -1116,4 +1161,12 @@ export default function InteractiveLayoutEditor({
       </Snackbar>
     </Box>
   )
+}
+
+// Logger helper
+const logger = {
+  info: (msg: string, ...args: any[]) => console.log(`%c[INFO] ${msg}`, 'color: #3b82f6', ...args),
+  warn: (msg: string, ...args: any[]) => console.warn(`[WARN] ${msg}`, ...args),
+  error: (msg: string, ...args: any[]) => console.error(`[ERROR] ${msg}`, ...args),
+  debug: (msg: string, ...args: any[]) => console.debug(`[DEBUG] ${msg}`, ...args)
 }

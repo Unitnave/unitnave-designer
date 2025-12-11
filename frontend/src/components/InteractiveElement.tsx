@@ -1,5 +1,5 @@
 /**
- * UNITNAVE Designer - Interactive Element (V1.0)
+ * UNITNAVE Designer - Interactive Element (V1.1)
  * Elemento interactivo con drag, resize, rotate
  * 
  * Características:
@@ -40,6 +40,7 @@ interface WarehouseElement {
   rotation?: number
   label?: string
   properties?: Record<string, any>
+  layer?: string
 }
 
 interface InteractiveElementProps {
@@ -127,7 +128,7 @@ const ELEMENT_COLORS: Record<string, { fill: string; stroke: string; label: stri
   }
 }
 
-const SNAP_GRID = 0.5  // 0.5m snap
+const SNAP_GRID = 0.5  // 0.5m snap - MUY IMPORTANTE
 
 // ============================================================
 // HELPERS
@@ -259,6 +260,7 @@ export default function InteractiveElement({
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     if (!isLocked) {
+      logger.info(`🖱️ Click en elemento: ${element.id}`)
       setSelectedElement(element.id)
       onSelect(element.id)
     }
@@ -266,8 +268,7 @@ export default function InteractiveElement({
   
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
-    // Podría abrir un panel de propiedades
-    console.log('Double click on element:', element.id)
+    logger.info(`🖱️ Doble click en elemento: ${element.id}`)
   }, [element.id])
   
   // ============================================================
@@ -277,6 +278,7 @@ export default function InteractiveElement({
   const handleDragStart = useCallback(() => {
     if (isLocked) return false
     
+    logger.info(`🖱️ Drag start: ${element.id}`)
     setDragging(true)
     onLock?.(element.id)
     
@@ -300,11 +302,19 @@ export default function InteractiveElement({
     setGhostPosition({ x: snappedX, y: snappedY })
   }, [scale])
   
+  // ================================================
+  // CORRECCIÓN CRÍTICA: Snap explícito en drag end
+  // ================================================
   const handleDragEnd = useCallback(({ lastEvent }: { lastEvent: any }) => {
+    logger.info(`🖱️ Drag end: ${element.id}`)
     setDragging(false)
     
     if (ghostPosition) {
-      onMove(element.id, ghostPosition.x, ghostPosition.y)
+      // Asegurar snap final exacto
+      const finalX = snapToGrid(ghostPosition.x, SNAP_GRID)
+      const finalY = snapToGrid(ghostPosition.y, SNAP_GRID)
+      logger.info(`📦 Final move: ${element.id} → (${finalX}, ${finalY})`)
+      onMove(element.id, finalX, finalY)
     }
     
     setGhostPosition(null)
@@ -318,6 +328,7 @@ export default function InteractiveElement({
   const handleResizeStart = useCallback(() => {
     if (isLocked || !onResize) return false
     
+    logger.info(`📐 Resize start: ${element.id}`)
     setResizing(true)
     onLock?.(element.id)
     
@@ -346,6 +357,7 @@ export default function InteractiveElement({
   }, [scale])
   
   const handleResizeEnd = useCallback(() => {
+    logger.info(`📐 Resize end: ${element.id}`)
     setResizing(false)
     
     if (ghostDimensions && onResize) {
@@ -364,6 +376,7 @@ export default function InteractiveElement({
   const handleRotateStart = useCallback(() => {
     if (isLocked || !onRotate) return false
     
+    logger.info(`🔄 Rotate start: ${element.id}`)
     setRotating(true)
     onLock?.(element.id)
     
@@ -379,6 +392,7 @@ export default function InteractiveElement({
   }, [])
   
   const handleRotateEnd = useCallback(() => {
+    logger.info(`🔄 Rotate end: ${element.id}`)
     setRotating(false)
     
     if (ghostRotation !== null && onRotate) {
@@ -473,7 +487,7 @@ export default function InteractiveElement({
             fill="none"
             stroke="#fbbf24"
             strokeWidth={4}
-            rx={6}
+              rx={6}
             ry={6}
             opacity={0.5}
           />
@@ -663,4 +677,12 @@ export default function InteractiveElement({
       )}
     </>
   )
+}
+
+// Logger helper
+const logger = {
+  info: (msg: string, ...args: any[]) => console.log(`%c[INFO] ${msg}`, 'color: #3b82f6', ...args),
+  warn: (msg: string, ...args: any[]) => console.warn(`[WARN] ${msg}`, ...args),
+  error: (msg: string, ...args: any[]) => console.error(`[ERROR] ${msg}`, ...args),
+  debug: (msg: string, ...args: any[]) => console.debug(`[DEBUG] ${msg}`, ...args)
 }

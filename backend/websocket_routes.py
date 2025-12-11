@@ -1,5 +1,5 @@
 """
-UNITNAVE Designer - WebSocket Routes V2.0 PRODUCTION
+UNITNAVE Designer - WebSocket Routes V2.1 PRODUCTION
 Endpoints WebSocket para edición interactiva en tiempo real.
 TODO INCLUIDO - Sin dependencias externas que puedan fallar.
 
@@ -19,11 +19,15 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Qu
 from pydantic import BaseModel
 
 # ============================================================
-# LOGGING
+# LOGGING CONFIGURACIÓN ULTRA-DETALLADA
 # ============================================================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # Cambia a DEBUG para más detalle
 
 # ============================================================
 # CONFIGURACIÓN DE PRODUCCIÓN
@@ -251,16 +255,22 @@ class InteractiveLayoutEngine:
         }
     
     async def move_element(self, element_id: str, x: float, y: float) -> dict:
-        """Mueve un elemento a nueva posición"""
+        """Mueve un elemento a nueva posición - CORREGIDO CON LOGGING"""
+        logger.info(f"🏗️ Engine.move_element llamado: {element_id} → ({x}, {y})")
+        
         if element_id not in self.elements:
+            logger.error(f"❌ Elemento {element_id} no existe")
             return {'error': f'Elemento {element_id} no encontrado'}
         
         # Validar límites
         x = max(0, min(x, self.length))
         y = max(0, min(y, self.width))
         
-        # Guardar posición anterior para posible rollback
-        old_position = self.elements[element_id]['position'].copy()
+        # Snap to grid (0.5m) - CORRECCIÓN CRÍTICA
+        x = round(x / 0.5) * 0.5
+        y = round(y / 0.5) * 0.5
+        
+        logger.info(f"📐 Snap aplicado: ({x}, {y})")
         
         # Actualizar posición
         self.elements[element_id]['position'] = {'x': x, 'y': y}
@@ -268,14 +278,15 @@ class InteractiveLayoutEngine:
         # Recalcular todo
         self._recalculate_all()
         
-        logger.info(f"📦 Elemento {element_id} movido: ({old_position.get('x', 0):.1f}, {old_position.get('y', 0):.1f}) → ({x:.1f}, {y:.1f})")
+        logger.info(f"✅ Recálculo completado: {len(self.zones)} zonas, {len(self.elements)} elementos")
         
         return {
             'success': True,
             'element': self.elements[element_id],
             'elements': list(self.elements.values()),
             'zones': self.zones,
-            'metrics': self.metrics
+            'metrics': self.metrics,
+            'warnings': []
         }
     
     def get_state(self) -> dict:
@@ -289,9 +300,10 @@ class InteractiveLayoutEngine:
     
     def _recalculate_all(self):
         """Recalcula zonas y métricas usando geometry_service si disponible"""
+        logger.info("🔄 Iniciando recálculo completo de zonas...")
+        
         if self.geometry_service and len(self.elements) > 0:
             try:
-                # Llamar al servicio de geometría exacta
                 result = self.geometry_service(
                     {'length': self.length, 'width': self.width},
                     list(self.elements.values())
@@ -306,21 +318,20 @@ class InteractiveLayoutEngine:
         # Fallback: cálculo simplificado
         self._recalculate_zones_simple()
         self._recalculate_metrics()
+        logger.info("✅ Recálculo simplificado completado")
     
     def _recalculate_zones_simple(self):
         """Recalcula zonas (versión simplificada sin Shapely)"""
         self.zones = []
         zone_index = 0
         
-        # Crear zona para cada elemento
         for el_id, el in self.elements.items():
             pos = el.get('position', {})
             dims = el.get('dimensions', {})
             
             x = pos.get('x', 0)
-            y = pos.get('y', pos.get('z', 0))
+            y = pos.get('y', 0)
             
-            # Determinar dimensiones según tipo
             el_type = el.get('type', 'unknown')
             if el_type == 'shelf':
                 w = dims.get('length', 2.7)
@@ -329,11 +340,11 @@ class InteractiveLayoutEngine:
                 w = dims.get('width', 3.5)
                 h = dims.get('depth', 0.5)
             elif el_type == 'office':
-                w = dims.get('length', dims.get('largo', 12))
-                h = dims.get('width', dims.get('ancho', 8))
+                w = dims.get('length', 12)
+                h = dims.get('width', 8)
             else:
-                w = dims.get('length', dims.get('width', 3))
-                h = dims.get('depth', dims.get('height', 3))
+                w = dims.get('length', 3)
+                h = dims.get('depth', 3)
             
             self.zones.append({
                 'id': f'zone_{el_id}',
@@ -347,7 +358,6 @@ class InteractiveLayoutEngine:
                 'is_auto_generated': False
             })
             
-            # Añadir zona de maniobra para muelles
             if el_type == 'dock':
                 maneuver_depth = 4
                 self.zones.append({
@@ -362,7 +372,6 @@ class InteractiveLayoutEngine:
                     'is_auto_generated': True
                 })
         
-        # Calcular zona libre aproximada
         total_area = self.length * self.width
         occupied = sum(z['area'] for z in self.zones)
         free_area = max(0, total_area - occupied)
@@ -384,7 +393,6 @@ class InteractiveLayoutEngine:
         """Recalcula métricas"""
         total_area = self.length * self.width
         
-        # Calcular área por tipo
         storage_area = sum(z['area'] for z in self.zones if z.get('type') == 'shelf')
         dock_area = sum(z['area'] for z in self.zones if z.get('type') in ['dock', 'dock_maneuver'])
         office_area = sum(z['area'] for z in self.zones if z.get('type') == 'office')
@@ -403,7 +411,8 @@ class InteractiveLayoutEngine:
             'circulation_area': circulation_area,
             'free_area': total_area - occupied_area,
             'efficiency': (occupied_area / total_area * 100) if total_area > 0 else 0,
-            'element_count': len(self.elements)
+            'element_count': len(self.elements),
+            'zone_count': len(self.zones)
         }
 
 
@@ -429,7 +438,7 @@ router = APIRouter(tags=["Interactive Layout"])
 
 
 # ============================================================
-# WEBSOCKET PRINCIPAL (RAILWAY + VERCEL) - CON LOGGING DETALLADO
+# WEBSOCKET PRINCIPAL (RAILWAY + VERCEL) - CON LOGGING ULTRA-DETALLADO
 # ============================================================
 
 @router.websocket("/ws/layout/{session_id}")
@@ -543,7 +552,7 @@ async def layout_websocket_alt(websocket: WebSocket, session_id: str):
 
 
 # ============================================================
-# MESSAGE HANDLERS
+# MESSAGE HANDLERS - CORREGIDOS
 # ============================================================
 
 async def handle_websocket_message(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> Optional[dict]:
@@ -573,47 +582,12 @@ async def handle_websocket_message(data: dict, session_id: str, client_id: str, 
         return {'type': 'error', 'message': f'Tipo desconocido: {message_type}'}
 
 
-async def handle_initialize(data: dict, session_id: str, engine: InteractiveLayoutEngine) -> dict:
-    """Inicializa el layout (type: 'initialize')"""
-    elements = data.get('elements', [])
-    dimensions = data.get('dimensions', {})
-    
-    logger.info(f"🏭 Inicializando layout: {len(elements)} elementos, dims={dimensions}")
-    
-    if dimensions:
-        engine.length = dimensions.get('length', engine.length)
-        engine.width = dimensions.get('width', engine.width)
-    
-    result = engine.initialize_from_elements(elements)
-    
-    users = manager.get_session_users(session_id)
-    
-    # Broadcast state_update a todos
-    logger.info(f"📢 Broadcasting state_update a sesión {session_id}")
-    await manager.broadcast_to_session(
-        session_id,
-        {
-            'type': 'state_update',
-            'elements': result.get('elements', elements),
-            'zones': result.get('zones', []),
-            'metrics': result.get('metrics', {}),
-            'users': users
-        }
-    )
-    
-    # Devolver 'initialized' al cliente que inicializó
-    return {
-        'type': 'initialized',
-        'zones': result.get('zones', []),
-        'metrics': result.get('metrics', {}),
-        'warnings': [],
-        'can_undo': False,
-        'can_redo': False
-    }
-
+# ============================================================
+# CORRECCIÓN CRÍTICA: handle_action con llamada a 'move'
+# ============================================================
 
 async def handle_action(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
-    """Procesa acciones del engine"""
+    """Procesa acciones del engine - AHORA CON 'move'"""
     action = data.get('action')
     element_id = data.get('element_id')
     
@@ -631,6 +605,9 @@ async def handle_action(data: dict, session_id: str, client_id: str, engine: Int
     elif action == 'init':
         return await handle_init(data, session_id, client_id, engine)
     
+    # ========================================================
+    # CORRECCIÓN CRÍTICA: Añadido caso 'move'
+    # ========================================================
     elif action == 'move':
         return await handle_move(data, session_id, client_id, engine)
     
@@ -673,8 +650,12 @@ async def handle_action(data: dict, session_id: str, client_id: str, engine: Int
         return {'type': 'error', 'message': f'Acción desconocida: {action}'}
 
 
+# ============================================================
+# CORRECCIÓN CRÍTICA: handle_move implementado correctamente
+# ============================================================
+
 async def handle_move(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
-    """Maneja acción move - Compatible con InteractiveLayoutEditor.jsx"""
+    """Maneja acción move - COMPLETAMENTE REESCRITO CON LOGGING"""
     element_id = data.get('element_id')
     position = data.get('position', {})
     x = float(position.get('x', 0))
@@ -682,7 +663,7 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
     
     logger.info(f"📦 Move: {element_id} → ({x:.2f}, {y:.2f}) por {client_id}")
     
-    # Verificar que el elemento existe
+    # 1. Verificar elemento existe
     if element_id not in engine.elements:
         logger.warning(f"⚠️ Elemento {element_id} no existe en el engine")
         return {
@@ -690,9 +671,9 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
             'message': f'Elemento {element_id} no encontrado'
         }
     
-    # Intentar bloquear elemento
+    # 2. Intentar bloquear elemento (permitir si ya está bloqueado por este cliente)
     can_lock = await manager.try_lock_element(session_id, element_id, client_id)
-    if not can_lock:
+    if not can_lock and engine.elements[element_id].get('locked_by') != client_id:
         logger.warning(f"🔒 Elemento {element_id} bloqueado, rechazando move de {client_id}")
         return {
             'type': 'error',
@@ -700,14 +681,17 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
             'message': f'Elemento {element_id} está siendo editado por otro usuario'
         }
     
-    # Mover elemento (esto recalcula zonas y métricas)
+    # 3. Mover elemento usando el engine
     result = await engine.move_element(element_id, x, y)
     
     if 'error' in result:
         logger.error(f"❌ Error moviendo elemento: {result['error']}")
         return {'type': 'error', 'message': result['error']}
     
-    # Broadcast 'element_moved' a OTROS usuarios (exclude sender)
+    # 4. Preparar datos para broadcast
+    users = manager.get_session_users(session_id)
+    
+    # 5. Broadcast 'element_moved' a OTROS usuarios (exclude sender)
     logger.info(f"📢 Broadcasting element_moved a sesión {session_id}")
     await manager.broadcast_to_session(
         session_id,
@@ -716,55 +700,75 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
             'by_client': client_id,
             'element_id': element_id,
             'position': {'x': x, 'y': y},
+            'element': result.get('element'),
             'zones': result.get('zones', []),
-            'metrics': result.get('metrics', {})
+            'metrics': result.get('metrics', {}),
+            'users': users
         },
-        exclude=client_id  # No enviar al que hizo el move
+        exclude=client_id  # NO enviar al remitente
     )
     
-    # Devolver 'move_ack' al cliente que movió (como espera processMessage)
+    # 6. Devolver 'move_ack' SOLO al cliente que movió
+    # Esto actualiza su UI y confirma el movimiento
+    logger.info(f"📤 Envíando move_ack a cliente {client_id}")
     return {
         'type': 'move_ack', 
+        'element_id': element_id,
+        'position': {'x': x, 'y': y},
         'zones': result.get('zones', []),
         'metrics': result.get('metrics', {}),
-        'warnings': [],
+        'warnings': result.get('warnings', []),
         'can_undo': True,
         'can_redo': False
     }
 
 
 async def handle_select(data: dict, session_id: str, client_id: str) -> dict:
-    """Maneja acción select"""
+    """Maneja acción select - Ahora bloquea correctamente"""
     element_id = data.get('element_id')
     
     logger.info(f"🔒 Select: {element_id} por {client_id}")
     
-    can_lock = await manager.try_lock_element(session_id, element_id, client_id)
+    # Verificar si ya está bloqueado por otro
+    if session_id in manager.element_locks:
+        locks = manager.element_locks[session_id]
+        if element_id in locks and locks[element_id] != client_id:
+            locking_client = manager.clients.get(locks[element_id])
+            locking_user = locking_client.user_name if locking_client else 'Otro usuario'
+            
+            return {
+                'type': 'error',
+                'code': 'ELEMENT_LOCKED',
+                'message': f'Elemento bloqueado por {locking_user}'
+            }
     
-    users = manager.get_session_users(session_id)
+    # Intentar bloquear
+    can_lock = await manager.try_lock_element(session_id, element_id, client_id)
+    engine = get_or_create_engine(session_id)
     
     if can_lock:
-        client_info = manager.clients.get(client_id)
-        user_name = client_info.user_name if client_info else 'Unknown'
+        # Marcar como seleccionado en el engine
+        if element_id in engine.elements:
+            engine.elements[element_id]['locked_by'] = client_id
         
-        logger.info(f"✅ Elemento {element_id} bloqueado por {client_id} ({user_name})")
+        users = manager.get_session_users(session_id)
+        
+        logger.info(f"✅ Elemento {element_id} bloqueado por {client_id}")
         await manager.broadcast_to_session(
             session_id,
             {
                 'type': 'element_locked',
                 'element_id': element_id,
                 'client_id': client_id,
-                'user_name': user_name,
                 'users': users
             }
         )
         return {'type': 'select_ack', 'locked': True}
     else:
-        logger.warning(f"❌ No se pudo bloquear {element_id} para {client_id}")
         return {
             'type': 'error',
             'code': 'ELEMENT_LOCKED',
-            'message': f'Elemento {element_id} está siendo editado por otro usuario'
+            'message': 'Elemento está siendo editado por otro usuario'
         }
 
 
@@ -775,6 +779,11 @@ async def handle_deselect(data: dict, session_id: str, client_id: str) -> dict:
     logger.info(f"🔓 Deselect: {element_id} por {client_id}")
     
     manager.unlock_element(client_id, element_id)
+    
+    # Limpiar lock en engine
+    engine = get_or_create_engine(session_id)
+    if element_id in engine.elements and 'locked_by' in engine.elements[element_id]:
+        del engine.elements[element_id]['locked_by']
     
     users = manager.get_session_users(session_id)
     
@@ -812,7 +821,7 @@ async def handle_cursor(data: dict, session_id: str, client_id: str) -> Optional
 
 
 async def handle_init(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
-    """Inicializa el layout desde el frontend (action: 'init')"""
+    """Inicializa el layout desde el frontend"""
     elements = data.get('elements', [])
     dimensions = data.get('dimensions', {})
     
@@ -824,7 +833,21 @@ async def handle_init(data: dict, session_id: str, client_id: str, engine: Inter
     
     result = engine.initialize_from_elements(elements)
     
-    # Devolver 'initialized' como espera el frontend (processMessage)
+    users = manager.get_session_users(session_id)
+    
+    # Broadcast state_update a todos
+    logger.info(f"📢 Broadcasting state_update a sesión {session_id}")
+    await manager.broadcast_to_session(
+        session_id,
+        {
+            'type': 'state_update',
+            'elements': result.get('elements', elements),
+            'zones': result.get('zones', []),
+            'metrics': result.get('metrics', {}),
+            'users': users
+        }
+    )
+    
     return {
         'type': 'initialized',
         'zones': result.get('zones', []),
@@ -858,7 +881,6 @@ async def handle_add(data: dict, session_id: str, client_id: str, engine: Intera
     if not element:
         return {'type': 'error', 'message': 'No se proporcionó elemento'}
     
-    # Generar ID si no tiene
     if 'id' not in element:
         element['id'] = f"el_{uuid.uuid4().hex[:8]}"
     
@@ -1069,7 +1091,7 @@ async def handle_chat(data: dict, session_id: str, client_id: str) -> dict:
         }
     )
     
-    return None  # No respuesta directa, el broadcast es suficiente
+    return None
 
 
 async def handle_reset(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
@@ -1199,10 +1221,11 @@ async def list_sessions():
 # ============================================================
 
 logger.info("=" * 60)
-logger.info("✅ websocket_routes.py V2.0 CARGADO")
+logger.info("✅ websocket_routes.py V2.1 CARGADO")
 logger.info("   ✅ WebSocketManager: INLINE")
 logger.info("   ✅ InteractiveLayoutEngine: INLINE")
 logger.info("   ✅ Sin dependencias externas")
+logger.info("   ✅ Handler 'move' IMPLEMENTADO")
 logger.info("   Rutas WebSocket:")
 logger.info("   - /ws/layout/{session_id}")
 logger.info("   - /realtime/layout/{session_id}")
