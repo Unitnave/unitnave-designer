@@ -1,11 +1,6 @@
 /**
  * UNITNAVE Designer - Layout Store (V1.1)
  * State management con Zustand para edición interactiva
- * 
- * CHANGES:
-- - Fixed element_locked/element_unlocked handlers to update onlineUsers and lockedElements
-- - Added proper state validation for undefined users
-- - Removed process.env.NODE_ENV dependency
  */
 
 import { create } from 'zustand'
@@ -87,10 +82,6 @@ export interface Warning {
   min_value?: number
 }
 
-// ============================================================
-// STORE STATE
-// ============================================================
-
 interface LayoutState {
   sessionId: string | null
   clientId: string | null
@@ -115,10 +106,6 @@ interface LayoutState {
   canUndo: boolean
   canRedo: boolean
 }
-
-// ============================================================
-// ACTIONS
-// ============================================================
 
 interface LayoutActions {
   setSession: (sessionId: string, clientId: string) => void
@@ -341,7 +328,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
     })),
     {
       name: 'unitnave-layout-store',
-      enabled: true  // Sin process.env para evitar problemas
+      enabled: true
     }
   )
 )
