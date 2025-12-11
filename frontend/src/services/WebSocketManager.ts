@@ -127,23 +127,57 @@ class WebSocketManager {
   }
   
   private _createConnection(): void {
+    console.log('🎯 ===== INICIO DEL HANDSHAKE WEBSOCKET =====');
+    console.log('🎯 SessionId:', this.sessionId);
+    console.log('🎯 UserName:', this.userName);
+    console.log('🎯 BaseUrl:', this.baseUrl);
+    
     if (!this.sessionId) {
-      console.error('❌ No hay sessionId para conectar')
-      return
+        console.error('❌ No hay sessionId');
+        return;
     }
+
+    const wsUrl = `${this.baseUrl}/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`;
+    console.log('🎯 URL completa:', wsUrl);
+
+    // Log de entorno del navegador
+    console.log('🎯 Navegador - Origin:', window.location.origin);
+    console.log('🎯 Navegador - Protocol:', window.location.protocol);
+    console.log('🎯 Navegador - Host:', window.location.host);
     
-    const wsUrl = `${this.baseUrl}/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`
-    
-    console.log(`🔌 Conectando WebSocket: ${wsUrl}`)
+    // Intentar conexión
+    console.log('🎯 Creando instancia WebSocket...');
     
     try {
-      this.ws = new WebSocket(wsUrl)
-      this._setupEventListeners()
+        this.ws = new WebSocket(wsUrl);
+        console.log('🎯 WebSocket instanciado (estado:', this.ws.readyState, ')');
+        
+        // Listeners de debug
+        this.ws.onopen = (e) => {
+            console.log('✅ EVENTO ONOPEN:', e);
+            this._handleOpen();
+        };
+        this.ws.onmessage = (e) => {
+            console.log('📨 EVENTO ONMESSAGE:', e.data);
+            this._handleMessage(e);
+        };
+        this.ws.onerror = (e) => {
+            console.error('❌ EVENTO ONERROR:', e);
+            console.error('❌ EVENTO ONERROR - target.url:', e.target.url);
+            console.error('❌ EVENTO ONERROR - target.readyState:', e.target.readyState);
+        };
+        this.ws.onclose = (e) => {
+            console.log('🔌 EVENTO ONCLOSE:', e.code, e.reason, e.wasClean);
+            this._handleClose(e);
+        };
+        
+        console.log('🎯 Listeners asignados correctamente');
+        
     } catch (error) {
-      console.error('❌ Error creando WebSocket:', error)
-      this._scheduleReconnect()
+        console.error('❌ ERROR CRÍTICO EN catch():', error);
+        this._scheduleReconnect();
     }
-  }
+}
   
   private _setupEventListeners(): void {
     if (!this.ws) return

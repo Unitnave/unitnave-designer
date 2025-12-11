@@ -1,6 +1,7 @@
 """
-UNITNAVE API v6.0 - Motor CAD Profesional
+UNITNAVE API v6.1 - Motor CAD Profesional
 Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF + WebSocket
++ LOGGING ULTRA-DETALLADO
 
 ARCHIVO: backend/main.py
 """
@@ -11,7 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import uuid
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel, Field
@@ -85,16 +86,60 @@ try:
 except ImportError as e:
     WEBSOCKET_AVAILABLE = False
     ws_router = None
+    layout_engines = {}
     logger.warning(f"⚠️ WebSocket no disponible: {e}")
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="UNITNAVE Designer API",
     description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
-    version="6.0.0",
+    version="6.1.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
+
+# ==================== 🎯 MIDDLEWARE DE LOGGING ULTRA-DETALLADO ====================
+@app.middleware("http")
+async def log_every_single_request(request: Request, call_next):
+    """Middleware para logging detallado de TODAS las requests"""
+    logger.info("=" * 80)
+    logger.info(f"🎯 INCOMING REQUEST: {request.method} {request.url}")
+    logger.info(f"🎯 Client HOST: {request.client.host if request.client else 'UNKNOWN'}")
+    logger.info(f"🎯 HEADERS COMPLETOS:")
+    for key, value in request.headers.items():
+        logger.info(f"  {key}: {value}")
+    
+    # Log del body (solo para POST/PUT)
+    if request.method in ["POST", "PUT"]:
+        try:
+            body = await request.body()
+            body_str = body.decode()[:500] if body else "<empty>"
+            logger.info(f"🎯 BODY: {body_str}")
+            # Importante: recrear el body para que esté disponible después
+            from starlette.requests import Request as StarletteRequest
+            async def receive():
+                return {"type": "http.request", "body": body}
+            request = Request(request.scope, receive)
+        except Exception as e:
+            logger.info(f"🎯 BODY: <could not read: {e}>")
+    
+    # Procesar request
+    logger.info("🎯 Llamando a siguiente middleware/endpoint...")
+    
+    try:
+        response = await call_next(request)
+        
+        logger.info(f"🎯 RESPONSE STATUS: {response.status_code}")
+        logger.info(f"🎯 RESPONSE HEADERS:")
+        for key, value in response.headers.items():
+            logger.info(f"  {key}: {value}")
+        logger.info("=" * 80)
+        
+        return response
+    except Exception as e:
+        logger.error(f"🔥 ERROR EN REQUEST: {e}")
+        logger.info("=" * 80)
+        raise
 
 # ==================== CORS ====================
 ALLOWED_ORIGINS = os.getenv(
@@ -343,9 +388,10 @@ def build_preferences(request: OptimizeRequest) -> Optional[DesignPreferences]:
 
 @app.get("/")
 async def root():
+    logger.info("🏠 Root endpoint llamado")
     return {
         "name": "UNITNAVE Designer API",
-        "version": "6.0.0",
+        "version": "6.1.0",
         "status": "running",
         "features": {
             "multi_scenario": True,
@@ -375,10 +421,11 @@ async def root():
 
 @app.get("/api/health")
 async def health():
+    logger.info("💓 Health check llamado")
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "6.0.0",
+        "version": "6.1.0",
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
             "ortools": ORTOOLS_AVAILABLE,
@@ -405,6 +452,8 @@ async def optimize_layout(request: OptimizeRequest):
     - V5.2: Configuración completa de oficinas por plantas
     """
     try:
+        logger.info(f"🚀 Optimización solicitada: {request.length}x{request.width}x{request.height}")
+        
         input_data = build_warehouse_input(request)
         prefs = build_preferences(request)
         
@@ -432,6 +481,8 @@ async def get_all_scenarios(request: OptimizeRequest):
     Útil para mostrar comparativa completa en frontend
     """
     try:
+        logger.info(f"📊 Escenarios solicitados: {request.length}x{request.width}")
+        
         input_data = WarehouseInput(
             length=request.length,
             width=request.width,
@@ -467,6 +518,8 @@ async def get_all_scenarios(request: OptimizeRequest):
                 }
             })
         
+        logger.info(f"✅ {len(all_scenarios)} escenarios generados")
+        
         return {
             "total_evaluated": len(all_scenarios),
             "best": all_scenarios[0] if all_scenarios else None,
@@ -487,6 +540,8 @@ async def compare_priorities(request: OptimizeRequest):
     para mostrar trade-offs
     """
     try:
+        logger.info(f"⚖️ Comparación de prioridades: {request.length}x{request.width}")
+        
         input_data = WarehouseInput(
             length=request.length,
             width=request.width,
@@ -520,6 +575,8 @@ async def compare_priorities(request: OptimizeRequest):
         scores = {k: v["score"] for k, v in comparison.items()}
         recommended = max(scores, key=scores.get)
         
+        logger.info(f"✅ Comparación completada, recomendado: {recommended}")
+        
         return {
             "comparison": comparison,
             "recommendation": recommended,
@@ -547,6 +604,8 @@ async def optimize_genetic(request: OptimizeRequest):
         )
     
     try:
+        logger.info(f"🧬 Optimización GA: {request.length}x{request.width}")
+        
         input_data = WarehouseInput(
             length=request.length,
             width=request.width,
@@ -593,6 +652,8 @@ async def optimize_scenarios(request: OptimizeRequest):
     Genera 3 variantes con diferentes maquinarias
     """
     try:
+        logger.info(f"📊 Escenarios por maquinaria: {request.length}x{request.width}")
+        
         scenarios = {}
         machinery_types = ["retractil", "trilateral", "contrapesada"]
         
@@ -633,6 +694,8 @@ async def optimize_scenarios(request: OptimizeRequest):
 async def calculate_capacity(request: CalculateRequest):
     """Calcular capacidad y métricas de un diseño existente"""
     try:
+        logger.info(f"🧮 Cálculo solicitado: {request.name}")
+        
         elements = []
         for el in request.elements:
             elements.append(WarehouseElement(
@@ -656,6 +719,8 @@ async def calculate_capacity(request: CalculateRequest):
         calculator = CapacityCalculator(input_data, elements, dims)
         capacity = calculator.calculate_total_capacity()
         surfaces = calculator.calculate_surfaces()
+        
+        logger.info(f"✅ Cálculo completado")
         
         return {
             "status": "success",
@@ -681,6 +746,7 @@ async def save_design(design: Dict):
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat()
     }
+    logger.info(f"💾 Diseño guardado: {design_id}")
     return {"id": design_id, "message": "Diseño guardado"}
 
 
@@ -704,6 +770,7 @@ async def delete_design(design_id: str):
     if design_id not in designs_db:
         raise HTTPException(status_code=404, detail="Diseño no encontrado")
     del designs_db[design_id]
+    logger.info(f"🗑️ Diseño eliminado: {design_id}")
     return {"message": "Diseño eliminado"}
 
 
@@ -713,15 +780,10 @@ async def delete_design(design_id: str):
 async def generate_detailed_report(request: OptimizeRequest):
     """
     📋 Genera informe detallado con todas las mediciones (en cm)
-    
-    Incluye:
-    - Detalle de cada estantería (posición, dimensiones, palets)
-    - Distancias a paredes
-    - Desglose por zona ABC
-    - Palets por nivel
-    - Resumen de distancias
     """
     try:
+        logger.info(f"📋 Generando informe: {request.length}x{request.width}")
+        
         from report_generator import ReportGenerator
         
         input_data = build_warehouse_input(request)
@@ -749,10 +811,10 @@ async def generate_detailed_report(request: OptimizeRequest):
 async def generate_pdf_report(request: OptimizeRequest):
     """
     📄 Genera informe en PDF
-    
-    Devuelve el PDF como descarga
     """
     try:
+        logger.info(f"📄 Generando PDF: {request.length}x{request.width}")
+        
         from report_generator import generate_pdf_report as gen_pdf
         import tempfile
         
@@ -784,27 +846,7 @@ async def generate_pdf_report(request: OptimizeRequest):
 
 # ==================== GEOMETRÍA EXACTA (SHAPELY) ====================
 
-@app.post(
-    "/api/layout/analyze",
-    summary="Análisis de Geometría Exacta",
-    description="""
-    Calcula espacios libres y pasillos usando operaciones booleanas exactas (Shapely/GEOS).
-    
-    Características:
-    - Cálculo exacto de espacio libre (diferencia booleana)
-    - Soporte para rotaciones arbitrarias
-    - Clasificación automática de zonas (pasillos, circulación, etc.)
-    - Métricas precisas de área
-    - Validación de normativa ERP
-    
-    Tipos de zona detectados:
-    - main_aisle: Pasillo principal (≥ 3.5m de ancho)
-    - cross_aisle: Pasillo transversal (≥ 3m)
-    - aisle: Pasillo operativo (≥ 2.5m)
-    - circulation: Zona de circulación amplia
-    - free_zone: Zona libre genérica
-    """
-)
+@app.post("/api/layout/analyze")
 async def analyze_layout_geometry(request: LayoutAnalysisRequest):
     """Endpoint para análisis de geometría exacta del layout"""
     if not GEOMETRY_AVAILABLE:
@@ -833,22 +875,7 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
 
 # ==================== OR-TOOLS OPTIMIZATION ====================
 
-@app.post(
-    "/api/layout/optimize",
-    summary="Optimización con OR-Tools",
-    description="""
-    Optimiza el layout usando Google OR-Tools.
-    
-    Cuando mueves un elemento manualmente:
-    1. Fija ese elemento en la nueva posición
-    2. Recoloca automáticamente los demás elementos
-    3. Mantiene restricciones de pasillo mínimo (3.5m)
-    4. Evita solapamientos
-    5. Minimiza distancia de picking a muelles
-    
-    Tiempo máximo: 5 segundos
-    """
-)
+@app.post("/api/layout/optimize")
 async def optimize_layout_ortools(request: OptimizeLayoutRequest):
     """Endpoint para optimización inteligente del layout"""
     if not ORTOOLS_AVAILABLE:
@@ -880,20 +907,7 @@ async def optimize_layout_ortools(request: OptimizeLayoutRequest):
 
 # ==================== DXF EXPORT ====================
 
-@app.post(
-    "/api/layout/export/dxf",
-    summary="Exportar a DXF",
-    description="""
-    Exporta el layout a formato DXF profesional.
-    
-    Características:
-    - Compatible con AutoCAD 2018+
-    - Capas separadas por tipo de elemento
-    - Acotaciones automáticas
-    - Escala 1:1 (metros)
-    - Cajetín con información del proyecto
-    """
-)
+@app.post("/api/layout/export/dxf")
 async def export_layout_dxf(request: ExportDXFRequest):
     """Endpoint para exportar layout a DXF"""
     if not DXF_AVAILABLE:
@@ -932,21 +946,12 @@ async def export_layout_dxf(request: ExportDXFRequest):
 
 # ==================== ENDPOINT COMBINADO ====================
 
-@app.post(
-    "/api/layout/full",
-    summary="Análisis Completo (Geometría + Optimización)",
-    description="""
-    Endpoint combinado que:
-    1. Optimiza posiciones si se especifica un elemento movido
-    2. Calcula geometría exacta
-    3. Detecta pasillos y zonas
-    4. Valida normativa ERP
-    5. Retorna todo en una sola llamada
-    """
-)
+@app.post("/api/layout/full")
 async def full_layout_analysis(request: FullLayoutRequest):
     """Endpoint completo para frontend inteligente"""
     try:
+        logger.info(f"🔄 Análisis completo: {len(request.elements)} elementos")
+        
         result_elements = request.elements
         optimization_result = None
         
@@ -997,6 +1002,8 @@ async def full_layout_analysis(request: FullLayoutRequest):
                 'warnings': []
             }
         
+        logger.info(f"✅ Análisis completo terminado")
+        
         return {
             'elements': result_elements,
             'zones': geometry_result.get('zones', []),
@@ -1016,9 +1023,10 @@ async def full_layout_analysis(request: FullLayoutRequest):
 
 @app.on_event("startup")
 async def startup():
-    logger.info("=" * 60)
-    logger.info("🏭 UNITNAVE Designer API v6.0 - Motor CAD Profesional")
-    logger.info("=" * 60)
+    logger.info("=" * 80)
+    logger.info("🏭 UNITNAVE Designer API v6.1 - Motor CAD Profesional")
+    logger.info("🎯 LOGGING ULTRA-DETALLADO ACTIVADO")
+    logger.info("=" * 80)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
     logger.info(f"🎯 Multi-Escenario: Activo")
     logger.info(f"📊 Fitness Evaluation: Activo")
@@ -1027,7 +1035,7 @@ async def startup():
     logger.info(f"🧮 Optimizador (OR-Tools): {ORTOOLS_AVAILABLE}")
     logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
     logger.info(f"🔌 WebSocket Interactivo: {WEBSOCKET_AVAILABLE}")
-    logger.info("=" * 60)
+    logger.info("=" * 80)
 
 
 if __name__ == "__main__":
