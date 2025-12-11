@@ -132,7 +132,7 @@ class WebSocketManager {
       return
     }
     
-    const wsUrl = `${this.baseUrl}/ws/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`
+    const wsUrl = `${this.baseUrl}/layout/${this.sessionId}?user=${encodeURIComponent(this.userName)}`
     
     console.log(`🔌 Conectando WebSocket: ${wsUrl}`)
     
