@@ -1,6 +1,6 @@
 """
 UNITNAVE API v6.0 - Motor CAD Profesional
-Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF
+Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF + WebSocket
 
 ARCHIVO: backend/main.py
 """
@@ -76,6 +76,17 @@ except ImportError as e:
     export_to_dxf = None
     logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
 
+# ==================== WEBSOCKET (NUEVO) ====================
+try:
+    from websocket_routes import router as ws_router
+    from interactive_layout_engine import layout_engines
+    WEBSOCKET_AVAILABLE = True
+    logger.info("✅ WebSocket para edición interactiva cargado")
+except ImportError as e:
+    WEBSOCKET_AVAILABLE = False
+    ws_router = None
+    logger.warning(f"⚠️ WebSocket no disponible: {e}")
+
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="UNITNAVE Designer API",
@@ -98,6 +109,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ==================== WEBSOCKET ROUTER (NUEVO) ====================
+if WEBSOCKET_AVAILABLE and ws_router:
+    app.include_router(ws_router)
+    logger.info("✅ Router WebSocket incluido")
 
 # ==================== MODELOS REQUEST ====================
 
@@ -338,7 +354,8 @@ async def root():
             "geometry_exact": GEOMETRY_AVAILABLE,
             "ortools_optimizer": ORTOOLS_AVAILABLE,
             "dxf_export": DXF_AVAILABLE,
-            "ga_optimizer": GA_AVAILABLE
+            "ga_optimizer": GA_AVAILABLE,
+            "websocket_interactive": WEBSOCKET_AVAILABLE
         },
         "endpoints": {
             "optimize": "/api/optimize",
@@ -350,6 +367,7 @@ async def root():
             "layout_optimize": "/api/layout/optimize",
             "layout_export_dxf": "/api/layout/export/dxf",
             "layout_full": "/api/layout/full",
+            "websocket": "/ws/layout/{session_id}",
             "docs": "/api/docs"
         }
     }
@@ -365,8 +383,10 @@ async def health():
             "geometry": GEOMETRY_AVAILABLE,
             "ortools": ORTOOLS_AVAILABLE,
             "dxf": DXF_AVAILABLE,
-            "ga": GA_AVAILABLE
-        }
+            "ga": GA_AVAILABLE,
+            "websocket": WEBSOCKET_AVAILABLE
+        },
+        "active_sessions": len(layout_engines) if WEBSOCKET_AVAILABLE else 0
     }
 
 
@@ -1006,6 +1026,7 @@ async def startup():
     logger.info(f"📐 Geometría exacta (Shapely): {GEOMETRY_AVAILABLE}")
     logger.info(f"🧮 Optimizador (OR-Tools): {ORTOOLS_AVAILABLE}")
     logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
+    logger.info(f"🔌 WebSocket Interactivo: {WEBSOCKET_AVAILABLE}")
     logger.info("=" * 60)
 
 
