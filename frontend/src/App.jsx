@@ -24,7 +24,7 @@ import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-thr
 import useWarehouseStore from './stores/useWarehouseStore'
 import useUIStore from './stores/useUIStore'
 import useCalculationsStore from './stores/useCalculationsStore'
-import useLayoutStore from './stores/useLayoutStore' // ← NUEVO: para WebSocket
+import useLayoutStore from './store/useLayoutStore' // ← NUEVO: para WebSocket
 
 // Componentes existentes
 import WizardStepper from './components/wizard/WizardStepper'
