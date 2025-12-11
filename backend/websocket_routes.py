@@ -274,7 +274,7 @@ async def handle_select(data: dict, session_id: str, client_id: str) -> dict:
         return {
             'type': 'error',
             'code': 'ELEMENT_LOCKED',
-            'message': f'Elemento {element_id} está bloqueado'
+            'message': f'Elemento {element_id} está siendo editado por otro usuario'
         }
 
 
@@ -372,3 +372,20 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "connections": len(manager.clients)
     }
+
+# ============================================================
+# INSTRUCCIONES
+# ============================================================
+
+"""
+CÓMO AÑADIR A main.py:
+
+1. Importar al inicio:
+   from websocket_routes import router as ws_router
+
+2. Incluir router después de crear app:
+   app.include_router(ws_router)
+
+3. Asegurarse de tener websockets instalado:
+   pip install websockets
+"""
