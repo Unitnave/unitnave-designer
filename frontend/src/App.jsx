@@ -43,12 +43,12 @@ import wsManager from './services/WebSocketManager'
 // ============================================================
 // ✅ CONFIGURACIÓN WEBSOCKET CON TU DOMINIO REAL DE RAILWAY
 // ============================================================
-const WS_BACKEND_URL = 'wss://unitnave-designer-production.up.railway.app/socket'
+const WS_BACKEND_URL = 'wss://unitnave-designer-production.up.railway.app/realtime'
 
 const getWebSocketUrl = () => {
   if (window.location.hostname === 'localhost' || 
       window.location.hostname === '127.0.0.1') {
-    return `ws://localhost:8000/socket`
+    return `ws://localhost:8000/realtime`
   }
   return WS_BACKEND_URL
 }

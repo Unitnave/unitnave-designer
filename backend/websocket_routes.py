@@ -70,7 +70,7 @@ router = APIRouter(tags=["Interactive Layout"])
 # WEBSOCKET PRINCIPAL (RAILWAY + VERCEL)
 # ============================================================
 
-@router.websocket("/socket/layout/{session_id}")
+@router.websocket("/realtime/layout/{session_id}")
 async def layout_websocket(websocket: WebSocket, session_id: str):
     """WebSocket principal para edición interactiva"""
     client_id = f"{session_id}_{uuid.uuid4().hex[:8]}"
