@@ -47,6 +47,7 @@ class ClientInfo:
     session_id: str
     client_id: str
     user_name: str
+    selected_element: Optional[str] = None
     connected_at: datetime = field(default_factory=datetime.now)
     cursor_x: float = 0
     cursor_y: float = 0
@@ -160,6 +161,7 @@ class WebSocketManager:
         
         if client_id in self.clients:
             self.clients[client_id].locked_elements.add(element_id)
+            self.clients[client_id].selected_element = element_id
         
         return True
     
@@ -177,6 +179,8 @@ class WebSocketManager:
                     del self.element_locks[session_id][element_id]
         
         client_info.locked_elements.discard(element_id)
+        if client_info.selected_element == element_id:
+            client_info.selected_element = None
     
     def update_cursor(self, client_id: str, x: float, y: float):
         """Actualiza posición del cursor"""
@@ -186,17 +190,22 @@ class WebSocketManager:
     
     def get_session_users(self, session_id: str) -> List[dict]:
         """Obtiene lista de usuarios en una sesión"""
-        users = []
+        users: List[dict] = []
         if session_id in self.sessions:
             for client_id in self.sessions[session_id]:
-                if client_id in self.clients:
-                    info = self.clients[client_id]
-                    users.append({
-                        'client_id': client_id,
-                        'user_name': info.user_name,
-                        'cursor': {'x': info.cursor_x, 'y': info.cursor_y},
-                        'locked_elements': list(info.locked_elements)
-                    })
+                info = self.clients.get(client_id)
+                if not info:
+                    continue
+                users.append({
+                    'client_id': info.client_id,
+                    'session_id': info.session_id,
+                    'user_name': info.user_name,
+                    'cursor_position': {'x': info.cursor_x, 'y': info.cursor_y},
+                    'cursor': {'x': info.cursor_x, 'y': info.cursor_y},  # legacy
+                    'selected_element': info.selected_element,
+                    'connected_at': info.connected_at.isoformat() if hasattr(info.connected_at, 'isoformat') else str(info.connected_at),
+                    'locked_elements': list(info.locked_elements)
+                })
         return users
 
 
@@ -262,13 +271,29 @@ class InteractiveLayoutEngine:
             logger.error(f"❌ Elemento {element_id} no existe")
             return {'error': f'Elemento {element_id} no encontrado'}
         
-        # Validar límites
-        x = max(0, min(x, self.length))
-        y = max(0, min(y, self.width))
-        
+        # Obtener dimensiones reales (para clamp correcto sin salirte por el ancho/alto)
+        el = self.elements[element_id]
+        dims = (el.get('dimensions') or {})
+        el_type = el.get('type', 'unknown')
+
+        # Defaults por tipo (m)
+        if el_type in ('shelf', 'rack'):
+            w = float(dims.get('length') or dims.get('width') or 2.7)
+            h = float(dims.get('depth') or dims.get('height') or 1.1)
+        elif el_type == 'dock':
+            w = float(dims.get('width') or dims.get('length') or 3.5)
+            h = float(dims.get('depth') or dims.get('height') or 0.5)
+        else:
+            w = float(dims.get('length') or dims.get('width') or 2.0)
+            h = float(dims.get('depth') or dims.get('height') or 2.0)
+
         # Snap to grid (0.5m) - CORRECCIÓN CRÍTICA
-        x = round(x / 0.5) * 0.5
-        y = round(y / 0.5) * 0.5
+        x = round(float(x) / 0.5) * 0.5
+        y = round(float(y) / 0.5) * 0.5
+
+        # Validar límites (clamp CON tamaño)
+        x = max(0, min(x, self.length - w))
+        y = max(0, min(y, self.width - h))
         
         logger.info(f"📐 Snap aplicado: ({x}, {y})")
         
@@ -497,7 +522,8 @@ async def layout_websocket(websocket: WebSocket, session_id: str):
             'client_id': client_id,
             'session_id': session_id,
             'online_users': users,
-            'locked_elements': {}
+            'locked_elements': manager.element_locks.get(session_id, {}),
+            'timestamp': datetime.now().isoformat()
         })
         
         logger.info(f"✅ Mensaje 'connected' enviado a {client_id}")
@@ -555,13 +581,65 @@ async def layout_websocket_alt(websocket: WebSocket, session_id: str):
 # MESSAGE HANDLERS - CORREGIDOS
 # ============================================================
 
+
+# ============================================================
+# NORMALIZADORES DE PROTOCOLO (COMPAT CAMELCASE / LEGACY)
+# ============================================================
+
+def _norm_element_id(data: dict) -> Optional[str]:
+    return (
+        data.get('element_id')
+        or data.get('elementId')
+        or data.get('elementID')
+        or data.get('id')
+    )
+
+def _norm_position(data: dict) -> Dict[str, float]:
+    # Preferido legacy: position: {x,y}
+    pos = data.get('position') or {}
+    x = None
+    y = None
+
+    if isinstance(pos, dict):
+        x = pos.get('x')
+        y = pos.get('y')
+
+    # Compat plano: x,y
+    if x is None:
+        x = data.get('x')
+    if y is None:
+        y = data.get('y')
+
+    try:
+        x = float(x) if x is not None else 0.0
+    except Exception:
+        x = 0.0
+    try:
+        y = float(y) if y is not None else 0.0
+    except Exception:
+        y = 0.0
+
+    return {'x': x, 'y': y}
+
+def _norm_message_type(data: dict) -> str:
+    # Preferido en este archivo: type (legacy) / action (nuevo)
+    t = data.get('type')
+    if t:
+        return str(t)
+    if data.get('action'):
+        return 'action'
+    return ''
 async def handle_websocket_message(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> Optional[dict]:
     """Manejador central de mensajes"""
-    message_type = data.get('type')
-    
-    if message_type is None and data.get('action'):
+    message_type = _norm_message_type(data)
+
+    # Compat: tipos legacy que realmente son acciones
+    if message_type in ('move_request', 'move', 'lock', 'unlock', 'select', 'deselect', 'cursor'):
+        # Normalizamos a canal de acciones
+        if 'action' not in data:
+            data['action'] = 'move' if message_type in ('move_request', 'move') else message_type
         message_type = 'action'
-    
+
     logger.debug(f"🔄 Procesando mensaje tipo: {message_type}")
     
     if message_type == 'initialize':
@@ -589,7 +667,7 @@ async def handle_websocket_message(data: dict, session_id: str, client_id: str, 
 async def handle_action(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
     """Procesa acciones del engine - AHORA CON 'move'"""
     action = data.get('action')
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     
     logger.info(f"🎬 Acción '{action}' de {client_id} en elemento {element_id}")
     
@@ -655,11 +733,17 @@ async def handle_action(data: dict, session_id: str, client_id: str, engine: Int
 # ============================================================
 
 async def handle_move(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
-    """Maneja acción move - COMPLETAMENTE REESCRITO CON LOGGING"""
-    element_id = data.get('element_id')
-    position = data.get('position', {})
-    x = float(position.get('x', 0))
-    y = float(position.get('y', 0))
+    """Maneja acción move - COMPLETAMENTE REESCRITO CON LOGGING
+
+    Compatibilidad de protocolo:
+    - element_id / elementId
+    - position:{x,y} o x,y planos
+    - ts / timestamp (se ignora en backend, pero se conserva si llega)
+    """
+    element_id = _norm_element_id(data)
+    pos = _norm_position(data)
+    x = float(pos.get('x', 0))
+    y = float(pos.get('y', 0))
     
     logger.info(f"📦 Move: {element_id} → ({x:.2f}, {y:.2f}) por {client_id}")
     
@@ -698,7 +782,11 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
         {
             'type': 'element_moved',
             'by_client': client_id,
+            'by_client_id': client_id,  # alias
             'element_id': element_id,
+            'elementId': element_id,  # alias camelCase
+            'x': x,
+            'y': y,
             'position': {'x': x, 'y': y},
             'element': result.get('element'),
             'zones': result.get('zones', []),
@@ -714,6 +802,9 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
     return {
         'type': 'move_ack', 
         'element_id': element_id,
+        'elementId': element_id,  # alias
+        'x': x,
+        'y': y,
         'position': {'x': x, 'y': y},
         'zones': result.get('zones', []),
         'metrics': result.get('metrics', {}),
@@ -725,7 +816,7 @@ async def handle_move(data: dict, session_id: str, client_id: str, engine: Inter
 
 async def handle_select(data: dict, session_id: str, client_id: str) -> dict:
     """Maneja acción select - Ahora bloquea correctamente"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     
     logger.info(f"🔒 Select: {element_id} por {client_id}")
     
@@ -774,7 +865,7 @@ async def handle_select(data: dict, session_id: str, client_id: str) -> dict:
 
 async def handle_deselect(data: dict, session_id: str, client_id: str) -> dict:
     """Maneja acción deselect"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     
     logger.info(f"🔓 Deselect: {element_id} por {client_id}")
     
@@ -801,12 +892,23 @@ async def handle_deselect(data: dict, session_id: str, client_id: str) -> dict:
 
 
 async def handle_cursor(data: dict, session_id: str, client_id: str) -> Optional[dict]:
-    """Maneja actualización de cursor"""
-    x = data.get('x', 0)
-    y = data.get('y', 0)
-    
+    """Maneja actualización de cursor (compat x,y plano o position:{x,y})."""
+    pos = _norm_position(data)
+    x = pos.get('x', 0.0)
+    y = pos.get('y', 0.0)
+
     manager.update_cursor(client_id, x, y)
-    
+
+    # Emitimos formato NUEVO + legacy para no romper el frontend
+    payload = {
+        'type': 'cursor_update',
+        'client_id': client_id,
+        'cursor_position': {'x': x, 'y': y},
+        'position': {'x': x, 'y': y},  # legacy
+    }
+    await manager.broadcast_to_session(session_id, payload, exclude=client_id)
+
+    # Legacy extra (si alguna parte escucha cursor_move)
     await manager.broadcast_to_session(
         session_id,
         {
@@ -816,8 +918,9 @@ async def handle_cursor(data: dict, session_id: str, client_id: str) -> Optional
         },
         exclude=client_id
     )
-    
+
     return None
+
 
 
 async def handle_init(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
@@ -860,7 +963,7 @@ async def handle_init(data: dict, session_id: str, client_id: str, engine: Inter
 
 async def handle_lock(data: dict, session_id: str, client_id: str) -> dict:
     """Maneja acción lock (bloquear elemento)"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     
     logger.info(f"🔒 Lock request: {element_id} por {client_id}")
     
@@ -869,8 +972,11 @@ async def handle_lock(data: dict, session_id: str, client_id: str) -> dict:
     return {
         'type': 'lock_result',
         'element_id': element_id,
+        'elementId': element_id,  # alias
         'success': can_lock,
-        'locked_by': client_id if can_lock else None
+        'locked_by': client_id if can_lock else None,
+        'lockedBy': client_id if can_lock else None,  # alias
+        'client_id': client_id
     }
 
 
@@ -914,6 +1020,7 @@ async def handle_add(data: dict, session_id: str, client_id: str, engine: Intera
             'zones': engine.zones,
             'metrics': engine.metrics,
             'users': users,
+            'online_users': users,
             'source_client': client_id
         }
     )
@@ -923,7 +1030,7 @@ async def handle_add(data: dict, session_id: str, client_id: str, engine: Intera
 
 async def handle_delete(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
     """Elimina un elemento"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     
     if not element_id:
         return {'type': 'error', 'message': 'No se proporcionó element_id'}
@@ -963,6 +1070,7 @@ async def handle_delete(data: dict, session_id: str, client_id: str, engine: Int
             'zones': engine.zones,
             'metrics': engine.metrics,
             'users': users,
+            'online_users': users,
             'source_client': client_id
         }
     )
@@ -972,7 +1080,7 @@ async def handle_delete(data: dict, session_id: str, client_id: str, engine: Int
 
 async def handle_resize(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
     """Redimensiona un elemento"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     dimensions = data.get('dimensions', {})
     
     if not element_id or element_id not in engine.elements:
@@ -1015,6 +1123,7 @@ async def handle_resize(data: dict, session_id: str, client_id: str, engine: Int
             'zones': engine.zones,
             'metrics': engine.metrics,
             'users': users,
+            'online_users': users,
             'source_client': client_id
         }
     )
@@ -1024,7 +1133,7 @@ async def handle_resize(data: dict, session_id: str, client_id: str, engine: Int
 
 async def handle_rotate(data: dict, session_id: str, client_id: str, engine: InteractiveLayoutEngine) -> dict:
     """Rota un elemento"""
-    element_id = data.get('element_id')
+    element_id = _norm_element_id(data)
     rotation = data.get('rotation', 0)
     
     if not element_id or element_id not in engine.elements:
@@ -1060,6 +1169,7 @@ async def handle_rotate(data: dict, session_id: str, client_id: str, engine: Int
             'zones': engine.zones,
             'metrics': engine.metrics,
             'users': users,
+            'online_users': users,
             'source_client': client_id
         }
     )
@@ -1114,6 +1224,7 @@ async def handle_reset(data: dict, session_id: str, client_id: str, engine: Inte
             'zones': [],
             'metrics': {},
             'users': users,
+            'online_users': users,
             'source': 'reset',
             'source_client': client_id
         }

@@ -1,405 +1,351 @@
 """
-UNITNAVE Designer - WebSocket Manager (Backend)
-Gestor de conexiones WebSocket con heartbeat y broadcast
+UNITNAVE Designer - WebSocket Manager (Backend) - FULL
 
-@version 2.0
+Responsabilidades:
+- Registro de clientes (client_id) por sesión (session_id)
+- Broadcast seguro a una sesión (con exclude opcional)
+- Locks por elemento: locks[session_id][element_id] = client_id
+- Estado de usuarios online (cursor, selección)
+- Limpieza de locks al desconectar
+- Rate limiting (opcional) por cliente para evitar spam (move/cursor)
+- Utilidades para integrar con websocket_routes.py
+
+Notas de protocolo:
+- snake_case en backend:
+  client_id, session_id, user_name, element_id, cursor_position
+- "type" en mensajes de servidor -> cliente (compat con tu frontend)
 """
 
 import asyncio
 import json
 import logging
-from datetime import datetime
-from typing import Dict, Set, Optional, Any
+import time
 from dataclasses import dataclass, field
-from fastapi import WebSocket, WebSocketDisconnect
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
 
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def _json_dumps(obj: Any) -> str:
+    # Asegura serialización robusta
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+async def _safe_send_text(ws: WebSocket, payload: str) -> bool:
+    try:
+        await ws.send_text(payload)
+        return True
+    except Exception:
+        return False
+
+
+# ------------------------------------------------------------
+# Data structures
+# ------------------------------------------------------------
+
 @dataclass
 class ClientInfo:
-    """Información de un cliente conectado"""
     websocket: WebSocket
     session_id: str
     client_id: str
     user_name: str
-    connected_at: datetime = field(default_factory=datetime.now)
+    connected_at: str = field(default_factory=_now_iso)
+
+    # Estado colaborativo
     cursor_position: Optional[Dict[str, float]] = None
     selected_element: Optional[str] = None
-    last_ping: datetime = field(default_factory=datetime.now)
 
+    # Anti-spam / rate limiting (timestamps en segundos)
+    last_move_at: float = 0.0
+    last_cursor_at: float = 0.0
+
+
+# ------------------------------------------------------------
+# Manager
+# ------------------------------------------------------------
 
 class WebSocketManager:
     """
-    Gestor de conexiones WebSocket para colaboración en tiempo real.
-    
-    Características:
-    - Múltiples sesiones independientes
-    - Broadcast a todos los clientes de una sesión
-    - Heartbeat para detectar desconexiones
-    - Rate limiting por cliente
+    Manager de clientes WebSocket multi-sesión.
+
+    Estructuras:
+      clients[client_id] = ClientInfo(...)
+      sessions[session_id] = {client_id, ...}
+      locks[session_id][element_id] = client_id
+
+    Thread-safety:
+      - mutaciones protegidas por self._lock (asyncio.Lock)
     """
-    
-    def __init__(self):
-        # Clientes por sesión: {session_id: {client_id: ClientInfo}}
-        self.sessions: Dict[str, Dict[str, ClientInfo]] = {}
-        
-        # Locks por sesión para operaciones thread-safe
-        self.session_locks: Dict[str, asyncio.Lock] = {}
-        
-        # Elementos bloqueados: {session_id: {element_id: client_id}}
-        self.locked_elements: Dict[str, Dict[str, str]] = {}
-        
-        # Rate limiting: {client_id: last_message_time}
-        self.rate_limits: Dict[str, float] = {}
-        self.rate_limit_interval = 0.033  # ~30 mensajes/segundo
-        
-        # Heartbeat
-        self.heartbeat_interval = 30  # segundos
-        self.heartbeat_timeout = 10  # segundos
-        
-        logger.info("WebSocketManager inicializado")
-    
-    def _get_session_lock(self, session_id: str) -> asyncio.Lock:
-        """Obtener o crear lock para una sesión"""
-        if session_id not in self.session_locks:
-            self.session_locks[session_id] = asyncio.Lock()
-        return self.session_locks[session_id]
-    
-    async def connect(
-        self, 
-        websocket: WebSocket, 
-        session_id: str, 
-        client_id: str, 
-        user_name: str = "Anónimo"
-    ) -> bool:
-        """
-        Conectar un cliente a una sesión.
-        
-        Args:
-            websocket: Conexión WebSocket
-            session_id: ID de la sesión
-            client_id: ID único del cliente
-            user_name: Nombre del usuario
-            
-        Returns:
-            True si la conexión fue exitosa
-        """
-        try:
-            await websocket.accept()
-            
-            async with self._get_session_lock(session_id):
-                # Crear sesión si no existe
-                if session_id not in self.sessions:
-                    self.sessions[session_id] = {}
-                    self.locked_elements[session_id] = {}
-                    logger.info(f"Nueva sesión creada: {session_id}")
-                
-                # Registrar cliente
-                client_info = ClientInfo(
-                    websocket=websocket,
-                    session_id=session_id,
-                    client_id=client_id,
-                    user_name=user_name
-                )
-                self.sessions[session_id][client_id] = client_info
-                
-                logger.info(f"Cliente conectado: {client_id} ({user_name}) en sesión {session_id}")
-            
-            # Notificar al cliente que está conectado
-            await self.send_to_client(client_id, session_id, {
-                "type": "connected",
-                "session_id": session_id,
-                "client_id": client_id,
-                "user_name": user_name,
-                "online_users": self._get_online_users(session_id),
-                "locked_elements": self.locked_elements.get(session_id, {})
-            })
-            
-            # Notificar a otros usuarios
-            await self.broadcast_to_session(session_id, {
-                "type": "user_joined",
-                "client_id": client_id,
-                "user": {
-                    "client_id": client_id,
-                    "user_name": user_name,
-                    "connected_at": datetime.now().isoformat()
-                },
-                "online_users": self._get_online_users(session_id)
-            }, exclude_client=client_id)
-            
-            # Iniciar heartbeat para este cliente
-            asyncio.create_task(self._heartbeat_loop(session_id, client_id))
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error conectando cliente {client_id}: {e}")
-            return False
-    
-    async def disconnect(self, session_id: str, client_id: str):
-        """Desconectar un cliente de una sesión"""
-        async with self._get_session_lock(session_id):
-            if session_id in self.sessions and client_id in self.sessions[session_id]:
-                # Desbloquear elementos del cliente
-                if session_id in self.locked_elements:
-                    elements_to_unlock = [
-                        el_id for el_id, locked_by in self.locked_elements[session_id].items()
-                        if locked_by == client_id
-                    ]
-                    for el_id in elements_to_unlock:
-                        del self.locked_elements[session_id][el_id]
-                
-                # Eliminar cliente
-                del self.sessions[session_id][client_id]
-                logger.info(f"Cliente desconectado: {client_id} de sesión {session_id}")
-                
-                # Limpiar sesión vacía
-                if not self.sessions[session_id]:
-                    del self.sessions[session_id]
-                    if session_id in self.locked_elements:
-                        del self.locked_elements[session_id]
-                    if session_id in self.session_locks:
-                        del self.session_locks[session_id]
-                    logger.info(f"Sesión eliminada: {session_id}")
-                else:
-                    # Notificar a otros usuarios
-                    await self.broadcast_to_session(session_id, {
-                        "type": "user_left",
-                        "client_id": client_id,
-                        "online_users": self._get_online_users(session_id)
-                    })
-    
-    async def send_to_client(
-        self, 
-        client_id: str, 
-        session_id: str, 
-        message: Dict[str, Any]
-    ) -> bool:
-        """Enviar mensaje a un cliente específico"""
-        try:
-            if session_id in self.sessions and client_id in self.sessions[session_id]:
-                client = self.sessions[session_id][client_id]
-                await client.websocket.send_json(message)
-                return True
-        except Exception as e:
-            logger.error(f"Error enviando a cliente {client_id}: {e}")
-        return False
-    
-    async def broadcast_to_session(
-        self, 
-        session_id: str, 
-        message: Dict[str, Any],
-        exclude_client: Optional[str] = None
+
+    def __init__(
+        self,
+        *,
+        move_min_interval_s: float = 0.03,     # ~33 msg/s max por cliente (move)
+        cursor_min_interval_s: float = 0.02,   # ~50 msg/s max por cliente (cursor)
+        drop_on_rate_limit: bool = True
     ):
-        """Enviar mensaje a todos los clientes de una sesión"""
-        if session_id not in self.sessions:
-            return
-        
-        disconnected = []
-        
-        for client_id, client_info in self.sessions[session_id].items():
-            if client_id == exclude_client:
+        self.clients: Dict[str, ClientInfo] = {}
+        self.sessions: Dict[str, Set[str]] = {}
+        self.locks: Dict[str, Dict[str, str]] = {}
+
+        self._lock = asyncio.Lock()
+
+        # Rate limit
+        self.move_min_interval_s = float(move_min_interval_s)
+        self.cursor_min_interval_s = float(cursor_min_interval_s)
+        self.drop_on_rate_limit = bool(drop_on_rate_limit)
+
+    # ---------------------------
+    # Connection lifecycle
+    # ---------------------------
+
+    async def connect(self, websocket: WebSocket, session_id: str, client_id: str, user_name: str) -> None:
+        """
+        Acepta WebSocket y registra cliente.
+        """
+        await websocket.accept()
+
+        info = ClientInfo(
+            websocket=websocket,
+            session_id=session_id,
+            client_id=client_id,
+            user_name=user_name or "Usuario",
+        )
+
+        async with self._lock:
+            self.clients[client_id] = info
+            self.sessions.setdefault(session_id, set()).add(client_id)
+            self.locks.setdefault(session_id, {})
+
+        logger.info("WS connect client=%s session=%s user=%s", client_id, session_id, info.user_name)
+
+    async def disconnect(
+        self,
+        client_id: str,
+        *,
+        on_session_empty: Optional[Callable[[str], None]] = None
+    ) -> Tuple[str, List[str]]:
+        """
+        Desconecta un cliente.
+        - libera locks del cliente
+        - lo elimina de la sesión
+        - si la sesión queda vacía, llama on_session_empty(session_id)
+
+        Devuelve: (session_id, unlocked_element_ids)
+        """
+        async with self._lock:
+            info = self.clients.get(client_id)
+            if not info:
+                return ("", [])
+
+            session_id = info.session_id
+
+            # 1) liberar locks del cliente
+            unlocked: List[str] = []
+            locks = self.locks.get(session_id, {})
+            to_unlock = [el_id for el_id, locker in locks.items() if locker == client_id]
+            for el_id in to_unlock:
+                locks.pop(el_id, None)
+                unlocked.append(el_id)
+
+            # 2) limpiar selected_element
+            if info.selected_element:
+                info.selected_element = None
+
+            # 3) quitar de sesión
+            self.sessions.get(session_id, set()).discard(client_id)
+
+            # 4) borrar cliente
+            self.clients.pop(client_id, None)
+
+            # 5) sesión vacía => cleanup
+            session_empty = session_id in self.sessions and not self.sessions[session_id]
+            if session_empty:
+                self.sessions.pop(session_id, None)
+                self.locks.pop(session_id, None)
+
+                if on_session_empty:
+                    try:
+                        on_session_empty(session_id)
+                    except Exception:
+                        logger.exception("on_session_empty failed for session=%s", session_id)
+
+        logger.info("WS disconnect client=%s session=%s unlocked=%s", client_id, session_id, len(unlocked))
+        return (session_id, unlocked)
+
+    # ---------------------------
+    # Queries / state
+    # ---------------------------
+
+    def has_client(self, client_id: str) -> bool:
+        return client_id in self.clients
+
+    def get_client(self, client_id: str) -> Optional[ClientInfo]:
+        return self.clients.get(client_id)
+
+    def get_online_users(self, session_id: str) -> List[dict]:
+        users: List[dict] = []
+        for cid in self.sessions.get(session_id, set()):
+            info = self.clients.get(cid)
+            if not info:
                 continue
-            
-            try:
-                await client_info.websocket.send_json(message)
-            except Exception as e:
-                logger.warning(f"Error enviando a {client_id}: {e}")
-                disconnected.append(client_id)
-        
-        # Limpiar clientes desconectados
-        for client_id in disconnected:
-            await self.disconnect(session_id, client_id)
-    
-    def _get_online_users(self, session_id: str) -> list:
-        """Obtener lista de usuarios online en una sesión"""
-        if session_id not in self.sessions:
-            return []
-        
-        return [
-            {
+            users.append({
                 "client_id": info.client_id,
+                "session_id": info.session_id,
                 "user_name": info.user_name,
                 "cursor_position": info.cursor_position,
                 "selected_element": info.selected_element,
-                "connected_at": info.connected_at.isoformat()
-            }
-            for info in self.sessions[session_id].values()
-        ]
-    
-    async def update_cursor(
-        self, 
-        session_id: str, 
-        client_id: str, 
-        x: float, 
-        y: float
-    ):
-        """Actualizar posición del cursor de un cliente"""
-        if session_id in self.sessions and client_id in self.sessions[session_id]:
-            self.sessions[session_id][client_id].cursor_position = {"x": x, "y": y}
-            
-            # Broadcast a otros usuarios
-            await self.broadcast_to_session(session_id, {
-                "type": "cursor_move",
-                "client_id": client_id,
-                "position": {"x": x, "y": y}
-            }, exclude_client=client_id)
-    
-    async def update_selection(
-        self, 
-        session_id: str, 
-        client_id: str, 
-        element_id: Optional[str]
-    ):
-        """Actualizar selección de un cliente"""
-        if session_id in self.sessions and client_id in self.sessions[session_id]:
-            old_selection = self.sessions[session_id][client_id].selected_element
-            self.sessions[session_id][client_id].selected_element = element_id
-            
-            await self.broadcast_to_session(session_id, {
-                "type": "selection_change",
-                "client_id": client_id,
-                "old_element": old_selection,
-                "new_element": element_id
-            }, exclude_client=client_id)
-    
-    async def lock_element(
-        self, 
-        session_id: str, 
-        client_id: str, 
-        element_id: str
-    ) -> bool:
-        """Bloquear un elemento para edición exclusiva"""
-        async with self._get_session_lock(session_id):
-            if session_id not in self.locked_elements:
-                self.locked_elements[session_id] = {}
-            
-            # Verificar si ya está bloqueado por otro
-            if element_id in self.locked_elements[session_id]:
-                locked_by = self.locked_elements[session_id][element_id]
-                if locked_by != client_id:
-                    return False
-            
-            # Bloquear
-            self.locked_elements[session_id][element_id] = client_id
-            
-            await self.broadcast_to_session(session_id, {
-                "type": "element_locked",
-                "element_id": element_id,
-                "client_id": client_id
+                "connected_at": info.connected_at,
             })
-            
-            return True
-    
-    async def unlock_element(
-        self, 
-        session_id: str, 
-        client_id: str, 
-        element_id: str
-    ) -> bool:
-        """Desbloquear un elemento"""
-        async with self._get_session_lock(session_id):
-            if session_id not in self.locked_elements:
-                return True
-            
-            if element_id in self.locked_elements[session_id]:
-                locked_by = self.locked_elements[session_id][element_id]
-                
-                # Solo el dueño puede desbloquear
-                if locked_by != client_id:
-                    return False
-                
-                del self.locked_elements[session_id][element_id]
-                
-                await self.broadcast_to_session(session_id, {
-                    "type": "element_unlocked",
-                    "element_id": element_id,
-                    "client_id": client_id
-                })
-            
-            return True
-    
-    def is_element_locked(
-        self, 
-        session_id: str, 
-        element_id: str, 
-        client_id: str
-    ) -> bool:
-        """Verificar si un elemento está bloqueado por otro usuario"""
-        if session_id not in self.locked_elements:
+        return users
+
+    def get_locked_elements(self, session_id: str) -> Dict[str, str]:
+        return dict(self.locks.get(session_id, {}))
+
+    def is_locked_by_other(self, session_id: str, element_id: str, client_id: str) -> bool:
+        locker = self.locks.get(session_id, {}).get(element_id)
+        return locker is not None and locker != client_id
+
+    # ---------------------------
+    # Broadcast / send
+    # ---------------------------
+
+    async def send_to_client(self, client_id: str, message: dict) -> bool:
+        info = self.clients.get(client_id)
+        if not info:
             return False
-        
-        if element_id not in self.locked_elements[session_id]:
-            return False
-        
-        return self.locked_elements[session_id][element_id] != client_id
-    
-    def check_rate_limit(self, client_id: str) -> bool:
-        """Verificar rate limiting para un cliente"""
-        import time
-        now = time.time()
-        
-        if client_id in self.rate_limits:
-            if now - self.rate_limits[client_id] < self.rate_limit_interval:
+        payload = _json_dumps(message)
+        return await _safe_send_text(info.websocket, payload)
+
+    async def broadcast_to_session(self, session_id: str, message: dict, exclude: Optional[str] = None) -> None:
+        """
+        Envía el mensaje a todos los clientes de la sesión.
+        exclude: client_id a excluir (ej: el emisor)
+        """
+        payload = _json_dumps(message)
+        targets = list(self.sessions.get(session_id, set()))
+        for cid in targets:
+            if exclude and cid == exclude:
+                continue
+            info = self.clients.get(cid)
+            if not info:
+                continue
+            ok = await _safe_send_text(info.websocket, payload)
+            if not ok:
+                # no lo desconectamos aquí (lo hará websocket_routes en close/disconnect)
+                pass
+
+    # ---------------------------
+    # Locks
+    # ---------------------------
+
+    async def try_lock(self, session_id: str, element_id: str, client_id: str) -> bool:
+        """
+        Intenta bloquear un elemento para un cliente.
+        Si ya está bloqueado por otro cliente -> False.
+        Si está libre o por el mismo -> True.
+        """
+        async with self._lock:
+            locks = self.locks.setdefault(session_id, {})
+            if element_id in locks and locks[element_id] != client_id:
                 return False
-        
-        self.rate_limits[client_id] = now
+            locks[element_id] = client_id
+
+            info = self.clients.get(client_id)
+            if info:
+                info.selected_element = element_id
+            return True
+
+    async def unlock(self, session_id: str, element_id: str, client_id: str) -> bool:
+        """
+        Desbloquea si el lock pertenece al cliente.
+        """
+        async with self._lock:
+            locks = self.locks.get(session_id, {})
+            if locks.get(element_id) != client_id:
+                return False
+            locks.pop(element_id, None)
+
+            info = self.clients.get(client_id)
+            if info and info.selected_element == element_id:
+                info.selected_element = None
+
+            return True
+
+    async def release_all_locks_for_client(self, session_id: str, client_id: str) -> List[str]:
+        """
+        Libera todos los locks de un cliente (útil en desconexiones duras).
+        """
+        async with self._lock:
+            locks = self.locks.get(session_id, {})
+            to_unlock = [el_id for el_id, locker in locks.items() if locker == client_id]
+            for el_id in to_unlock:
+                locks.pop(el_id, None)
+
+            info = self.clients.get(client_id)
+            if info:
+                info.selected_element = None
+
+            return to_unlock
+
+    # ---------------------------
+    # Selection / cursor
+    # ---------------------------
+
+    async def set_selected_element(self, client_id: str, element_id: Optional[str]) -> None:
+        async with self._lock:
+            info = self.clients.get(client_id)
+            if not info:
+                return
+            info.selected_element = element_id
+
+    async def set_cursor(self, session_id: str, client_id: str, x: float, y: float) -> None:
+        async with self._lock:
+            info = self.clients.get(client_id)
+            if not info or info.session_id != session_id:
+                return
+            info.cursor_position = {"x": float(x), "y": float(y)}
+
+    # ---------------------------
+    # Rate limiting (opcional)
+    # ---------------------------
+
+    def allow_move(self, client_id: str) -> bool:
+        """
+        Rate limit para eventos de move.
+        Si drop_on_rate_limit=True, devuelve False si supera.
+        """
+        info = self.clients.get(client_id)
+        if not info:
+            return False
+
+        now = time.time()
+        if (now - info.last_move_at) < self.move_min_interval_s:
+            return not self.drop_on_rate_limit  # si no drop, permitir
+        info.last_move_at = now
         return True
-    
-    async def _heartbeat_loop(self, session_id: str, client_id: str):
-        """Loop de heartbeat para detectar desconexiones"""
-        try:
-            while True:
-                await asyncio.sleep(self.heartbeat_interval)
-                
-                # Verificar si el cliente sigue conectado
-                if session_id not in self.sessions:
-                    break
-                if client_id not in self.sessions[session_id]:
-                    break
-                
-                # Enviar ping
-                try:
-                    await self.send_to_client(client_id, session_id, {"type": "ping"})
-                except Exception:
-                    logger.warning(f"Heartbeat fallido para {client_id}")
-                    await self.disconnect(session_id, client_id)
-                    break
-                    
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error en heartbeat loop: {e}")
-    
-    async def handle_pong(self, session_id: str, client_id: str):
-        """Manejar respuesta pong del cliente"""
-        if session_id in self.sessions and client_id in self.sessions[session_id]:
-            self.sessions[session_id][client_id].last_ping = datetime.now()
-    
-    def get_session_stats(self, session_id: str) -> Dict[str, Any]:
-        """Obtener estadísticas de una sesión"""
-        if session_id not in self.sessions:
-            return {"exists": False}
-        
-        return {
-            "exists": True,
-            "client_count": len(self.sessions[session_id]),
-            "clients": list(self.sessions[session_id].keys()),
-            "locked_elements": len(self.locked_elements.get(session_id, {}))
-        }
-    
-    def get_all_stats(self) -> Dict[str, Any]:
-        """Obtener estadísticas globales"""
-        return {
-            "total_sessions": len(self.sessions),
-            "total_clients": sum(len(clients) for clients in self.sessions.values()),
-            "sessions": {
-                sid: self.get_session_stats(sid) 
-                for sid in self.sessions.keys()
-            }
-        }
 
+    def allow_cursor(self, client_id: str) -> bool:
+        """
+        Rate limit para cursor.
+        """
+        info = self.clients.get(client_id)
+        if not info:
+            return False
 
-# Instancia global - CORREGIDA para importar como 'manager'
-manager = WebSocketManager()
+        now = time.time()
+        if (now - info.last_cursor_at) < self.cursor_min_interval_s:
+            return not self.drop_on_rate_limit
+        info.last_cursor_at = now
+        return True
