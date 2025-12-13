@@ -8,6 +8,12 @@
  * - Reduce lecturas a Zustand (una sola selección)
  * - Throttle cursor con cancel en cleanup
  *
+ * FIX (cross-browser):
+ * - ✅ Aplicar transform durante onDrag (Moveable NO mueve por sí solo)
+ * - ✅ Limpiar transform en onDragEnd
+ * - ✅ Importar CSS de Moveable
+ * - ✅ touchAction: 'none' para Safari/trackpad/táctil
+ *
  * Características:
  * - Drag & drop con snap to grid
  * - Resize desde esquinas
@@ -19,6 +25,7 @@
 
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
 import Moveable from 'react-moveable'
+import 'react-moveable/dist/moveable.css'
 import { throttle } from 'lodash'
 import { useLayoutStore } from '../store/useLayoutStore'
 
@@ -66,72 +73,17 @@ interface InteractiveElementProps {
 // ============================================================
 
 const ELEMENT_COLORS: Record<string, { fill: string; stroke: string; label: string; icon: string }> = {
-  shelf: {
-    fill: '#3b82f6',
-    stroke: '#1d4ed8',
-    label: 'Estantería',
-    icon: '📦'
-  },
-  rack: {
-    fill: '#3b82f6',
-    stroke: '#1d4ed8',
-    label: 'Rack',
-    icon: '🗄️'
-  },
-  dock: {
-    fill: '#22c55e',
-    stroke: '#15803d',
-    label: 'Muelle',
-    icon: '🚛'
-  },
-  office: {
-    fill: '#a855f7',
-    stroke: '#7c3aed',
-    label: 'Oficina',
-    icon: '🏢'
-  },
-  zone: {
-    fill: '#f59e0b',
-    stroke: '#d97706',
-    label: 'Zona',
-    icon: '📍'
-  },
-  service_room: {
-    fill: '#6366f1',
-    stroke: '#4f46e5',
-    label: 'Servicios',
-    icon: '🚻'
-  },
-  technical_room: {
-    fill: '#64748b',
-    stroke: '#475569',
-    label: 'Técnico',
-    icon: '⚙️'
-  },
-  pillar: {
-    fill: '#78716c',
-    stroke: '#57534e',
-    label: 'Pilar',
-    icon: '🏛️'
-  },
-  column: {
-    fill: '#78716c',
-    stroke: '#57534e',
-    label: 'Columna',
-    icon: '🏛️'
-  },
-  charging_station: {
-    fill: '#eab308',
-    stroke: '#ca8a04',
-    label: 'Carga',
-    icon: '🔌'
-  },
-  unknown: {
-    fill: '#94a3b8',
-    stroke: '#64748b',
-    label: 'Elemento',
-    icon: '❓'
-  }
+  shelf: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Estantería', icon: '📦' },
+  rack: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Rack', icon: '🗄️' },
+  dock: { fill: '#22c55e', stroke: '#15803d', label: 'Muelle', icon: '🚛' },
+  office: { fill: '#a855f7', stroke: '#7c3aed', label: 'Oficina', icon: '🏢' },
+  zone: { fill: '#f59e0b', stroke: '#d97706', label: 'Zona', icon: '📍' },
+  service_room: { fill: '#6366f1', stroke: '#4f46e5', label: 'Servicios', icon: '🚻' },
+  technical_room: { fill: '#64748b', stroke: '#475569', label: 'Técnico', icon: '⚙️' },
+  pillar: { fill: '#78716c', stroke: '#57534e', label: 'Pilar', icon: '🏛️' },
+  column: { fill: '#78716c', stroke: '#57534e', label: 'Columna', icon: '🏛️' },
+  charging_station: { fill: '#eab308', stroke: '#ca8a04', label: 'Carga', icon: '🔌' },
+  unknown: { fill: '#94a3b8', stroke: '#64748b', label: 'Elemento', icon: '❓' }
 }
 
 const SNAP_GRID = 0.5 // 0.5m snap - MUY IMPORTANTE
@@ -212,9 +164,7 @@ export default function InteractiveElement({
     if (lockedBy && lockedBy !== clientId) return lockedBy
 
     // También chequear si otro usuario lo tiene seleccionado
-    const userWithSelection = onlineUsers.find(
-      (u) => u.selected_element === element.id && u.client_id !== clientId
-    )
+    const userWithSelection = onlineUsers.find((u) => u.selected_element === element.id && u.client_id !== clientId)
     return userWithSelection?.client_id || null
   }, [lockedElements, onlineUsers, element.id, clientId])
 
@@ -292,19 +242,14 @@ export default function InteractiveElement({
     }
   }, [throttledMouseMove])
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => throttledMouseMove(e),
-    [throttledMouseMove]
-  )
+  const handleMouseMove = useCallback((e: React.MouseEvent) => throttledMouseMove(e), [throttledMouseMove])
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
 
       // ✅ suppress click fantasma SOLO en este elemento
-      if (Date.now() < suppressMyClickUntilRef.current) {
-        return
-      }
+      if (Date.now() < suppressMyClickUntilRef.current) return
 
       if (!isLocked) {
         logger.info(`🖱️ Click en elemento: ${element.id}`)
@@ -347,8 +292,12 @@ export default function InteractiveElement({
     return true
   }, [isLocked, setDragging, onLock, element.id, pos.x, pos.y, element.position.x, element.position.y])
 
+  // ✅ FIX CROSS-BROWSER: aplicar transform al target durante drag
   const handleDrag = useCallback(
-    ({ beforeTranslate }: { beforeTranslate: number[] }) => {
+    ({ target, beforeTranslate, transform }: any) => {
+      // ✅ MOVER VISUALMENTE (Moveable no lo hace solo)
+      if (target) target.style.transform = transform
+
       const newXpx = frameRef.current.x + beforeTranslate[0]
       const newYpx = frameRef.current.y + beforeTranslate[1]
 
@@ -365,8 +314,9 @@ export default function InteractiveElement({
     [scale]
   )
 
+  // ✅ FIX: limpiar transform al soltar
   const handleDragEnd = useCallback(
-    ({ lastEvent }: { lastEvent: any }) => {
+    ({ target, lastEvent }: any) => {
       logger.info(`🖱️ Drag end: ${element.id}`, lastEvent)
       setDragging(false)
 
@@ -380,6 +330,9 @@ export default function InteractiveElement({
         logger.info(`📦 Final move: ${element.id} → (${finalX}, ${finalY})`)
         onMove(element.id, finalX, finalY)
       }
+
+      // ✅ importante: reset visual (si no, se queda desplazado por CSS)
+      if (target) target.style.transform = ''
 
       snappedRef.current = null
       setGhostPosition(null)
@@ -412,15 +365,7 @@ export default function InteractiveElement({
   }, [isLocked, onResize, setResizing, onLock, element.id, dims.width, dims.height, element.position.x, element.position.y])
 
   const handleResize = useCallback(
-    ({
-      width,
-      height,
-      drag
-    }: {
-      width: number
-      height: number
-      drag: { beforeTranslate: number[] }
-    }) => {
+    ({ width, height, drag }: { width: number; height: number; drag: { beforeTranslate: number[] } }) => {
       // Convert to meters and snap
       const newWidth = snapToGrid(width / scale)
       const newHeight = snapToGrid(height / scale)
@@ -449,9 +394,6 @@ export default function InteractiveElement({
     if (ghostDimensions && onResize) {
       onResize(element.id, ghostDimensions.width, ghostDimensions.height)
     }
-
-    // si hubo drag durante resize, podrías aplicar también move aquí si tu backend lo soporta:
-    // const final = snappedRef.current; if(final) onMove(element.id, final.x, final.y)
 
     setGhostDimensions(null)
     setGhostPosition(null)
@@ -567,7 +509,11 @@ export default function InteractiveElement({
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         style={{
-          cursor: isLocked ? 'not-allowed' : isSelected ? 'move' : 'pointer'
+          cursor: isLocked ? 'not-allowed' : isSelected ? 'move' : 'pointer',
+          // ✅ clave para Safari/trackpad/táctil (evita scroll/selección durante drag)
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none'
         }}
       >
         {/* Shadow for selected elements */}
@@ -637,14 +583,7 @@ export default function InteractiveElement({
         {/* Lock indicator */}
         {isLocked && (
           <g>
-            <circle
-              cx={pos.x + dims.width - 12}
-              cy={pos.y + 12}
-              r={10}
-              fill="#ef4444"
-              stroke="white"
-              strokeWidth={2}
-            />
+            <circle cx={pos.x + dims.width - 12} cy={pos.y + 12} r={10} fill="#ef4444" stroke="white" strokeWidth={2} />
             <text x={pos.x + dims.width - 12} y={pos.y + 16} textAnchor="middle" fill="white" fontSize={11}>
               🔒
             </text>
@@ -665,14 +604,7 @@ export default function InteractiveElement({
         {isSelected && (
           <g transform={`translate(${pos.x}, ${pos.y + dims.height + 5})`}>
             <rect x={0} y={0} width={dims.width} height={16} fill="rgba(0,0,0,0.7)" rx={3} />
-            <text
-              x={dims.width / 2}
-              y={12}
-              textAnchor="middle"
-              fill="white"
-              fontSize={10}
-              fontFamily="monospace"
-            >
+            <text x={dims.width / 2} y={12} textAnchor="middle" fill="white" fontSize={10} fontFamily="monospace">
               {((element.dimensions.length || element.dimensions.width) || 0).toFixed(1)}m ×{' '}
               {((element.dimensions.depth || element.dimensions.height) || 0).toFixed(1)}m
             </text>
@@ -697,9 +629,7 @@ export default function InteractiveElement({
           style={{ pointerEvents: 'none' }}
           transform={
             ghostRotation !== null
-              ? `rotate(${ghostRotation}, ${ghostPosition.x * scale + dims.width / 2}, ${
-                  ghostPosition.y * scale + dims.height / 2
-                })`
+              ? `rotate(${ghostRotation}, ${ghostPosition.x * scale + dims.width / 2}, ${ghostPosition.y * scale + dims.height / 2})`
               : undefined
           }
         />
