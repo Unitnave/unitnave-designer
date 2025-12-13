@@ -120,6 +120,7 @@ export default function InteractiveElement({
 
   // Suprimir click fantasma SOLO para este elemento (no global)
   const suppressMyClickUntilRef = useRef<number>(0)
+  console.log("🔍 montado", element.id);
 
   // ============================================================
   // STORE (✅ optimizado a UNA lectura)

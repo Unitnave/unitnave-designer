@@ -1,0 +1,7 @@
+[33mcommit 6b7fb99feaf06154149dc1e905f8d80541c9b8eb[m
+Author: Pablo Arranz <arranzpablo@hotmail.com>
+Date:   Thu Dec 11 17:04:40 2025 +0100
+
+    emergency: force Vercel rebuild with timestamp in _FIXED file
+
+M	frontend/src/components/InteractiveLayoutEditor_FIXED.tsx
