@@ -647,6 +647,7 @@ class WebSocketManager {
 
     this.heartbeatInterval = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
+        console.log('📤 Enviando ping...') 
         // enviamos ping (backend responde pong)
         this.send({ action: 'ping' })
 
