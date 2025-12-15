@@ -364,31 +364,15 @@ export default function InteractiveLayoutEditor({
   // ============================================================
   
   // ================================================
-  // CORRECCIÓN CRÍTICA: Ahora envía movimientos al backend
+  // Handler de movimiento de elementos
   // ================================================
   const handleElementMove = useCallback((elementId: string, x: number, y: number) => {
-    // LOG 1: Confirmar que se llama al handler
-    console.error('🔴🔴🔴 handleElementMove LLAMADO', { elementId, x, y })
-  
-    // LOG 2: Verificar que wsManager existe
-    console.error('🔴🔴🔴 wsManager:', typeof wsManager)
-    console.error('🔴🔴🔴 wsManager.send:', typeof wsManager?.send)
-    
     // 1. Update optimista INMEDIATO (para responsiveness)
-    logger.info(`📦 Move optimista: ${elementId} → (${x}, ${y})`)
+    logger.info(`📦 Move: ${elementId} → (${x}, ${y})`)
     moveElementOptimistic(elementId, x, y)
     setProcessing(true)
-
-    // LOG 3: Antes de enviar al backend
-    console.error('🔴🔴🔴 ENVIANDO A BACKEND:', {
-      action: 'move',
-      element_id: elementId,
-      position: { x, y }
-  }  )
     
-    // 2. Enviar al backend usando wsManager directamente
-    // ESTO ES LO QUE FALTABA - antes no se enviaba nada
-    logger.info(`📦 Enviando move al backend: ${elementId} → (${x}, ${y})`)
+    // 2. Enviar al backend via WebSocket
     wsManager.send({
       action: 'move',
       element_id: elementId,

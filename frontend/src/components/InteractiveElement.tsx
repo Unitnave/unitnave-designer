@@ -1,32 +1,19 @@
 /**
- * UNITNAVE Designer - Interactive Element (V1.1) - UPDATED
- * Elemento interactivo con drag, resize, rotate
- *
- * Mejoras aplicadas:
- * - Click suppression por elemento (NO global): evita click fantasma tras drag
- * - DragEnd usa ref snapped (no depende de setState)
- * - Reduce lecturas a Zustand (una sola selección)
- * - Throttle cursor con cancel en cleanup
- *
- * FIX (cross-browser):
- * - ✅ Aplicar transform durante onDrag (Moveable NO mueve por sí solo)
- * - ✅ Limpiar transform en onDragEnd
- * - ✅ Importar CSS de Moveable
- * - ✅ touchAction: 'none' para Safari/trackpad/táctil
+ * UNITNAVE Designer - Interactive Element V2.0 (SVG NATIVE DRAG)
+ * 
+ * ⚠️ PROBLEMA RESUELTO: react-moveable NO funciona con elementos SVG <g>
+ * ✅ SOLUCIÓN: Usar eventos nativos de mouse que SÍ funcionan en SVG
  *
  * Características:
- * - Drag & drop con snap to grid
- * - Resize desde esquinas
- * - Rotación
- * - Ghost preview durante operaciones
+ * - Drag & drop NATIVO con mouse events (funciona en SVG)
+ * - Snap to grid (0.5m)
+ * - Ghost preview durante drag
  * - Indicador de bloqueo por otros usuarios
  * - Colores por tipo de elemento
+ * - Límites del almacén respetados
  */
 
-
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
-import Moveable from 'react-moveable'
-import 'react-moveable/dist/moveable.css'
 import { throttle } from 'lodash'
 import { useLayoutStore } from '../store/useLayoutStore'
 
@@ -87,8 +74,7 @@ const ELEMENT_COLORS: Record<string, { fill: string; stroke: string; label: stri
   unknown: { fill: '#94a3b8', stroke: '#64748b', label: 'Elemento', icon: '❓' }
 }
 
-const SNAP_GRID = 0.5 // 0.5m snap - 
-const SUPPRESS_CLICK_MS = 180 // por elemento, no global
+const SNAP_GRID = 0.5 // metros
 
 // ============================================================
 // HELPERS
@@ -96,6 +82,17 @@ const SUPPRESS_CLICK_MS = 180 // por elemento, no global
 
 function snapToGrid(value: number, gridSize: number = SNAP_GRID): number {
   return Math.round(value / gridSize) * gridSize
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+// Logger
+const logger = {
+  info: (msg: string, ...args: any[]) => console.log(`%c[ELEMENT] ${msg}`, 'color: #3b82f6', ...args),
+  warn: (msg: string, ...args: any[]) => console.warn(`[ELEMENT] ${msg}`, ...args),
+  error: (msg: string, ...args: any[]) => console.error(`[ELEMENT] ${msg}`, ...args)
 }
 
 // ============================================================
@@ -113,122 +110,183 @@ export default function InteractiveElement({
   onLock,
   onUnlock
 }: InteractiveElementProps) {
-  const targetRef = useRef<SVGGElement>(null)
-  const frameRef = useRef({ x: 0, y: 0, width: 0, height: 0, rotation: 0 })
-
-  // Guardar el snapped final durante drag/resize (para no depender de setState)
-  const snappedRef = useRef<{ x: number; y: number } | null>(null)
-
-  // Suprimir click fantasma SOLO para este elemento (no global)
-  const suppressMyClickUntilRef = useRef<number>(0)
+  const elementRef = useRef<SVGGElement>(null)
+  
+  // ============================================================
+  // LOCAL STATE
+  // ============================================================
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null)
+  const [ghostPosition, setGhostPosition] = useState<Position | null>(null)
+  const [isHovered, setIsHovered] = useState(false)
 
   // ============================================================
-  // STORE (✅ optimizado a UNA lectura)
+  // STORE
   // ============================================================
-
-  const store = useLayoutStore((state) => ({
-    selectedElementId: state.selectedElementId,
-    setSelectedElement: state.setSelectedElement,
-
-    isDragging: state.isDragging,
-    setDragging: state.setDragging,
-
-    isResizing: state.isResizing,
-    setResizing: state.setResizing,
-
-    isRotating: state.isRotating,
-    setRotating: state.setRotating,
-
-    clientId: state.clientId,
-    onlineUsers: state.onlineUsers,
-    lockedElements: state.lockedElements
-  }))
-
   const {
     selectedElementId,
     setSelectedElement,
-    setDragging,
-    setResizing,
-    setRotating,
+    setDragging: setStoreDragging,
     clientId,
     onlineUsers,
-    lockedElements
-  } = store
+    lockedElements,
+    dimensions: warehouseDimensions
+  } = useLayoutStore()
 
   // ============================================================
   // COMPUTED
   // ============================================================
 
-  // Check if locked by another user
   const lockedByOther = useMemo(() => {
     const lockedBy = lockedElements[element.id]
     if (lockedBy && lockedBy !== clientId) return lockedBy
-
-    // También chequear si otro usuario lo tiene seleccionado
-    const userWithSelection = onlineUsers.find((u) => u.selected_element === element.id && u.client_id !== clientId)
+    const userWithSelection = onlineUsers.find(
+      (u) => u.selected_element === element.id && u.client_id !== clientId
+    )
     return userWithSelection?.client_id || null
   }, [lockedElements, onlineUsers, element.id, clientId])
 
   const isLocked = !!lockedByOther
   const isSelected = selectedElementId === element.id
-  const isActive = isSelected && !isLocked
+  const colors = ELEMENT_COLORS[element.type] || ELEMENT_COLORS.unknown
 
-  // Get locking user's name
+  // Position in pixels
+  const pos = {
+    x: element.position.x * scale,
+    y: element.position.y * scale
+  }
+
+  // Dimensions in pixels
+  const dims = {
+    width: ((element.dimensions.length || element.dimensions.width) || 2) * scale,
+    height: ((element.dimensions.depth || element.dimensions.height) || 2) * scale
+  }
+
+  // Element size in meters (for bounds checking)
+  const sizeMeters = {
+    width: (element.dimensions.length || element.dimensions.width) || 2,
+    height: (element.dimensions.depth || element.dimensions.height) || 2
+  }
+
+  const rotation = element.rotation || 0
+
+  // Locking user's name
   const lockingUserName = useMemo(() => {
     if (!lockedByOther) return null
     const user = onlineUsers.find((u) => u.client_id === lockedByOther)
     return user?.user_name || 'Otro usuario'
   }, [lockedByOther, onlineUsers])
 
-  // Colors and styles
-  const colors = ELEMENT_COLORS[element.type] || ELEMENT_COLORS.unknown
-
-  // Position and dimensions in pixels
-  const pos = {
-    x: element.position.x * scale,
-    y: element.position.y * scale
-  }
-
-  const dims = {
-    width: ((element.dimensions.length || element.dimensions.width) || 2) * scale,
-    height: ((element.dimensions.depth || element.dimensions.height) || 2) * scale
-  }
-
-  const rotation = element.rotation || 0
-
   // ============================================================
-  // LOCAL STATE
+  // CLICK HANDLER - SELECCIÓN
   // ============================================================
-
-  const [ghostPosition, setGhostPosition] = useState<Position | null>(null)
-  const [ghostDimensions, setGhostDimensions] = useState<{ width: number; height: number } | null>(null)
-  const [ghostRotation, setGhostRotation] = useState<number | null>(null)
-  const [isHovered, setIsHovered] = useState(false)
-
-  // ============================================================
-  // INITIALIZE FRAME
-  // ============================================================
-
-  useEffect(() => {
-    frameRef.current = {
-      x: pos.x,
-      y: pos.y,
-      width: dims.width,
-      height: dims.height,
-      rotation
+  
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    
+    // No procesar click si acabamos de hacer drag
+    if (isDragging) return
+    
+    if (!isLocked) {
+      logger.info(`🖱️ Click → Seleccionando: ${element.id}`)
+      setSelectedElement(element.id)
+      onSelect(element.id)
     }
-  }, [pos.x, pos.y, dims.width, dims.height, rotation])
+  }, [isLocked, isDragging, element.id, setSelectedElement, onSelect])
 
   // ============================================================
-  // MOUSE HANDLERS (✅ throttle estable + cleanup)
+  // DRAG HANDLERS - NATIVOS SVG (NO MOVEABLE)
   // ============================================================
 
-  const throttledMouseMove = useMemo(() => {
+  const handleMouseDown = useCallback((e: React.MouseEvent<SVGGElement>) => {
+    // Solo botón izquierdo
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    
+    if (isLocked) {
+      logger.warn(`🔒 Elemento bloqueado por otro usuario: ${element.id}`)
+      return
+    }
+
+    // Primero seleccionar si no está seleccionado
+    if (!isSelected) {
+      logger.info(`🖱️ MouseDown → Seleccionando: ${element.id}`)
+      setSelectedElement(element.id)
+      onSelect(element.id)
+    }
+
+    // Iniciar drag
+    logger.info(`🖱️ MouseDown → Iniciando DRAG: ${element.id}`)
+    setIsDragging(true)
+    setStoreDragging(true)
+    onLock?.(element.id)
+    
+    setDragStart({
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      elemX: element.position.x,
+      elemY: element.position.y
+    })
+  }, [isLocked, isSelected, element.id, element.position.x, element.position.y, 
+      setSelectedElement, onSelect, setStoreDragging, onLock])
+
+  // ============================================================
+  // GLOBAL MOUSE EVENTS (window) para capturar fuera del elemento
+  // ============================================================
+  useEffect(() => {
+    if (!isDragging || !dragStart) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = (e.clientX - dragStart.mouseX) / scale
+      const deltaY = (e.clientY - dragStart.mouseY) / scale
+
+      let newX = snapToGrid(dragStart.elemX + deltaX)
+      let newY = snapToGrid(dragStart.elemY + deltaY)
+
+      // Clamp dentro de los límites del almacén
+      newX = clamp(newX, 0, warehouseDimensions.length - sizeMeters.width)
+      newY = clamp(newY, 0, warehouseDimensions.width - sizeMeters.height)
+
+      setGhostPosition({ x: newX, y: newY })
+    }
+
+    const handleMouseUp = (e: MouseEvent) => {
+      logger.info(`🖱️ MouseUp → Fin DRAG: ${element.id}`)
+      
+      if (ghostPosition) {
+        logger.info(`📦 MOVIENDO ${element.id} → (${ghostPosition.x.toFixed(1)}, ${ghostPosition.y.toFixed(1)})`)
+        onMove(element.id, ghostPosition.x, ghostPosition.y)
+      }
+
+      // Reset state
+      setIsDragging(false)
+      setStoreDragging(false)
+      setDragStart(null)
+      setGhostPosition(null)
+      onUnlock?.(element.id)
+    }
+
+    // Agregar listeners globales
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging, dragStart, ghostPosition, scale, warehouseDimensions, 
+      sizeMeters, element.id, onMove, setStoreDragging, onUnlock])
+
+  // ============================================================
+  // CURSOR MOVE (throttled)
+  // ============================================================
+  
+  const throttledCursorMove = useMemo(() => {
     return throttle((e: React.MouseEvent) => {
-      if (onCursorMove && targetRef.current) {
-        const svg = targetRef.current.ownerSVGElement
+      if (onCursorMove && elementRef.current) {
+        const svg = elementRef.current.ownerSVGElement
         if (!svg) return
-
         const rect = svg.getBoundingClientRect()
         const x = (e.clientX - rect.left) / scale
         const y = (e.clientY - rect.top) / scale
@@ -238,209 +296,11 @@ export default function InteractiveElement({
   }, [scale, onCursorMove])
 
   useEffect(() => {
-    return () => {
-      throttledMouseMove.cancel()
-    }
-  }, [throttledMouseMove])
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => throttledMouseMove(e), [throttledMouseMove])
-
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-
-      // ✅ suppress click fantasma SOLO en este elemento
-      if (Date.now() < suppressMyClickUntilRef.current) return
-
-      if (!isLocked) {
-        logger.info(`🖱️ Click en elemento: ${element.id}`)
-        setSelectedElement(element.id)
-        onSelect(element.id)
-      }
-    },
-    [isLocked, element.id, setSelectedElement, onSelect]
-  )
-
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (Date.now() < suppressMyClickUntilRef.current) return
-      logger.info(`🖱️ Doble click en elemento: ${element.id}`)
-    },
-    [element.id]
-  )
+    return () => throttledCursorMove.cancel()
+  }, [throttledCursorMove])
 
   // ============================================================
-  // DRAG HANDLERS
-  // ============================================================
-
-  const handleDragStart = useCallback(() => {
-    if (isLocked) return false
-
-    logger.info(`🖱️ Drag start: ${element.id}`)
-    setDragging(true)
-    onLock?.(element.id)
-
-    // Inicializar ref de snap con posición actual (en metros)
-    snappedRef.current = { x: element.position.x, y: element.position.y }
-
-    frameRef.current = {
-      ...frameRef.current,
-      x: pos.x,
-      y: pos.y
-    }
-
-    return true
-  }, [isLocked, setDragging, onLock, element.id, pos.x, pos.y, element.position.x, element.position.y])
-
-  // ✅ FIX CROSS-BROWSER: aplicar transform al target durante drag
-  const handleDrag = useCallback(
-    ({ target, beforeTranslate, transform }: any) => {
-      // ✅ MOVER VISUALMENTE (Moveable no lo hace solo)
-      if (target) target.style.transform = transform
-
-      const newXpx = frameRef.current.x + beforeTranslate[0]
-      const newYpx = frameRef.current.y + beforeTranslate[1]
-
-      // Convert to meters and snap
-      const snappedX = snapToGrid(newXpx / scale)
-      const snappedY = snapToGrid(newYpx / scale)
-
-      // ✅ guardar snapped en ref (fuente de verdad para dragEnd)
-      snappedRef.current = { x: snappedX, y: snappedY }
-
-      // Ghost (UI)
-      setGhostPosition({ x: snappedX, y: snappedY })
-    },
-    [scale]
-  )
-
-  // ✅ FIX: limpiar transform al soltar
-  const handleDragEnd = useCallback(
-    ({ target, lastEvent }: any) => {
-      logger.info(`🖱️ Drag end: ${element.id}`, lastEvent)
-      setDragging(false)
-
-      // ✅ evitar click fantasma solo en este elemento
-      suppressMyClickUntilRef.current = Date.now() + SUPPRESS_CLICK_MS
-
-      const final = snappedRef.current
-      if (final) {
-        const finalX = snapToGrid(final.x, SNAP_GRID)
-        const finalY = snapToGrid(final.y, SNAP_GRID)
-        logger.info(`📦 Final move: ${element.id} → (${finalX}, ${finalY})`)
-        onMove(element.id, finalX, finalY)
-      }
-
-      // ✅ importante: reset visual (si no, se queda desplazado por CSS)
-      if (target) target.style.transform = ''
-
-      snappedRef.current = null
-      setGhostPosition(null)
-      onUnlock?.(element.id)
-    },
-    [setDragging, element.id, onMove, onUnlock]
-  )
-
-  // ============================================================
-  // RESIZE HANDLERS
-  // ============================================================
-
-  const handleResizeStart = useCallback(() => {
-    if (isLocked || !onResize) return false
-
-    logger.info(`📐 Resize start: ${element.id}`)
-    setResizing(true)
-    onLock?.(element.id)
-
-    frameRef.current = {
-      ...frameRef.current,
-      width: dims.width,
-      height: dims.height
-    }
-
-    // mantener snappedRef inicial para el caso de drag durante resize
-    snappedRef.current = { x: element.position.x, y: element.position.y }
-
-    return true
-  }, [isLocked, onResize, setResizing, onLock, element.id, dims.width, dims.height, element.position.x, element.position.y])
-
-  const handleResize = useCallback(
-    ({ width, height, drag }: { width: number; height: number; drag: { beforeTranslate: number[] } }) => {
-      // Convert to meters and snap
-      const newWidth = snapToGrid(width / scale)
-      const newHeight = snapToGrid(height / scale)
-
-      setGhostDimensions({ width: newWidth, height: newHeight })
-
-      // Also update position if dragging during resize
-      if (drag?.beforeTranslate) {
-        const newX = snapToGrid((frameRef.current.x + drag.beforeTranslate[0]) / scale)
-        const newY = snapToGrid((frameRef.current.y + drag.beforeTranslate[1]) / scale)
-
-        snappedRef.current = { x: newX, y: newY }
-        setGhostPosition({ x: newX, y: newY })
-      }
-    },
-    [scale]
-  )
-
-  const handleResizeEnd = useCallback(() => {
-    logger.info(`📐 Resize end: ${element.id}`)
-    setResizing(false)
-
-    // ✅ evitar click fantasma solo en este elemento
-    suppressMyClickUntilRef.current = Date.now() + SUPPRESS_CLICK_MS
-
-    if (ghostDimensions && onResize) {
-      onResize(element.id, ghostDimensions.width, ghostDimensions.height)
-    }
-
-    setGhostDimensions(null)
-    setGhostPosition(null)
-    snappedRef.current = null
-
-    onUnlock?.(element.id)
-  }, [setResizing, ghostDimensions, element.id, onResize, onUnlock])
-
-  // ============================================================
-  // ROTATE HANDLERS
-  // ============================================================
-
-  const handleRotateStart = useCallback(() => {
-    if (isLocked || !onRotate) return false
-
-    logger.info(`🔄 Rotate start: ${element.id}`)
-    setRotating(true)
-    onLock?.(element.id)
-
-    frameRef.current.rotation = rotation
-    return true
-  }, [isLocked, onRotate, setRotating, onLock, element.id, rotation])
-
-  const handleRotate = useCallback(({ beforeRotate }: { beforeRotate: number }) => {
-    // Snap to 15 degree increments
-    const snappedRotation = Math.round(beforeRotate / 15) * 15
-    setGhostRotation(snappedRotation)
-  }, [])
-
-  const handleRotateEnd = useCallback(() => {
-    logger.info(`🔄 Rotate end: ${element.id}`)
-    setRotating(false)
-
-    // ✅ evitar click fantasma solo en este elemento
-    suppressMyClickUntilRef.current = Date.now() + SUPPRESS_CLICK_MS
-
-    if (ghostRotation !== null && onRotate) {
-      onRotate(element.id, ghostRotation)
-    }
-
-    setGhostRotation(null)
-    onUnlock?.(element.id)
-  }, [setRotating, ghostRotation, element.id, onRotate, onUnlock])
-
-  // ============================================================
-  // RENDER: SHELF PATTERN
+  // RENDER HELPERS
   // ============================================================
 
   const renderShelfPattern = useMemo(() => {
@@ -462,10 +322,6 @@ export default function InteractiveElement({
     ))
   }, [element.type, dims.width, dims.height, pos.x, pos.y, colors.stroke])
 
-  // ============================================================
-  // RENDER: DOCK ARROWS
-  // ============================================================
-
   const renderDockArrows = useMemo(() => {
     if (element.type !== 'dock') return null
 
@@ -480,10 +336,8 @@ export default function InteractiveElement({
           fill="white"
         />
         <line
-          x1={cx}
-          y1={cy}
-          x2={cx}
-          y2={cy + arrowSize * 0.8}
+          x1={cx} y1={cy}
+          x2={cx} y2={cy + arrowSize * 0.8}
           stroke="white"
           strokeWidth={arrowSize * 0.15}
         />
@@ -501,35 +355,32 @@ export default function InteractiveElement({
     <>
       {/* Main element group */}
       <g
-        ref={targetRef}
+        ref={elementRef}
         className={`element element-${element.id}`}
         transform={transform}
-        onMouseMove={handleMouseMove}
+        onMouseMove={(e) => throttledCursorMove(e)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
+        onMouseDown={handleMouseDown}
         style={{
-          cursor: isLocked ? 'not-allowed' : isSelected ? 'move' : 'pointer',
-          // ✅ clave para Safari/trackpad/táctil (evita scroll/selección durante drag)
-          touchAction: 'none',
-          userSelect: 'none',
-          WebkitUserSelect: 'none'
+          cursor: isLocked ? 'not-allowed' : isDragging ? 'grabbing' : isSelected ? 'grab' : 'pointer',
+          userSelect: 'none'
         }}
       >
-        {/* Shadow for selected elements */}
+        {/* Selection highlight (yellow border) - STRONGER */}
         {isSelected && (
           <rect
-            x={pos.x - 2}
-            y={pos.y - 2}
-            width={dims.width + 4}
-            height={dims.height + 4}
+            x={pos.x - 4}
+            y={pos.y - 4}
+            width={dims.width + 8}
+            height={dims.height + 8}
             fill="none"
             stroke="#fbbf24"
-            strokeWidth={4}
-            rx={6}
-            ry={6}
-            opacity={0.5}
+            strokeWidth={5}
+            rx={8}
+            ry={8}
+            opacity={0.9}
           />
         )}
 
@@ -588,8 +439,6 @@ export default function InteractiveElement({
             <text x={pos.x + dims.width - 12} y={pos.y + 16} textAnchor="middle" fill="white" fontSize={11}>
               🔒
             </text>
-
-            {/* Locking user tooltip */}
             {isHovered && lockingUserName && (
               <g transform={`translate(${pos.x + dims.width - 12}, ${pos.y - 5})`}>
                 <rect x={-40} y={-18} width={80} height={16} fill="#1e293b" rx={4} ry={4} />
@@ -602,91 +451,53 @@ export default function InteractiveElement({
         )}
 
         {/* Dimensions badge when selected */}
-        {isSelected && (
+        {isSelected && !isDragging && (
           <g transform={`translate(${pos.x}, ${pos.y + dims.height + 5})`}>
-            <rect x={0} y={0} width={dims.width} height={16} fill="rgba(0,0,0,0.7)" rx={3} />
+            <rect x={0} y={0} width={dims.width} height={16} fill="rgba(0,0,0,0.8)" rx={3} />
             <text x={dims.width / 2} y={12} textAnchor="middle" fill="white" fontSize={10} fontFamily="monospace">
-              {((element.dimensions.length || element.dimensions.width) || 0).toFixed(1)}m ×{' '}
-              {((element.dimensions.depth || element.dimensions.height) || 0).toFixed(1)}m
+              {sizeMeters.width.toFixed(1)}m × {sizeMeters.height.toFixed(1)}m
+            </text>
+          </g>
+        )}
+
+        {/* Drag instructions when selected (NOT dragging) */}
+        {isSelected && !isDragging && (
+          <g transform={`translate(${pos.x + dims.width / 2}, ${pos.y - 15})`}>
+            <rect x={-50} y={-12} width={100} height={18} fill="#22c55e" rx={4} />
+            <text x={0} y={2} textAnchor="middle" fill="white" fontSize={10} fontWeight={600}>
+              ✋ Arrastra para mover
             </text>
           </g>
         )}
       </g>
 
-      {/* Ghost during drag/resize */}
-      {ghostPosition && (
-        <rect
-          x={ghostPosition.x * scale}
-          y={ghostPosition.y * scale}
-          width={ghostDimensions ? ghostDimensions.width * scale : dims.width}
-          height={ghostDimensions ? ghostDimensions.height * scale : dims.height}
-          fill="none"
-          stroke="#3b82f6"
-          strokeWidth={2}
-          strokeDasharray="8,4"
-          opacity={0.7}
-          rx={4}
-          ry={4}
-          style={{ pointerEvents: 'none' }}
-          transform={
-            ghostRotation !== null
-              ? `rotate(${ghostRotation}, ${ghostPosition.x * scale + dims.width / 2}, ${ghostPosition.y * scale + dims.height / 2})`
-              : undefined
-          }
-        />
-      )}
-
-      {/* Moveable controls */}
-      {isActive && targetRef.current && (
-        // @ts-ignore - react-moveable types issue
-        <Moveable
-          target={targetRef.current}
-          container={null}
-
-          // Drag
-          draggable={true}
-          throttleDrag={1}
-          onDragStart={handleDragStart}
-          onDrag={handleDrag}
-          onDragEnd={handleDragEnd}
-
-          // Resize
-          resizable={!!onResize}
-          throttleResize={1}
-          keepRatio={false}
-          renderDirections={['nw', 'ne', 'sw', 'se']}
-          onResizeStart={handleResizeStart}
-          onResize={handleResize}
-          onResizeEnd={handleResizeEnd}
-
-          // Rotate
-          rotatable={!!onRotate}
-          throttleRotate={15}
-          onRotateStart={handleRotateStart}
-          onRotate={handleRotate}
-          onRotateEnd={handleRotateEnd}
-
-          // Bounds (lo mantengo como en tu original)
-          bounds={{
-            left: 0,
-            top: 0,
-            right: 10000,
-            bottom: 10000
-          }}
-
-          // Style
-          origin={false}
-          edge={false}
-        />
+      {/* Ghost preview during drag */}
+      {isDragging && ghostPosition && (
+        <>
+          {/* Ghost rectangle */}
+          <rect
+            x={ghostPosition.x * scale}
+            y={ghostPosition.y * scale}
+            width={dims.width}
+            height={dims.height}
+            fill="rgba(34, 197, 94, 0.2)"
+            stroke="#22c55e"
+            strokeWidth={3}
+            strokeDasharray="8,4"
+            rx={4}
+            ry={4}
+            style={{ pointerEvents: 'none' }}
+          />
+          
+          {/* Position indicator */}
+          <g transform={`translate(${ghostPosition.x * scale + dims.width / 2}, ${ghostPosition.y * scale - 25})`}>
+            <rect x={-55} y={-14} width={110} height={22} fill="#22c55e" rx={4} />
+            <text x={0} y={2} textAnchor="middle" fill="white" fontSize={12} fontWeight={700} fontFamily="monospace">
+              X:{ghostPosition.x.toFixed(1)} Y:{ghostPosition.y.toFixed(1)}
+            </text>
+          </g>
+        </>
       )}
     </>
   )
-}
-
-// Logger helper
-const logger = {
-  info: (msg: string, ...args: any[]) => console.log(`%c[INFO] ${msg}`, 'color: #3b82f6', ...args),
-  warn: (msg: string, ...args: any[]) => console.warn(`[WARN] ${msg}`, ...args),
-  error: (msg: string, ...args: any[]) => console.error(`[ERROR] ${msg}`, ...args),
-  debug: (msg: string, ...args: any[]) => console.debug(`[DEBUG] ${msg}`, ...args)
 }
