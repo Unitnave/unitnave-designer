@@ -1,11 +1,12 @@
 /**
  * UNITNAVE Designer - Editor con Toggle 2D/3D
  * 
- * Componente wrapper que permite alternar entre:
- * - Vista 2D CAD (planta con zonas y leyenda)
- * - Vista 3D interactiva
+ * VERSIÓN CORREGIDA - Usa SmartWarehouse para edición 2D con:
+ * - Drag & drop real (react-moveable)
+ * - Re-optimización automática (OR-Tools backend)
+ * - Undo/Redo
  * 
- * @version 1.0
+ * @version 2.1 - Con SmartWarehouse
  */
 
 import React, { useState, useCallback } from 'react'
@@ -13,12 +14,12 @@ import { Box, ToggleButtonGroup, ToggleButton, Paper, Tooltip, Typography } from
 import {
   ViewInAr as View3DIcon,
   CropFree as View2DIcon,
-  Map as MapIcon
 } from '@mui/icons-material'
 
 // Componentes
 import Warehouse3DEditor from './Warehouse3DEditor'
-import Warehouse2DEditor from './Warehouse2DEditor'
+// CAMBIO CRÍTICO: Usar SmartWarehouse que SÍ tiene drag + OR-Tools
+import SmartWarehouse from './SmartWarehouse'
 
 // ============================================================
 // SELECTOR DE MODO
@@ -58,7 +59,7 @@ function ViewModeSelector({ mode, onChange }) {
         }}
       >
         <ToggleButton value="2d">
-          <Tooltip title="Vista 2D - Plano de Planta">
+          <Tooltip title="Vista 2D - Editor con Drag & Drop">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <View2DIcon fontSize="small" />
               <Typography variant="caption" sx={{ fontWeight: 600 }}>
@@ -91,7 +92,7 @@ export default function WarehouseEditorWithToggle({
   elements = [],
   machinery = 'retractil',
   onElementsChange,
-  initialMode = '2d' // Por defecto empezamos en 2D como pidió Pablo
+  initialMode = '2d'
 }) {
   const [viewMode, setViewMode] = useState(initialMode)
   
@@ -100,7 +101,7 @@ export default function WarehouseEditorWithToggle({
     setViewMode(newMode)
   }, [])
   
-  // Switch desde 2D a 3D (callback para el botón en toolbar 2D)
+  // Switch desde 2D a 3D
   const handleSwitch3D = useCallback(() => {
     setViewMode('3d')
   }, [])
@@ -117,10 +118,10 @@ export default function WarehouseEditorWithToggle({
       
       {/* Vista según modo */}
       {viewMode === '2d' ? (
-        <Warehouse2DEditor
+        // CAMBIO: SmartWarehouse tiene drag + OR-Tools
+        <SmartWarehouse
           dimensions={dimensions}
-          elements={elements}
-          onSwitch3D={handleSwitch3D}
+          initialElements={elements}
           onElementsChange={onElementsChange}
         />
       ) : (
@@ -132,7 +133,7 @@ export default function WarehouseEditorWithToggle({
         />
       )}
       
-      {/* Indicador de modo actual (esquina inferior izquierda) */}
+      {/* Indicador de modo actual */}
       <Paper
         sx={{
           position: 'absolute',
@@ -159,4 +160,4 @@ export default function WarehouseEditorWithToggle({
 }
 
 // Re-exportar componentes individuales
-export { Warehouse2DEditor, Warehouse3DEditor }
+export { Warehouse3DEditor, SmartWarehouse }

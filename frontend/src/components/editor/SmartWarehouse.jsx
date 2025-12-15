@@ -1,16 +1,16 @@
 /**
  * UNITNAVE Designer - Smart Warehouse Editor (Profesional)
- * 
+ *
  * Motor CAD con:
  * - SVG exacto (polígonos reales del backend, no rectángulos aproximados)
  * - DPI awareness (escala correcta en cualquier monitor)
  * - Undo/Redo con Ctrl+Z / Ctrl+Y
- * - Drag & drop inteligente (react-moveable)
+ * - Drag & drop inteligente (react-moveable)  ✅ FIX SVG
  * - Optimización automática (OR-Tools backend)
  * - Validación normativa ERP
  * - Export DXF profesional
- * 
- * @version 2.0 - Motor CAD Profesional
+ *
+ * @version 2.1 - FIX Drag SVG Moveable
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
@@ -26,7 +26,6 @@ import {
   AlertTitle,
   CircularProgress,
   Divider,
-  Button,
   Snackbar,
   LinearProgress,
   Badge
@@ -80,7 +79,6 @@ const ZONE_COLORS = {
   dock_maneuver: { fill: 'rgba(254, 226, 226, 0.5)', stroke: '#f87171', label: 'Maniobra' }
 }
 
-
 // ============================================================
 // HOOKS
 // ============================================================
@@ -91,18 +89,18 @@ const ZONE_COLORS = {
 function useLayoutAPI() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  
+
   const analyzeLayout = useCallback(async (dimensions, elements) => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch(`${API_URL}/api/layout/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dimensions, elements })
       })
-      
+
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       return await response.json()
     } catch (err) {
@@ -113,11 +111,11 @@ function useLayoutAPI() {
       setLoading(false)
     }
   }, [])
-  
+
   const optimizeLayout = useCallback(async (dimensions, elements, movedId, movedPos) => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch(`${API_URL}/api/layout/optimize`, {
         method: 'POST',
@@ -129,7 +127,7 @@ function useLayoutAPI() {
           moved_position: movedPos
         })
       })
-      
+
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       return await response.json()
     } catch (err) {
@@ -139,11 +137,11 @@ function useLayoutAPI() {
       setLoading(false)
     }
   }, [])
-  
+
   const fullAnalysis = useCallback(async (dimensions, elements, movedId = null, movedPos = null) => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch(`${API_URL}/api/layout/full`, {
         method: 'POST',
@@ -156,7 +154,7 @@ function useLayoutAPI() {
           optimize: !!movedId
         })
       })
-      
+
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       return await response.json()
     } catch (err) {
@@ -166,20 +164,20 @@ function useLayoutAPI() {
       setLoading(false)
     }
   }, [])
-  
+
   const exportDXF = useCallback(async (dimensions, elements, zones) => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch(`${API_URL}/api/layout/export/dxf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dimensions, elements, zones })
       })
-      
+
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      
+
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -189,7 +187,7 @@ function useLayoutAPI() {
       a.click()
       a.remove()
       window.URL.revokeObjectURL(url)
-      
+
       return true
     } catch (err) {
       setError(err.message)
@@ -198,10 +196,9 @@ function useLayoutAPI() {
       setLoading(false)
     }
   }, [])
-  
+
   return { loading, error, analyzeLayout, optimizeLayout, fullAnalysis, exportDXF, setError }
 }
-
 
 // ============================================================
 // COMPONENTES SVG
@@ -210,10 +207,10 @@ function useLayoutAPI() {
 /**
  * Dibuja un polígono exacto del backend
  */
-function SVGPolygon({ 
-  points, 
-  fill, 
-  stroke, 
+function SVGPolygon({
+  points,
+  fill,
+  stroke,
   strokeWidth = 1,
   strokeDasharray = null,
   opacity = 1,
@@ -224,9 +221,9 @@ function SVGPolygon({
   style
 }) {
   if (!points || points.length < 3) return null
-  
+
   const pointsString = points.map(([x, y]) => `${x},${y}`).join(' ')
-  
+
   return (
     <polygon
       points={pointsString}
@@ -246,8 +243,9 @@ function SVGPolygon({
 
 /**
  * Dibuja un elemento (estantería, muelle, etc.) como polígono SVG
+ * ⚠️ Renombrado para no chocar con window.SVGElement
  */
-function SVGElement({
+function SVGLayoutElement({
   element,
   scale,
   isSelected,
@@ -256,17 +254,17 @@ function SVGElement({
   onHover
 }) {
   const colors = ELEMENT_COLORS[element.type] || ELEMENT_COLORS.default
-  
+
   // Usar polygon_points si existen, sino crear rectángulo desde bounds
   let points = element.polygon_points
-  
+
   if (!points || points.length === 0) {
     // Fallback: crear rectángulo
     const x = element.x || 0
     const y = element.y || 0
     const w = element.width || 1
     const h = element.height || 1
-    
+
     points = [
       [x, y],
       [x + w, y],
@@ -274,10 +272,10 @@ function SVGElement({
       [x, y + h]
     ]
   }
-  
+
   // Escalar puntos
   const scaledPoints = points.map(([x, y]) => [x * scale, y * scale])
-  
+
   return (
     <g className={`element-${element.id}`}>
       <SVGPolygon
@@ -290,14 +288,14 @@ function SVGElement({
         onMouseLeave={() => onHover?.(null)}
       />
       {/* Etiqueta del elemento */}
-      {element.width * scale > 40 && element.height * scale > 20 && (
+      {(element.width || 0) * scale > 40 && (element.height || 0) * scale > 20 && (
         <text
-          x={element.centroid_x ? element.centroid_x * scale : (element.x + element.width / 2) * scale}
-          y={element.centroid_y ? element.centroid_y * scale : (element.y + element.height / 2) * scale}
+          x={element.centroid_x ? element.centroid_x * scale : ((element.x || 0) + (element.width || 1) / 2) * scale}
+          y={element.centroid_y ? element.centroid_y * scale : ((element.y || 0) + (element.height || 1) / 2) * scale}
           textAnchor="middle"
           dominantBaseline="middle"
           fill="white"
-          fontSize={Math.min(element.width * scale, element.height * scale) > 50 ? 10 : 8}
+          fontSize={Math.min((element.width || 1) * scale, (element.height || 1) * scale) > 50 ? 10 : 8}
           fontWeight="600"
           style={{ pointerEvents: 'none', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
         >
@@ -313,10 +311,10 @@ function SVGElement({
  */
 function SVGZone({ zone, scale }) {
   const colors = ZONE_COLORS[zone.type] || ZONE_COLORS.free_zone
-  
+
   // Usar polygon_points si existen
   let points = zone.polygon_points
-  
+
   if (!points || points.length === 0) {
     // Fallback: crear rectángulo
     points = [
@@ -326,10 +324,10 @@ function SVGZone({ zone, scale }) {
       [zone.x, zone.y + zone.height]
     ]
   }
-  
+
   // Escalar puntos
   const scaledPoints = points.map(([x, y]) => [x * scale, y * scale])
-  
+
   return (
     <g className={`zone-${zone.id}`}>
       <SVGPolygon
@@ -341,7 +339,7 @@ function SVGZone({ zone, scale }) {
         opacity={0.8}
       />
       {/* Etiqueta solo si hay espacio */}
-      {zone.width * scale > 60 && zone.height * scale > 25 && (
+      {(zone.width || 0) * scale > 60 && (zone.height || 0) * scale > 25 && (
         <text
           x={(zone.centroid_x || zone.x + zone.width / 2) * scale}
           y={(zone.centroid_y || zone.y + zone.height / 2) * scale}
@@ -365,7 +363,7 @@ function SVGZone({ zone, scale }) {
 function SVGGrid({ width, height, gridSize, scale }) {
   const lines = []
   const gridSizeScaled = gridSize * scale
-  
+
   // Líneas verticales
   for (let x = 0; x <= width; x += gridSizeScaled) {
     lines.push(
@@ -380,7 +378,7 @@ function SVGGrid({ width, height, gridSize, scale }) {
       />
     )
   }
-  
+
   // Líneas horizontales
   for (let y = 0; y <= height; y += gridSizeScaled) {
     lines.push(
@@ -395,36 +393,35 @@ function SVGGrid({ width, height, gridSize, scale }) {
       />
     )
   }
-  
+
   return <g className="grid">{lines}</g>
 }
-
 
 // ============================================================
 // PANELES UI
 // ============================================================
 
-function WarningsPanel({ warnings, onClose }) {
+function WarningsPanel({ warnings }) {
   if (!warnings || warnings.length === 0) return null
-  
+
   const errors = warnings.filter(w => w.severity === 'error')
   const warns = warnings.filter(w => w.severity === 'warning')
-  
+
   return (
-    <Paper 
+    <Paper
       elevation={3}
-      sx={{ 
-        position: 'absolute', 
-        top: 70, 
-        right: 20, 
+      sx={{
+        position: 'absolute',
+        top: 70,
+        right: 20,
         width: 320,
         maxHeight: 250,
         overflow: 'auto',
         zIndex: 200
       }}
     >
-      <Box sx={{ 
-        p: 1.5, 
+      <Box sx={{
+        p: 1.5,
         bgcolor: errors.length > 0 ? '#fef2f2' : '#fffbeb',
         display: 'flex',
         justifyContent: 'space-between',
@@ -441,8 +438,8 @@ function WarningsPanel({ warnings, onClose }) {
       <Divider />
       <Box sx={{ p: 1 }}>
         {warnings.slice(0, 5).map((w, i) => (
-          <Alert 
-            key={i} 
+          <Alert
+            key={i}
             severity={w.severity === 'error' ? 'error' : 'warning'}
             sx={{ mb: 0.5, py: 0, '& .MuiAlert-message': { fontSize: 11 } }}
           >
@@ -461,16 +458,16 @@ function WarningsPanel({ warnings, onClose }) {
 
 function MetricsPanel({ metrics, dimensions }) {
   if (!metrics) return null
-  
+
   const totalArea = dimensions.length * dimensions.width
-  
+
   return (
-    <Paper 
+    <Paper
       elevation={3}
-      sx={{ 
-        position: 'absolute', 
-        bottom: 20, 
-        right: 20, 
+      sx={{
+        position: 'absolute',
+        bottom: 20,
+        right: 20,
         width: 260,
         zIndex: 200
       }}
@@ -489,14 +486,14 @@ function MetricsPanel({ metrics, dimensions }) {
               {metrics.efficiency?.toFixed(1)}%
             </Typography>
           </Box>
-          <LinearProgress 
-            variant="determinate" 
+          <LinearProgress
+            variant="determinate"
             value={Math.min(metrics.efficiency || 0, 100)}
             sx={{ height: 6, borderRadius: 3 }}
             color={metrics.efficiency > 50 ? 'success' : 'warning'}
           />
         </Box>
-        
+
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
           <Box>
             <Typography variant="caption" color="text.secondary">Total</Typography>
@@ -528,7 +525,6 @@ function MetricsPanel({ metrics, dimensions }) {
   )
 }
 
-
 // ============================================================
 // COMPONENTE PRINCIPAL
 // ============================================================
@@ -547,15 +543,19 @@ export default function SmartWarehouse({
   const [zoom, setZoom] = useState(100)
   const [showGrid, setShowGrid] = useState(true)
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' })
-  
+
   // Refs
   const containerRef = useRef(null)
   const svgRef = useRef(null)
   const moveableRef = useRef(null)
-  
+
+  // Guardar elementos actuales para evitar “stale closures” al optimizar
+  const elementsRef = useRef(elements)
+  useEffect(() => { elementsRef.current = elements }, [elements])
+
   // API
   const { loading, error, fullAnalysis, exportDXF, setError } = useLayoutAPI()
-  
+
   // Undo/Redo
   const {
     saveState,
@@ -579,34 +579,47 @@ export default function SmartWarehouse({
       }
     }
   })
-  
+
   // Escala con DPI awareness y zoom
   const baseScale = useMemo(() => getBaseScale(), [])
   const effectiveScale = baseScale * (zoom / 100)
-  
+
   // Dimensiones del SVG
   const svgWidth = dimensions.length * effectiveScale
   const svgHeight = dimensions.width * effectiveScale
-  
+
   // Sincronizar elementos externos
   useEffect(() => {
-    if (initialElements && initialElements.length > 0) {
+    if (Array.isArray(initialElements)) {
       setElements(initialElements)
     }
   }, [initialElements])
-  
-  // Análisis inicial
+
+  // Mantener selección consistente cuando cambian los elementos (después de optimizar)
   useEffect(() => {
-    const analyze = async () => {
-      if (elements.length === 0) return
-      
+    if (!selectedElement) return
+    const updated = elements.find(e => e.id === selectedElement.id)
+    if (updated && updated !== selectedElement) {
+      setSelectedElement(updated)
+    }
+  }, [elements, selectedElement])
+
+  // Análisis inicial (funciona aunque initialElements lleguen tarde)
+  const didInitialAnalyze = useRef(false)
+  useEffect(() => {
+    if (didInitialAnalyze.current) return
+    if (!elements || elements.length === 0) return
+
+    didInitialAnalyze.current = true
+
+    const run = async () => {
       const result = await fullAnalysis(dimensions, elements)
       if (result) {
         const autoZones = result.zones?.filter(z => z.is_auto_generated) || []
         setZones(autoZones)
         setMetrics(result.metrics)
         setWarnings(result.warnings || [])
-        
+
         // Guardar estado inicial
         saveState({
           elements,
@@ -616,15 +629,15 @@ export default function SmartWarehouse({
         }, 'initial_load')
       }
     }
-    
-    const timer = setTimeout(analyze, 300)
-    return () => clearTimeout(timer)
-  }, []) // Solo al montar
-  
+
+    const t = setTimeout(run, 150)
+    return () => clearTimeout(t)
+  }, [elements, dimensions, fullAnalysis, saveState])
+
   // Re-analizar cuando cambian elementos (con debounce)
   useEffect(() => {
-    if (elements.length === 0) return
-    
+    if (!elements || elements.length === 0) return
+
     const analyze = async () => {
       const result = await fullAnalysis(dimensions, elements)
       if (result) {
@@ -633,32 +646,33 @@ export default function SmartWarehouse({
         setWarnings(result.warnings || [])
       }
     }
-    
+
     const timer = setTimeout(analyze, 500)
     return () => clearTimeout(timer)
   }, [elements, dimensions, fullAnalysis])
-  
-  // Handler para fin de drag
+
+  // Handler para fin de drag (optimización OR-Tools)
   const handleDragEnd = useCallback(async (elementId, newX, newY) => {
     console.log(`📍 Movido ${elementId} a (${newX.toFixed(2)}, ${newY.toFixed(2)})`)
-    
-    // Llamar al backend para optimizar
+
+    const currentElements = elementsRef.current
+
     const result = await fullAnalysis(
       dimensions,
-      elements,
+      currentElements,
       elementId,
       { x: newX, y: newY }
     )
-    
+
     if (result && result.elements) {
       const newElements = result.elements
       const newZones = result.zones?.filter(z => z.is_auto_generated) || []
-      
+
       setElements(newElements)
       setZones(newZones)
       setMetrics(result.metrics)
       setWarnings(result.warnings || [])
-      
+
       // Guardar en historial
       saveState({
         elements: newElements,
@@ -666,10 +680,10 @@ export default function SmartWarehouse({
         metrics: result.metrics,
         warnings: result.warnings
       }, 'element_moved')
-      
+
       // Notificar cambio
       onElementsChange?.(newElements)
-      
+
       // Feedback
       if (result.optimization?.success) {
         setSnackbar({
@@ -679,48 +693,35 @@ export default function SmartWarehouse({
         })
       }
     }
-  }, [dimensions, elements, fullAnalysis, onElementsChange, saveState])
-  
+  }, [dimensions, fullAnalysis, onElementsChange, saveState])
+
   // Exportar DXF
   const handleExportDXF = useCallback(async () => {
     const success = await exportDXF(dimensions, elements, zones)
-    if (success) {
-      setSnackbar({
-        open: true,
-        message: '✅ Plano DXF descargado',
-        severity: 'success'
-      })
-    } else {
-      setSnackbar({
-        open: true,
-        message: '❌ Error al exportar DXF',
-        severity: 'error'
-      })
-    }
+    setSnackbar({
+      open: true,
+      message: success ? '✅ Plano DXF descargado' : '❌ Error al exportar DXF',
+      severity: success ? 'success' : 'error'
+    })
   }, [dimensions, elements, zones, exportDXF])
-  
-  // Manejar undo
+
+  // Undo / Redo
   const handleUndo = useCallback(() => {
     const state = undo()
-    if (state) {
-      onElementsChange?.(state.elements)
-    }
+    if (state) onElementsChange?.(state.elements)
   }, [undo, onElementsChange])
-  
-  // Manejar redo
+
   const handleRedo = useCallback(() => {
     const state = redo()
-    if (state) {
-      onElementsChange?.(state.elements)
-    }
+    if (state) onElementsChange?.(state.elements)
   }, [redo, onElementsChange])
-  
+
   // Elementos del DOM seleccionados para Moveable
   const selectedTarget = useMemo(() => {
     if (!selectedElement || !svgRef.current) return null
     return svgRef.current.querySelector(`.element-${selectedElement.id}`)
   }, [selectedElement])
-  
+
   return (
     <Box sx={{ width: '100%', height: '100%', position: 'relative', bgcolor: '#f8fafc' }}>
       {/* Toolbar */}
@@ -748,7 +749,7 @@ export default function SmartWarehouse({
             </IconButton>
           </span>
         </Tooltip>
-        
+
         <Tooltip title="Rehacer (Ctrl+Y)">
           <span>
             <IconButton size="small" onClick={handleRedo} disabled={!canRedo}>
@@ -756,57 +757,57 @@ export default function SmartWarehouse({
             </IconButton>
           </span>
         </Tooltip>
-        
-        <Chip 
+
+        <Chip
           icon={<HistoryIcon sx={{ fontSize: 14 }} />}
-          label={`${stateInfo.current}/${stateInfo.total}`} 
-          size="small" 
+          label={`${stateInfo.current}/${stateInfo.total}`}
+          size="small"
           variant="outlined"
           sx={{ fontSize: 11 }}
         />
-        
+
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-        
+
         {/* Zoom */}
         <Tooltip title="Alejar">
           <IconButton size="small" onClick={() => setZoom(z => Math.max(50, z - 10))}>
             <ZoomOutIcon />
           </IconButton>
         </Tooltip>
-        
+
         <Chip label={`${zoom}%`} size="small" sx={{ minWidth: 50 }} />
-        
+
         <Tooltip title="Acercar">
           <IconButton size="small" onClick={() => setZoom(z => Math.min(200, z + 10))}>
             <ZoomInIcon />
           </IconButton>
         </Tooltip>
-        
+
         <Tooltip title="Restablecer">
           <IconButton size="small" onClick={() => setZoom(100)}>
             <CenterIcon />
           </IconButton>
         </Tooltip>
-        
+
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-        
+
         {/* Grid */}
         <Tooltip title={showGrid ? 'Ocultar Grid' : 'Mostrar Grid'}>
           <IconButton size="small" onClick={() => setShowGrid(g => !g)}>
             {showGrid ? <GridIcon /> : <GridOffIcon />}
           </IconButton>
         </Tooltip>
-        
+
         {/* Export */}
         <Tooltip title="Exportar DXF (AutoCAD)">
           <IconButton size="small" onClick={handleExportDXF} disabled={loading}>
             <DownloadIcon />
           </IconButton>
         </Tooltip>
-        
+
         {loading && <CircularProgress size={20} sx={{ ml: 1 }} />}
       </Paper>
-      
+
       {/* Indicadores de estado */}
       <Box sx={{ position: 'absolute', top: 70, left: 12, zIndex: 200, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
         <Chip
@@ -835,7 +836,7 @@ export default function SmartWarehouse({
           </Badge>
         )}
       </Box>
-      
+
       {/* Área de trabajo SVG */}
       <Box
         ref={containerRef}
@@ -874,28 +875,28 @@ export default function SmartWarehouse({
               stroke="#1e293b"
               strokeWidth={3}
             />
-            
+
             {/* Grid */}
             {showGrid && (
-              <SVGGrid 
-                width={svgWidth} 
-                height={svgHeight} 
-                gridSize={GRID_SIZE} 
-                scale={effectiveScale} 
+              <SVGGrid
+                width={svgWidth}
+                height={svgHeight}
+                gridSize={GRID_SIZE}
+                scale={effectiveScale}
               />
             )}
-            
+
             {/* Zonas auto-detectadas (fondo) */}
             <g className="zones-layer">
               {zones.map(zone => (
                 <SVGZone key={zone.id} zone={zone} scale={effectiveScale} />
               ))}
             </g>
-            
+
             {/* Elementos (encima) */}
             <g className="elements-layer">
               {elements.map(element => (
-                <SVGElement
+                <SVGLayoutElement
                   key={element.id}
                   element={element}
                   scale={effectiveScale}
@@ -909,13 +910,14 @@ export default function SmartWarehouse({
           </svg>
         </Paper>
       </Box>
-      
-      {/* Moveable para drag & drop */}
+
+      {/* Moveable para drag & drop (FIX SVG) */}
       {selectedElement && selectedTarget && (
         <Moveable
           ref={moveableRef}
           target={selectedTarget}
           draggable={true}
+          origin={false}
           snappable={true}
           snapGridWidth={GRID_SIZE * effectiveScale}
           snapGridHeight={GRID_SIZE * effectiveScale}
@@ -925,30 +927,59 @@ export default function SmartWarehouse({
             right: svgWidth,
             bottom: svgHeight
           }}
-          onDrag={({ target, transform }) => {
-            target.style.transform = transform
-          }}
-          onDragEnd={({ target }) => {
-            const transform = target.style.transform
-            const match = transform.match(/translate\(([^,]+)px,\s*([^)]+)px\)/)
-            if (match) {
-              const dx = parseFloat(match[1]) / effectiveScale
-              const dy = parseFloat(match[2]) / effectiveScale
-              const newX = (selectedElement.x || 0) + dx
-              const newY = (selectedElement.y || 0) + dy
-              handleDragEnd(selectedElement.id, newX, newY)
+
+          // ✅ SVG: mover con atributo transform, NO con style.transform
+          onDrag={({ target, beforeTranslate }) => {
+            const [tx, ty] = beforeTranslate
+            if (target && target.setAttribute) {
+              target.setAttribute('transform', `translate(${tx} ${ty})`)
             }
-            target.style.transform = ''
+          }}
+
+          // ✅ SVG: usar lastEvent.beforeTranslate (números), sin regex
+          onDragEnd={({ target, lastEvent }) => {
+            if (!lastEvent) return
+            const [tx, ty] = lastEvent.beforeTranslate
+
+            const baseX = selectedElement.x ?? 0
+            const baseY = selectedElement.y ?? 0
+
+            const dxM = tx / effectiveScale
+            const dyM = ty / effectiveScale
+
+            const newX = baseX + dxM
+            const newY = baseY + dyM
+
+            // Limpiar transform temporal antes de aplicar resultado del backend
+            if (target && target.removeAttribute) {
+              target.removeAttribute('transform')
+            }
+
+            // (Opcional, pero ayuda): update optimista para que no “salte”
+            setElements(prev => prev.map(el => {
+              if (el.id !== selectedElement.id) return el
+              const next = { ...el, x: newX, y: newY }
+
+              if (Array.isArray(el.polygon_points) && el.polygon_points.length > 0) {
+                next.polygon_points = el.polygon_points.map(([x, y]) => [x + dxM, y + dyM])
+              }
+              if (typeof el.centroid_x === 'number') next.centroid_x = el.centroid_x + dxM
+              if (typeof el.centroid_y === 'number') next.centroid_y = el.centroid_y + dyM
+
+              return next
+            }))
+
+            handleDragEnd(selectedElement.id, newX, newY)
           }}
         />
       )}
-      
+
       {/* Panel de warnings */}
       <WarningsPanel warnings={warnings} />
-      
+
       {/* Panel de métricas */}
       <MetricsPanel metrics={metrics} dimensions={dimensions} />
-      
+
       {/* Snackbar */}
       <Snackbar
         open={snackbar.open}
@@ -956,19 +987,19 @@ export default function SmartWarehouse({
         onClose={() => setSnackbar(s => ({ ...s, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert 
-          severity={snackbar.severity} 
+        <Alert
+          severity={snackbar.severity}
           onClose={() => setSnackbar(s => ({ ...s, open: false }))}
           sx={{ minWidth: 200 }}
         >
           {snackbar.message}
         </Alert>
       </Snackbar>
-      
+
       {/* Error global */}
       {error && (
-        <Alert 
-          severity="error" 
+        <Alert
+          severity="error"
           onClose={() => setError(null)}
           sx={{ position: 'absolute', bottom: 20, left: 20, zIndex: 200, maxWidth: 300 }}
         >
