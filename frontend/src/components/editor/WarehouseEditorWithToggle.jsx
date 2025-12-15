@@ -1,40 +1,19 @@
 /**
  * UNITNAVE Designer - Editor con Toggle 2D/3D
  *
- * VERSIÓN DEFINITIVA:
- * - 2D: Warehouse2DEditor (COTAS + DRAG + OR-Tools)
- * - 3D: Warehouse3DEditor
- *
- * @version 2.2 - 2D Unificado (sin perder medidas)
+ * @version 2.2
  */
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { Box, ToggleButtonGroup, ToggleButton, Paper, Tooltip, Typography } from '@mui/material'
-import {
-  ViewInAr as View3DIcon,
-  CropFree as View2DIcon,
-} from '@mui/icons-material'
+import { ViewInAr as View3DIcon, CropFree as View2DIcon } from '@mui/icons-material'
 
-// Componentes
 import Warehouse3DEditor from './Warehouse3DEditor'
-import Warehouse2DEditor from './Warehouse2DEditor'   // ✅ ESTE ES EL 2D BUENO (con cotas)
+import Warehouse2DEditor from './Warehouse2DEditor'
 
-// ============================================================
-// SELECTOR DE MODO
-// ============================================================
 function ViewModeSelector({ mode, onChange }) {
   return (
-    <Paper
-      elevation={4}
-      sx={{
-        position: 'absolute',
-        top: 12,
-        left: 12,
-        zIndex: 1100,
-        borderRadius: 2,
-        overflow: 'hidden'
-      }}
-    >
+    <Paper elevation={4} sx={{ position: 'absolute', top: 12, left: 12, zIndex: 1100, borderRadius: 2, overflow: 'hidden' }}>
       <ToggleButtonGroup
         value={mode}
         exclusive
@@ -42,17 +21,8 @@ function ViewModeSelector({ mode, onChange }) {
         size="small"
         sx={{
           '& .MuiToggleButton-root': {
-            px: 2,
-            py: 1,
-            border: 'none',
-            borderRadius: 0,
-            '&.Mui-selected': {
-              bgcolor: 'primary.main',
-              color: 'white',
-              '&:hover': {
-                bgcolor: 'primary.dark'
-              }
-            }
+            px: 2, py: 1, border: 'none', borderRadius: 0,
+            '&.Mui-selected': { bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }
           }
         }}
       >
@@ -60,9 +30,7 @@ function ViewModeSelector({ mode, onChange }) {
           <Tooltip title="Vista 2D - CAD con Cotas + Drag + OR-Tools">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <View2DIcon fontSize="small" />
-              <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                2D CAD
-              </Typography>
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>2D CAD</Typography>
             </Box>
           </Tooltip>
         </ToggleButton>
@@ -71,9 +39,7 @@ function ViewModeSelector({ mode, onChange }) {
           <Tooltip title="Vista 3D - Modelo Interactivo">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <View3DIcon fontSize="small" />
-              <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                3D
-              </Typography>
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>3D</Typography>
             </Box>
           </Tooltip>
         </ToggleButton>
@@ -82,9 +48,6 @@ function ViewModeSelector({ mode, onChange }) {
   )
 }
 
-// ============================================================
-// COMPONENTE PRINCIPAL
-// ============================================================
 export default function WarehouseEditorWithToggle({
   dimensions = { length: 80, width: 40, height: 10 },
   elements = [],
@@ -92,12 +55,13 @@ export default function WarehouseEditorWithToggle({
   onElementsChange,
   initialMode = '2d'
 }) {
-  const [viewMode, setViewMode] = useState(initialMode)
-
-  const handleModeChange = useCallback((newMode) => {
-    setViewMode(newMode)
+  useEffect(() => {
+    console.log('[LOAD][WarehouseEditorWithToggle]', import.meta?.url || '(no import.meta.url)')
   }, [])
 
+  const [viewMode, setViewMode] = useState(initialMode)
+
+  const handleModeChange = useCallback((newMode) => setViewMode(newMode), [])
   const handleSwitch3D = useCallback(() => setViewMode('3d'), [])
   const handleSwitch2D = useCallback(() => setViewMode('2d'), [])
 
@@ -147,5 +111,4 @@ export default function WarehouseEditorWithToggle({
   )
 }
 
-// Re-exportar componentes individuales
 export { Warehouse3DEditor, Warehouse2DEditor }
