@@ -1,21 +1,24 @@
 /**
- * UNITNAVE Designer - Interactive Element V2.0 (SVG NATIVE DRAG)
+ * UNITNAVE Designer - Interactive Element V2.1 DEBUG
  * 
- * ⚠️ PROBLEMA RESUELTO: react-moveable NO funciona con elementos SVG <g>
- * ✅ SOLUCIÓN: Usar eventos nativos de mouse que SÍ funcionan en SVG
- *
- * Características:
- * - Drag & drop NATIVO con mouse events (funciona en SVG)
- * - Snap to grid (0.5m)
- * - Ghost preview durante drag
- * - Indicador de bloqueo por otros usuarios
- * - Colores por tipo de elemento
- * - Límites del almacén respetados
+ * ⚠️ VERSIÓN CON LOGS DE DIAGNÓSTICO
+ * Cada acción tiene console.error para que sea MUY visible
  */
 
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
 import { throttle } from 'lodash'
 import { useLayoutStore } from '../store/useLayoutStore'
+
+// ============================================================
+// DEBUG FLAG - Cambiar a false para producción
+// ============================================================
+const DEBUG = true
+
+function log(...args: any[]) {
+  if (DEBUG) {
+    console.error('🔴 [InteractiveElement]', ...args)
+  }
+}
 
 // ============================================================
 // TYPES
@@ -74,7 +77,7 @@ const ELEMENT_COLORS: Record<string, { fill: string; stroke: string; label: stri
   unknown: { fill: '#94a3b8', stroke: '#64748b', label: 'Elemento', icon: '❓' }
 }
 
-const SNAP_GRID = 0.5 // metros
+const SNAP_GRID = 0.5
 
 // ============================================================
 // HELPERS
@@ -86,13 +89,6 @@ function snapToGrid(value: number, gridSize: number = SNAP_GRID): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
-}
-
-// Logger
-const logger = {
-  info: (msg: string, ...args: any[]) => console.log(`%c[ELEMENT] ${msg}`, 'color: #3b82f6', ...args),
-  warn: (msg: string, ...args: any[]) => console.warn(`[ELEMENT] ${msg}`, ...args),
-  error: (msg: string, ...args: any[]) => console.error(`[ELEMENT] ${msg}`, ...args)
 }
 
 // ============================================================
@@ -110,6 +106,10 @@ export default function InteractiveElement({
   onLock,
   onUnlock
 }: InteractiveElementProps) {
+  
+  // 🔴 LOG: Componente se renderiza
+  log('RENDER - elemento:', element.id, 'scale:', scale)
+  
   const elementRef = useRef<SVGGElement>(null)
   
   // ============================================================
@@ -123,15 +123,16 @@ export default function InteractiveElement({
   // ============================================================
   // STORE
   // ============================================================
-  const {
-    selectedElementId,
-    setSelectedElement,
-    setDragging: setStoreDragging,
-    clientId,
-    onlineUsers,
-    lockedElements,
-    dimensions: warehouseDimensions
-  } = useLayoutStore()
+  const selectedElementId = useLayoutStore((state) => state.selectedElementId)
+  const setSelectedElement = useLayoutStore((state) => state.setSelectedElement)
+  const setDragging = useLayoutStore((state) => state.setDragging)
+  const clientId = useLayoutStore((state) => state.clientId)
+  const onlineUsers = useLayoutStore((state) => state.onlineUsers)
+  const lockedElements = useLayoutStore((state) => state.lockedElements)
+  const dimensions = useLayoutStore((state) => state.dimensions)
+
+  // 🔴 LOG: Estado del store
+  log('STORE - selectedElementId:', selectedElementId, 'clientId:', clientId, 'dimensions:', dimensions)
 
   // ============================================================
   // COMPUTED
@@ -150,6 +151,9 @@ export default function InteractiveElement({
   const isSelected = selectedElementId === element.id
   const colors = ELEMENT_COLORS[element.type] || ELEMENT_COLORS.unknown
 
+  // 🔴 LOG: Estado computado
+  log('COMPUTED - isSelected:', isSelected, 'isLocked:', isLocked, 'isDragging:', isDragging)
+
   // Position in pixels
   const pos = {
     x: element.position.x * scale,
@@ -162,7 +166,7 @@ export default function InteractiveElement({
     height: ((element.dimensions.depth || element.dimensions.height) || 2) * scale
   }
 
-  // Element size in meters (for bounds checking)
+  // Element size in meters
   const sizeMeters = {
     width: (element.dimensions.length || element.dimensions.width) || 2,
     height: (element.dimensions.depth || element.dimensions.height) || 2
@@ -170,7 +174,6 @@ export default function InteractiveElement({
 
   const rotation = element.rotation || 0
 
-  // Locking user's name
   const lockingUserName = useMemo(() => {
     if (!lockedByOther) return null
     const user = onlineUsers.find((u) => u.client_id === lockedByOther)
@@ -178,49 +181,67 @@ export default function InteractiveElement({
   }, [lockedByOther, onlineUsers])
 
   // ============================================================
-  // CLICK HANDLER - SELECCIÓN
+  // CLICK HANDLER
   // ============================================================
   
   const handleClick = useCallback((e: React.MouseEvent) => {
+    log('🖱️ CLICK DETECTADO en', element.id)
     e.stopPropagation()
     
-    // No procesar click si acabamos de hacer drag
-    if (isDragging) return
-    
-    if (!isLocked) {
-      logger.info(`🖱️ Click → Seleccionando: ${element.id}`)
-      setSelectedElement(element.id)
-      onSelect(element.id)
+    if (isDragging) {
+      log('⚠️ Click ignorado porque isDragging=true')
+      return
     }
+    
+    if (isLocked) {
+      log('🔒 Click ignorado porque isLocked=true')
+      return
+    }
+    
+    log('✅ Llamando setSelectedElement y onSelect para', element.id)
+    setSelectedElement(element.id)
+    onSelect(element.id)
   }, [isLocked, isDragging, element.id, setSelectedElement, onSelect])
 
   // ============================================================
-  // DRAG HANDLERS - NATIVOS SVG (NO MOVEABLE)
+  // MOUSE DOWN - INICIO DE DRAG
   // ============================================================
 
   const handleMouseDown = useCallback((e: React.MouseEvent<SVGGElement>) => {
-    // Solo botón izquierdo
-    if (e.button !== 0) return
+    log('🖱️ MOUSEDOWN DETECTADO en', element.id, 'button:', e.button)
+    
+    if (e.button !== 0) {
+      log('⚠️ MouseDown ignorado - no es botón izquierdo')
+      return
+    }
+    
     e.stopPropagation()
     e.preventDefault()
     
     if (isLocked) {
-      logger.warn(`🔒 Elemento bloqueado por otro usuario: ${element.id}`)
+      log('🔒 MouseDown ignorado - elemento bloqueado')
       return
     }
 
-    // Primero seleccionar si no está seleccionado
+    // Seleccionar si no está seleccionado
     if (!isSelected) {
-      logger.info(`🖱️ MouseDown → Seleccionando: ${element.id}`)
+      log('📌 Seleccionando elemento', element.id)
       setSelectedElement(element.id)
       onSelect(element.id)
     }
 
     // Iniciar drag
-    logger.info(`🖱️ MouseDown → Iniciando DRAG: ${element.id}`)
+    log('🚀 INICIANDO DRAG para', element.id)
+    log('   - Posición elemento:', element.position.x, element.position.y)
+    log('   - Posición mouse:', e.clientX, e.clientY)
+    
     setIsDragging(true)
-    setStoreDragging(true)
-    onLock?.(element.id)
+    setDragging(true)
+    
+    if (onLock) {
+      log('🔐 Llamando onLock')
+      onLock(element.id)
+    }
     
     setDragStart({
       mouseX: e.clientX,
@@ -228,14 +249,20 @@ export default function InteractiveElement({
       elemX: element.position.x,
       elemY: element.position.y
     })
+    
+    log('✅ Drag iniciado - dragStart configurado')
   }, [isLocked, isSelected, element.id, element.position.x, element.position.y, 
-      setSelectedElement, onSelect, setStoreDragging, onLock])
+      setSelectedElement, onSelect, setDragging, onLock])
 
   // ============================================================
-  // GLOBAL MOUSE EVENTS (window) para capturar fuera del elemento
+  // GLOBAL MOUSE EVENTS
   // ============================================================
   useEffect(() => {
-    if (!isDragging || !dragStart) return
+    if (!isDragging || !dragStart) {
+      return
+    }
+    
+    log('🎯 useEffect DRAG ACTIVO - añadiendo listeners globales')
 
     const handleMouseMove = (e: MouseEvent) => {
       const deltaX = (e.clientX - dragStart.mouseX) / scale
@@ -244,42 +271,54 @@ export default function InteractiveElement({
       let newX = snapToGrid(dragStart.elemX + deltaX)
       let newY = snapToGrid(dragStart.elemY + deltaY)
 
-      // Clamp dentro de los límites del almacén
-      newX = clamp(newX, 0, warehouseDimensions.length - sizeMeters.width)
-      newY = clamp(newY, 0, warehouseDimensions.width - sizeMeters.height)
+      // Clamp
+      if (dimensions) {
+        newX = clamp(newX, 0, dimensions.length - sizeMeters.width)
+        newY = clamp(newY, 0, dimensions.width - sizeMeters.height)
+      }
 
+      log('🔄 MouseMove - nueva posición:', newX.toFixed(1), newY.toFixed(1))
       setGhostPosition({ x: newX, y: newY })
     }
 
     const handleMouseUp = (e: MouseEvent) => {
-      logger.info(`🖱️ MouseUp → Fin DRAG: ${element.id}`)
+      log('🖱️ MOUSEUP DETECTADO')
+      log('   - ghostPosition:', ghostPosition)
       
       if (ghostPosition) {
-        logger.info(`📦 MOVIENDO ${element.id} → (${ghostPosition.x.toFixed(1)}, ${ghostPosition.y.toFixed(1)})`)
+        log('📦 LLAMANDO onMove:', element.id, ghostPosition.x, ghostPosition.y)
         onMove(element.id, ghostPosition.x, ghostPosition.y)
+      } else {
+        log('⚠️ No hay ghostPosition - no se llama onMove')
       }
 
-      // Reset state
+      log('🧹 Limpiando estado de drag')
       setIsDragging(false)
-      setStoreDragging(false)
+      setDragging(false)
       setDragStart(null)
       setGhostPosition(null)
-      onUnlock?.(element.id)
+      
+      if (onUnlock) {
+        log('🔓 Llamando onUnlock')
+        onUnlock(element.id)
+      }
     }
 
-    // Agregar listeners globales
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
+    
+    log('✅ Listeners globales añadidos')
 
     return () => {
+      log('🧹 Removiendo listeners globales')
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isDragging, dragStart, ghostPosition, scale, warehouseDimensions, 
-      sizeMeters, element.id, onMove, setStoreDragging, onUnlock])
+  }, [isDragging, dragStart, ghostPosition, scale, dimensions, 
+      sizeMeters, element.id, onMove, setDragging, onUnlock])
 
   // ============================================================
-  // CURSOR MOVE (throttled)
+  // CURSOR MOVE
   // ============================================================
   
   const throttledCursorMove = useMemo(() => {
@@ -300,52 +339,6 @@ export default function InteractiveElement({
   }, [throttledCursorMove])
 
   // ============================================================
-  // RENDER HELPERS
-  // ============================================================
-
-  const renderShelfPattern = useMemo(() => {
-    if (element.type !== 'shelf' && element.type !== 'rack') return null
-    if (dims.width < 40) return null
-
-    const moduleCount = Math.floor(dims.width / 30)
-    return Array.from({ length: moduleCount }).map((_, i) => (
-      <line
-        key={`mod-${i}`}
-        x1={pos.x + (i + 1) * 30}
-        y1={pos.y + 2}
-        x2={pos.x + (i + 1) * 30}
-        y2={pos.y + dims.height - 2}
-        stroke={colors.stroke}
-        strokeWidth={1}
-        opacity={0.3}
-      />
-    ))
-  }, [element.type, dims.width, dims.height, pos.x, pos.y, colors.stroke])
-
-  const renderDockArrows = useMemo(() => {
-    if (element.type !== 'dock') return null
-
-    const arrowSize = Math.min(dims.width, dims.height) * 0.3
-    const cx = pos.x + dims.width / 2
-    const cy = pos.y + dims.height / 2
-
-    return (
-      <g opacity={0.6}>
-        <polygon
-          points={`${cx},${cy - arrowSize} ${cx - arrowSize / 2},${cy} ${cx + arrowSize / 2},${cy}`}
-          fill="white"
-        />
-        <line
-          x1={cx} y1={cy}
-          x2={cx} y2={cy + arrowSize * 0.8}
-          stroke="white"
-          strokeWidth={arrowSize * 0.15}
-        />
-      </g>
-    )
-  }, [element.type, dims, pos])
-
-  // ============================================================
   // RENDER
   // ============================================================
 
@@ -353,14 +346,19 @@ export default function InteractiveElement({
 
   return (
     <>
-      {/* Main element group */}
       <g
         ref={elementRef}
         className={`element element-${element.id}`}
         transform={transform}
         onMouseMove={(e) => throttledCursorMove(e)}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseEnter={() => {
+          log('🔵 MouseEnter', element.id)
+          setIsHovered(true)
+        }}
+        onMouseLeave={() => {
+          log('🔵 MouseLeave', element.id)
+          setIsHovered(false)
+        }}
         onClick={handleClick}
         onMouseDown={handleMouseDown}
         style={{
@@ -368,7 +366,7 @@ export default function InteractiveElement({
           userSelect: 'none'
         }}
       >
-        {/* Selection highlight (yellow border) - STRONGER */}
+        {/* Selection highlight */}
         {isSelected && (
           <rect
             x={pos.x - 4}
@@ -398,10 +396,6 @@ export default function InteractiveElement({
           ry={4}
         />
 
-        {/* Type-specific patterns */}
-        {renderShelfPattern}
-        {renderDockArrows}
-
         {/* Label */}
         {dims.width > 50 && dims.height > 18 && (
           <text
@@ -418,20 +412,6 @@ export default function InteractiveElement({
           </text>
         )}
 
-        {/* Small icon for small elements */}
-        {dims.width <= 50 && dims.height > 15 && (
-          <text
-            x={pos.x + dims.width / 2}
-            y={pos.y + dims.height / 2}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize={12}
-            style={{ pointerEvents: 'none' }}
-          >
-            {colors.icon}
-          </text>
-        )}
-
         {/* Lock indicator */}
         {isLocked && (
           <g>
@@ -439,14 +419,6 @@ export default function InteractiveElement({
             <text x={pos.x + dims.width - 12} y={pos.y + 16} textAnchor="middle" fill="white" fontSize={11}>
               🔒
             </text>
-            {isHovered && lockingUserName && (
-              <g transform={`translate(${pos.x + dims.width - 12}, ${pos.y - 5})`}>
-                <rect x={-40} y={-18} width={80} height={16} fill="#1e293b" rx={4} ry={4} />
-                <text x={0} y={-6} textAnchor="middle" fill="white" fontSize={9}>
-                  {lockingUserName}
-                </text>
-              </g>
-            )}
           </g>
         )}
 
@@ -460,7 +432,7 @@ export default function InteractiveElement({
           </g>
         )}
 
-        {/* Drag instructions when selected (NOT dragging) */}
+        {/* Drag instructions */}
         {isSelected && !isDragging && (
           <g transform={`translate(${pos.x + dims.width / 2}, ${pos.y - 15})`}>
             <rect x={-50} y={-12} width={100} height={18} fill="#22c55e" rx={4} />
@@ -469,12 +441,22 @@ export default function InteractiveElement({
             </text>
           </g>
         )}
+
+        {/* DEBUG: Versión del componente */}
+        <text
+          x={pos.x + 2}
+          y={pos.y + 10}
+          fill="red"
+          fontSize={8}
+          style={{ pointerEvents: 'none' }}
+        >
+          V2.1-DEBUG
+        </text>
       </g>
 
-      {/* Ghost preview during drag */}
+      {/* Ghost during drag */}
       {isDragging && ghostPosition && (
         <>
-          {/* Ghost rectangle */}
           <rect
             x={ghostPosition.x * scale}
             y={ghostPosition.y * scale}
@@ -489,7 +471,6 @@ export default function InteractiveElement({
             style={{ pointerEvents: 'none' }}
           />
           
-          {/* Position indicator */}
           <g transform={`translate(${ghostPosition.x * scale + dims.width / 2}, ${ghostPosition.y * scale - 25})`}>
             <rect x={-55} y={-14} width={110} height={22} fill="#22c55e" rx={4} />
             <text x={0} y={2} textAnchor="middle" fill="white" fontSize={12} fontWeight={700} fontFamily="monospace">
