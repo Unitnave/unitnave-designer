@@ -9,7 +9,7 @@
  * - Cálculo exacto de zonas via backend (Shapely)
  * - ✅ Drag & drop de elementos + re-optimización (OR-Tools backend)
  *
- * @version 2.1 - Unificado: COTAS + DRAG + ORTOOLS
+ * @version 2.2 - Unificado: COTAS + DRAG REAL + ORTOOLS
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -47,14 +47,17 @@ const API_URL = import.meta.env.VITE_API_URL || 'https://unitnave-designer-produ
 
 // ============================================================
 // HOOK PARA OBTENER ZONAS DEL BACKEND (Geometría Exacta)
+// 👇 IMPORTANTÍSIMO: si estamos arrastrando, NO llamamos al backend
 // ============================================================
-function useBackendZones(dimensions, elements) {
+function useBackendZones(dimensions, elements, isDraggingElement) {
   const [backendZones, setBackendZones] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    if (isDraggingElement) return
+
     if (!elements || elements.length === 0) {
       setBackendZones(null)
       setMetrics(null)
@@ -78,7 +81,6 @@ function useBackendZones(dimensions, elements) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const data = await response.json()
-        console.log('📐 Geometría exacta recibida:', data.zones?.length, 'zonas')
 
         const convertedZones = (data.zones || []).map(zone => ({
           ...zone,
@@ -90,17 +92,17 @@ function useBackendZones(dimensions, elements) {
         setBackendZones(convertedZones)
         setMetrics(data.metrics || null)
       } catch (err) {
-        console.warn('⚠️ Backend analyze no disponible, usando algoritmo local:', err?.message)
         setError(err?.message || 'Analyze error')
         setBackendZones(null)
+        setMetrics(null)
       } finally {
         setLoading(false)
       }
     }
 
-    const timeoutId = setTimeout(fetchZones, 300)
-    return () => clearTimeout(timeoutId)
-  }, [dimensions.length, dimensions.width, elements])
+    const t = setTimeout(fetchZones, 250)
+    return () => clearTimeout(t)
+  }, [dimensions.length, dimensions.width, elements, isDraggingElement])
 
   return { backendZones, metrics, loading, error }
 }
@@ -249,11 +251,7 @@ function Toolbar2D({
         <IconButton
           size="small"
           onClick={onSwitch3D}
-          sx={{
-            bgcolor: 'primary.main',
-            color: 'white',
-            '&:hover': { bgcolor: 'primary.dark' }
-          }}
+          sx={{ bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
         >
           <View3DIcon fontSize="small" />
         </IconButton>
@@ -360,6 +358,20 @@ function SelectedZoneInfo({ zone, dimensions }) {
 }
 
 // ============================================================
+// HELPERS
+// ============================================================
+function applyElementPosition(list, elementId, x, y) {
+  return (list || []).map(e => {
+    if (e.id !== elementId) return e
+    const pos = e.position || { x: 0, y: 0 }
+    return {
+      ...e,
+      position: { ...pos, x, y, z: y } // mantenemos compatibilidad y/z
+    }
+  })
+}
+
+// ============================================================
 // COMPONENTE PRINCIPAL
 // ============================================================
 export default function Warehouse2DEditor({
@@ -368,17 +380,24 @@ export default function Warehouse2DEditor({
   onSwitch3D,
   onElementsChange
 }) {
-  // 🔥 Estado LOCAL de elementos: aquí es donde aplicamos drag + resultado del optimizador
-  const [localElements, setLocalElements] = useState(elements)
-  const elementsRef = useRef(elements)
+  // Estado LOCAL de elementos (es el que se mueve)
+  const [localElements, setLocalElements] = useState(elements || [])
+  const elementsRef = useRef(localElements)
+
+  // Estado de drag (para PAUSAR analyze durante drag)
+  const [isDraggingElement, setIsDraggingElement] = useState(false)
+
+  // Sync cuando llegan elements nuevos desde fuera
   useEffect(() => {
     setLocalElements(elements || [])
   }, [elements])
+
+  // Ref siempre actualizado (evita closures viejas)
   useEffect(() => {
     elementsRef.current = localElements
   }, [localElements])
 
-  // Estado UI
+  // UI
   const [hoveredZoneId, setHoveredZoneId] = useState(null)
   const [selectedZone, setSelectedZone] = useState(null)
   const [showGrid, setShowGrid] = useState(true)
@@ -386,56 +405,39 @@ export default function Warehouse2DEditor({
   const [zoom, setZoom] = useState(100)
   const [showLegend, setShowLegend] = useState(true)
 
-  // Backend analyze (zonas exactas)
-  const { backendZones, metrics, loading: loadingAnalyze, error } = useBackendZones(dimensions, localElements)
+  // Backend analyze (zonas exactas) — usando localElements
+  const { backendZones, metrics, loading: loadingAnalyze, error } =
+    useBackendZones(dimensions, localElements, isDraggingElement)
 
   // Backend full (optimización al mover)
   const { optimizing, optError, full } = useLayoutFullAPI()
 
-  // Procesar zonas localmente (fallback)
+  // Zonas locales fallback
   const localZones = useMemo(() => {
     return processElementsToZones(localElements, dimensions)
   }, [localElements, dimensions])
 
   const zones = useMemo(() => {
     if (backendZones && backendZones.length > 0) {
-      console.log('✅ Usando geometría exacta del backend')
       const elementZones = localZones.filter(z => !z.isAutoGenerated)
       return [...elementZones, ...backendZones]
     }
-    console.log('⚠️ Usando algoritmo local')
     return localZones
   }, [backendZones, localZones])
-
-  const displayMetrics = useMemo(() => {
-    if (metrics) return metrics
-    const totalArea = dimensions.length * dimensions.width
-    const occupiedArea = zones.occupiedArea || 0
-    return {
-      totalArea,
-      occupiedArea,
-      freeArea: zones.freeArea || (totalArea - occupiedArea),
-      efficiency: ((occupiedArea / totalArea) * 100).toFixed(1)
-    }
-  }, [metrics, zones, dimensions])
 
   const selectedZoneData = useMemo(() => {
     if (!selectedZone) return null
     return zones.find(z => z.id === selectedZone.id) || selectedZone
   }, [selectedZone, zones])
 
-  // Handlers selección/hover
-  const handleZoneHover = useCallback((id) => {
-    setHoveredZoneId(id)
-  }, [])
-
+  // Handlers hover/select
+  const handleZoneHover = useCallback((id) => setHoveredZoneId(id), [])
   const handleZoneSelect = useCallback((zone) => {
     setSelectedZone(prev => (prev?.id === zone.id ? null : zone))
   }, [])
 
-  const handleCenter = useCallback(() => {
-    setZoom(100)
-  }, [])
+  // Toolbar actions
+  const handleCenter = useCallback(() => setZoom(100), [])
 
   const handleExport = useCallback(() => {
     const svg = document.querySelector('.warehouse-2d-view svg')
@@ -452,7 +454,6 @@ export default function Warehouse2DEditor({
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
       const link = document.createElement('a')
       link.download = `plano-nave-${dimensions.length}x${dimensions.width}.png`
       link.href = canvas.toDataURL('image/png')
@@ -460,34 +461,37 @@ export default function Warehouse2DEditor({
     }
 
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data)))
-  }, [dimensions])
+  }, [dimensions.length, dimensions.width])
 
-  const handlePrint = useCallback(() => {
-    window.print()
+  const handlePrint = useCallback(() => window.print(), [])
+
+  // ✅ Drag: preview (mientras arrastras)
+  const handleElementPreviewMove = useCallback((elementId, x, y) => {
+    setLocalElements(prev => applyElementPosition(prev, elementId, x, y))
   }, [])
 
-  // ✅ ESTE ES EL PUNTO CLAVE: al soltar un elemento, llamamos al optimizador
-  const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
-    // Seguridad
-    const current = elementsRef.current || []
-    const moved = current.find(e => e.id === elementId)
-    if (!moved) return
+  // ✅ Drag: start/end (para pausar analyze + optimizar al soltar)
+  const handleElementDragStart = useCallback(() => {
+    setIsDraggingElement(true)
+  }, [])
 
-    // 1) Actualizar localmente (feedback inmediato)
-    const optimistic = current.map(e =>
-      e.id === elementId ? { ...e, position: { ...(e.position || {}), x: newX, y: newY } } : e
-    )
+  const handleElementDragEnd = useCallback(async (elementId, x, y) => {
+    // 1) terminar drag y dejar posición final local
+    setIsDraggingElement(false)
+
+    const current = elementsRef.current || []
+    const optimistic = applyElementPosition(current, elementId, x, y)
     setLocalElements(optimistic)
 
-    // 2) Pedir al backend recolocación / re-optimización
-    const result = await full(dimensions, optimistic, elementId, { x: newX, y: newY })
-
-    // Si falla, nos quedamos en posición “optimistic” pero lo verás en optError
-    if (!result || !result.elements) return
-
-    // 3) Aplicar layout final del solver
-    setLocalElements(result.elements)
-    onElementsChange?.(result.elements)
+    // 2) optimizar con OR-Tools al soltar
+    const result = await full(dimensions, optimistic, elementId, { x, y })
+    if (result?.elements) {
+      setLocalElements(result.elements)
+      onElementsChange?.(result.elements)
+    } else {
+      // si falla, al menos mantenemos optimistic y notificamos
+      onElementsChange?.(optimistic)
+    }
   }, [dimensions, full, onElementsChange])
 
   const loadingAny = loadingAnalyze || optimizing
@@ -531,7 +535,6 @@ export default function Warehouse2DEditor({
           </Box>
         )}
 
-        {/* ✅ Mantienes el mismo SVG con cotas, y además ahora es draggable */}
         <Box
           sx={{
             width: '100%',
@@ -551,8 +554,11 @@ export default function Warehouse2DEditor({
             externalZones={backendZones}
             showGrid={showGrid}
             showDimensions={showDimensions}
-            zoom={zoom}
-            onElementMoveEnd={handleElementMoveEnd}
+
+            // ✅ DRAG REAL
+            onElementDragStart={handleElementDragStart}
+            onElementPreviewMove={handleElementPreviewMove}
+            onElementDragEnd={handleElementDragEnd}
           />
         </Box>
 
@@ -589,14 +595,7 @@ export default function Warehouse2DEditor({
           <Tooltip title="Mostrar Leyenda">
             <IconButton
               onClick={() => setShowLegend(true)}
-              sx={{
-                position: 'absolute',
-                top: 12,
-                right: 12,
-                bgcolor: 'white',
-                boxShadow: 2,
-                '&:hover': { bgcolor: '#f1f5f9' }
-              }}
+              sx={{ position: 'absolute', top: 12, right: 12, bgcolor: 'white', boxShadow: 2, '&:hover': { bgcolor: '#f1f5f9' } }}
             >
               <InfoIcon />
             </IconButton>
