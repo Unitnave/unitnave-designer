@@ -1,12 +1,11 @@
 /**
  * UNITNAVE Designer - Editor con Toggle 2D/3D
- * 
- * VERSIÓN CORREGIDA - Usa SmartWarehouse para edición 2D con:
- * - Drag & drop real (react-moveable)
- * - Re-optimización automática (OR-Tools backend)
- * - Undo/Redo
- * 
- * @version 2.1 - Con SmartWarehouse
+ *
+ * VERSIÓN DEFINITIVA:
+ * - 2D: Warehouse2DEditor (COTAS + DRAG + OR-Tools)
+ * - 3D: Warehouse3DEditor
+ *
+ * @version 2.2 - 2D Unificado (sin perder medidas)
  */
 
 import React, { useState, useCallback } from 'react'
@@ -18,8 +17,7 @@ import {
 
 // Componentes
 import Warehouse3DEditor from './Warehouse3DEditor'
-// CAMBIO CRÍTICO: Usar SmartWarehouse que SÍ tiene drag + OR-Tools
-import SmartWarehouse from './SmartWarehouse'
+import Warehouse2DEditor from './Warehouse2DEditor'   // ✅ ESTE ES EL 2D BUENO (con cotas)
 
 // ============================================================
 // SELECTOR DE MODO
@@ -59,7 +57,7 @@ function ViewModeSelector({ mode, onChange }) {
         }}
       >
         <ToggleButton value="2d">
-          <Tooltip title="Vista 2D - Editor con Drag & Drop">
+          <Tooltip title="Vista 2D - CAD con Cotas + Drag + OR-Tools">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <View2DIcon fontSize="small" />
               <Typography variant="caption" sx={{ fontWeight: 600 }}>
@@ -68,7 +66,7 @@ function ViewModeSelector({ mode, onChange }) {
             </Box>
           </Tooltip>
         </ToggleButton>
-        
+
         <ToggleButton value="3d">
           <Tooltip title="Vista 3D - Modelo Interactivo">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
@@ -95,33 +93,23 @@ export default function WarehouseEditorWithToggle({
   initialMode = '2d'
 }) {
   const [viewMode, setViewMode] = useState(initialMode)
-  
-  // Handler para cambiar de modo
+
   const handleModeChange = useCallback((newMode) => {
     setViewMode(newMode)
   }, [])
-  
-  // Switch desde 2D a 3D
-  const handleSwitch3D = useCallback(() => {
-    setViewMode('3d')
-  }, [])
-  
-  // Switch desde 3D a 2D
-  const handleSwitch2D = useCallback(() => {
-    setViewMode('2d')
-  }, [])
-  
+
+  const handleSwitch3D = useCallback(() => setViewMode('3d'), [])
+  const handleSwitch2D = useCallback(() => setViewMode('2d'), [])
+
   return (
     <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
-      {/* Selector de modo */}
       <ViewModeSelector mode={viewMode} onChange={handleModeChange} />
-      
-      {/* Vista según modo */}
+
       {viewMode === '2d' ? (
-        // CAMBIO: SmartWarehouse tiene drag + OR-Tools
-        <SmartWarehouse
+        <Warehouse2DEditor
           dimensions={dimensions}
-          initialElements={elements}
+          elements={elements}
+          onSwitch3D={handleSwitch3D}
           onElementsChange={onElementsChange}
         />
       ) : (
@@ -130,10 +118,10 @@ export default function WarehouseEditorWithToggle({
           elements={elements}
           machinery={machinery}
           onElementsChange={onElementsChange}
+          onSwitch2D={handleSwitch2D}
         />
       )}
-      
-      {/* Indicador de modo actual */}
+
       <Paper
         sx={{
           position: 'absolute',
@@ -147,7 +135,7 @@ export default function WarehouseEditorWithToggle({
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          zIndex: 100
+          zIndex: 1200
         }}
       >
         {viewMode === '2d' ? <View2DIcon fontSize="small" /> : <View3DIcon fontSize="small" />}
@@ -160,4 +148,4 @@ export default function WarehouseEditorWithToggle({
 }
 
 // Re-exportar componentes individuales
-export { Warehouse3DEditor, SmartWarehouse }
+export { Warehouse3DEditor, Warehouse2DEditor }

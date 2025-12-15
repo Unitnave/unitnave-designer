@@ -1,95 +1,103 @@
 /**
  * UNITNAVE Designer - Vista 2D CAD Profesional
- * 
- * Visualización en planta con todas las zonas definidas:
- * - Estanterías
- * - Muelles y zonas de maniobra
- * - Oficinas
- * - Zonas operativas
- * - Pasillos y zonas libres
- * - Servicios y zonas técnicas
- * 
- * @version 1.0
+ *
+ * ✅ Ahora con:
+ * - Cotas como antes
+ * - Drag & drop real de elementos (Moveable)
+ * - onElementMoveEnd(x,y) para re-optimizar en backend
+ *
+ * @version 2.1
  */
 
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import Moveable from 'react-moveable'
 import { Box, Typography } from '@mui/material'
 
 // ============================================================
 // COLORES POR TIPO DE ZONA (Estilo CAD profesional)
 // ============================================================
 const ZONE_COLORS = {
-  // Elementos principales
   shelf: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Estanterías' },
   dock: { fill: '#22c55e', stroke: '#15803d', label: 'Muelles' },
   dock_maneuver: { fill: '#86efac', stroke: '#22c55e', label: 'Zona Maniobra' },
   office: { fill: '#a855f7', stroke: '#7c3aed', label: 'Oficinas' },
-  
-  // Zonas operativas
+
   operational_zone: { fill: '#06b6d4', stroke: '#0891b2', label: 'Zona Operativa' },
   receiving: { fill: '#fbbf24', stroke: '#d97706', label: 'Recepción' },
   shipping: { fill: '#fb923c', stroke: '#ea580c', label: 'Expedición' },
   picking: { fill: '#f472b6', stroke: '#db2777', label: 'Picking' },
-  
-  // Servicios
+
   service_room: { fill: '#f59e0b', stroke: '#b45309', label: 'Servicios' },
   technical_room: { fill: '#ef4444', stroke: '#b91c1c', label: 'Sala Técnica' },
-  
-  // Pasillos y circulación
+
   aisle: { fill: '#e2e8f0', stroke: '#94a3b8', label: 'Pasillo Operativo' },
   main_aisle: { fill: '#fef3c7', stroke: '#f59e0b', label: 'Pasillo Principal' },
   cross_aisle: { fill: '#dbeafe', stroke: '#3b82f6', label: 'Pasillo Transversal' },
   circulation: { fill: '#dcfce7', stroke: '#22c55e', label: 'Zona Circulación' },
-  
-  // Estructura
+
   free_zone: { fill: '#f8fafc', stroke: '#cbd5e1', label: 'Zona Libre' },
   wall: { fill: '#64748b', stroke: '#475569', label: 'Muro' },
-  
-  // Selección
+
   selected: { fill: '#fef08a', stroke: '#eab308' },
   hover: { fill: '#bfdbfe', stroke: '#3b82f6' }
 }
 
 // ============================================================
+// HELPERS
+// ============================================================
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+// ✅ Qué zonas son “movibles” (elementos reales). NO pasillos, NO free_zone, NO dock_maneuver auto.
+const MOVABLE_TYPES = new Set([
+  'shelf',
+  'dock',
+  'office',
+  'service_room',
+  'technical_room',
+  'operational_zone',
+  'zone',
+  'receiving',
+  'shipping',
+  'picking'
+])
+
+// ============================================================
 // COMPONENTE ZONA INDIVIDUAL
 // ============================================================
-function Zone2D({ 
-  zone, 
-  scale, 
-  offset, 
-  isSelected, 
+function Zone2D({
+  zone,
+  scale,
+  offset,
+  isSelected,
   isHovered,
-  onMouseEnter, 
+  onMouseEnter,
   onMouseLeave,
-  onClick 
+  onClick
 }) {
   const { x, y, width, height, type, id, label, rotation = 0 } = zone
-  
-  // Obtener colores según estado
+
   const colors = useMemo(() => {
     if (isSelected) return ZONE_COLORS.selected
     if (isHovered) return ZONE_COLORS.hover
     return ZONE_COLORS[type] || ZONE_COLORS.free_zone
   }, [type, isSelected, isHovered])
-  
-  // Calcular posición en SVG (origen arriba-izquierda, Y invertido)
+
   const svgX = offset.x + (x * scale)
   const svgY = offset.y + (y * scale)
   const svgWidth = width * scale
   const svgHeight = height * scale
-  
-  // Centro para rotación
+
   const centerX = svgX + svgWidth / 2
   const centerY = svgY + svgHeight / 2
-  
+
   return (
     <g
+      className={`zone-target zone-${id}`}
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(zone)}
       style={{ cursor: 'pointer' }}
     >
-      {/* Rectángulo de la zona */}
       <rect
         x={svgX}
         y={svgY}
@@ -103,11 +111,9 @@ function Zone2D({
         ry={2}
         transform={rotation ? `rotate(${rotation}, ${centerX}, ${centerY})` : undefined}
       />
-      
-      {/* Patrón de estanterías */}
+
       {type === 'shelf' && svgWidth > 20 && svgHeight > 10 && (
         <g opacity={0.4}>
-          {/* Líneas internas para representar niveles */}
           {[0.25, 0.5, 0.75].map((pct, i) => (
             <line
               key={i}
@@ -122,8 +128,7 @@ function Zone2D({
           ))}
         </g>
       )}
-      
-      {/* Símbolo de muelle (puerta) */}
+
       {type === 'dock' && (
         <g>
           <rect
@@ -133,7 +138,6 @@ function Zone2D({
             height={3}
             fill="#15803d"
           />
-          {/* Flechas de flujo */}
           <path
             d={`M ${centerX} ${svgY + 8} L ${centerX - 5} ${svgY + 15} L ${centerX + 5} ${svgY + 15} Z`}
             fill={colors.stroke}
@@ -141,8 +145,7 @@ function Zone2D({
           />
         </g>
       )}
-      
-      {/* Etiqueta de la zona (solo si es lo suficientemente grande) */}
+
       {svgWidth > 30 && svgHeight > 20 && (
         <text
           x={centerX}
@@ -158,11 +161,9 @@ function Zone2D({
           {label || id}
         </text>
       )}
-      
-      {/* Dimensiones (mostrar en hover o selección) */}
+
       {(isHovered || isSelected) && (
         <g pointerEvents="none">
-          {/* Ancho arriba */}
           <text
             x={centerX}
             y={svgY - 6}
@@ -173,7 +174,6 @@ function Zone2D({
           >
             {width.toFixed(1)}m
           </text>
-          {/* Alto a la derecha */}
           <text
             x={svgX + svgWidth + 6}
             y={centerY}
@@ -196,13 +196,11 @@ function Zone2D({
 // ============================================================
 function DimensionLines({ dimensions, scale, offset }) {
   const { length, width } = dimensions
-  
   const svgLength = length * scale
   const svgWidth = width * scale
-  
+
   return (
     <g className="dimension-lines" pointerEvents="none">
-      {/* Cota horizontal (largo) - abajo */}
       <g>
         <line
           x1={offset.x}
@@ -226,8 +224,7 @@ function DimensionLines({ dimensions, scale, offset }) {
           {length.toFixed(1)} m
         </text>
       </g>
-      
-      {/* Cota vertical (ancho) - derecha */}
+
       <g>
         <line
           x1={offset.x + svgLength + 25}
@@ -262,11 +259,9 @@ function DimensionLines({ dimensions, scale, offset }) {
 // ============================================================
 function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
   const { length, width } = dimensions
-  
+
   const lines = useMemo(() => {
     const result = []
-    
-    // Líneas verticales
     for (let x = 0; x <= length; x += gridSize) {
       result.push({
         key: `v-${x}`,
@@ -277,8 +272,6 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
         major: x % (gridSize * 2) === 0
       })
     }
-    
-    // Líneas horizontales
     for (let y = 0; y <= width; y += gridSize) {
       result.push({
         key: `h-${y}`,
@@ -289,10 +282,9 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
         major: y % (gridSize * 2) === 0
       })
     }
-    
     return result
   }, [dimensions, scale, offset, gridSize])
-  
+
   return (
     <g className="grid-2d" pointerEvents="none">
       {lines.map(line => (
@@ -312,20 +304,20 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
 
 // ============================================================
 // FUNCIÓN PARA PROCESAR ELEMENTOS A ZONAS
+// (tal cual tu código)
 // ============================================================
 function processElementsToZones(elements, dimensions) {
   const zones = []
   const shelves = []
-  
+
   elements.forEach((el, index) => {
     const type = el.type
     const x = el.position?.x ?? 0
     const y = el.position?.y ?? el.position?.z ?? 0
     const rotation = el.rotation || 0
-    
-    // Determinar dimensiones según tipo
+
     let width, height
-    
+
     switch (type) {
       case 'shelf':
         width = el.dimensions?.length ?? 2.7
@@ -353,7 +345,7 @@ function processElementsToZones(elements, dimensions) {
         width = el.dimensions?.length ?? 3
         height = el.dimensions?.depth ?? el.dimensions?.width ?? 3
     }
-    
+
     const zoneData = {
       id: el.id,
       originalId: el.id,
@@ -367,16 +359,11 @@ function processElementsToZones(elements, dimensions) {
       area: width * height,
       element: el
     }
-    
-    // Zona principal del elemento
+
     zones.push(zoneData)
-    
-    // Guardar estanterías para calcular pasillos después
-    if (type === 'shelf') {
-      shelves.push(zoneData)
-    }
-    
-    // Añadir zona de maniobra para muelles
+
+    if (type === 'shelf') shelves.push(zoneData)
+
     if (type === 'dock') {
       const maneuverZone = el.dimensions?.maneuverZone ?? 4
       zones.push({
@@ -394,40 +381,29 @@ function processElementsToZones(elements, dimensions) {
       })
     }
   })
-  
-  // ============================================================
-  // DETECTAR PASILLOS AUTOMÁTICAMENTE
-  // ============================================================
+
   const aisles = detectAisles(shelves, dimensions, elements)
   aisles.forEach(aisle => zones.push(aisle))
-  
-  // Calcular zonas libres (simplificado - espacio no ocupado)
+
   const totalArea = dimensions.length * dimensions.width
   const occupiedArea = zones.reduce((sum, z) => sum + z.area, 0)
   const freeArea = totalArea - occupiedArea
-  
-  // Añadir información de zona libre como metadata
+
   zones.freeArea = freeArea
   zones.totalArea = totalArea
   zones.occupiedArea = occupiedArea
-  
+
   return zones
 }
 
 // ============================================================
-// ALGORITMO DE DETECCIÓN DE ESPACIOS LIBRES
-// Usando operaciones booleanas de polígonos (sin dependencias externas)
-// Implementación propia de Sutherland-Hodgman + scanline
+// (detectAisles + helpers) - tu código intacto
 // ============================================================
-
-/**
- * Convierte un elemento a polígono [x, y, width, height]
- */
 function elementToRect(el) {
   const x = el.position?.x ?? 0
   const y = el.position?.y ?? el.position?.z ?? 0
   let w, h
-  
+
   switch (el.type) {
     case 'shelf':
       w = el.dimensions?.length ?? 2.7
@@ -435,7 +411,7 @@ function elementToRect(el) {
       break
     case 'dock':
       w = el.dimensions?.width ?? 3.5
-      h = (el.dimensions?.depth ?? 0.5) + 4 // Incluir zona maniobra
+      h = (el.dimensions?.depth ?? 0.5) + 4
       break
     case 'office':
       w = el.dimensions?.length ?? el.dimensions?.largo ?? 12
@@ -455,22 +431,15 @@ function elementToRect(el) {
       w = el.dimensions?.length ?? 3
       h = el.dimensions?.depth ?? el.dimensions?.width ?? 3
   }
-  
+
   return { x, y, w, h, x2: x + w, y2: y + h, type: el.type }
 }
 
-/**
- * Algoritmo Scanline para detectar espacios libres
- * Divide el espacio en franjas horizontales y detecta huecos
- */
 function detectAisles(shelves, dimensions, allElements) {
   const zones = []
-  const PRECISION = 0.5 // Resolución de 0.5m
-  
-  // Convertir todos los elementos a rectángulos
+  const PRECISION = 0.5
   const obstacles = allElements.map(elementToRect)
-  
-  // Añadir zonas de maniobra de muelles como obstáculos
+
   allElements.forEach(el => {
     if (el.type === 'dock') {
       const x = el.position?.x ?? 0
@@ -485,104 +454,67 @@ function detectAisles(shelves, dimensions, allElements) {
       })
     }
   })
-  
-  // Obtener todos los puntos Y únicos (bordes horizontales)
+
   const yPoints = new Set([0, dimensions.width])
   obstacles.forEach(obs => {
     yPoints.add(Math.max(0, obs.y))
     yPoints.add(Math.min(dimensions.width, obs.y2))
   })
   const sortedY = [...yPoints].sort((a, b) => a - b)
-  
-  // Para cada franja horizontal, encontrar espacios libres
+
   const freeRects = []
-  
+
   for (let i = 0; i < sortedY.length - 1; i++) {
     const y1 = sortedY[i]
     const y2 = sortedY[i + 1]
     const stripHeight = y2 - y1
-    
     if (stripHeight < PRECISION) continue
-    
-    // Encontrar obstáculos que intersectan esta franja
-    const stripObstacles = obstacles.filter(obs => 
-      obs.y < y2 && obs.y2 > y1
-    ).sort((a, b) => a.x - b.x)
-    
-    // Encontrar huecos en X dentro de esta franja
+
+    const stripObstacles = obstacles.filter(obs => obs.y < y2 && obs.y2 > y1).sort((a, b) => a.x - b.x)
     let currentX = 0
-    
+
     stripObstacles.forEach(obs => {
       if (obs.x > currentX) {
-        // Hay un hueco desde currentX hasta obs.x
-        freeRects.push({
-          x: currentX,
-          y: y1,
-          width: obs.x - currentX,
-          height: stripHeight
-        })
+        freeRects.push({ x: currentX, y: y1, width: obs.x - currentX, height: stripHeight })
       }
       currentX = Math.max(currentX, obs.x2)
     })
-    
-    // Hueco final hasta el borde derecho
+
     if (currentX < dimensions.length) {
-      freeRects.push({
-        x: currentX,
-        y: y1,
-        width: dimensions.length - currentX,
-        height: stripHeight
-      })
+      freeRects.push({ x: currentX, y: y1, width: dimensions.length - currentX, height: stripHeight })
     }
   }
-  
-  // ============================================================
-  // FUSIONAR RECTÁNGULOS ADYACENTES VERTICALMENTE
-  // ============================================================
+
   const mergedRects = mergeVerticalRects(freeRects, PRECISION)
-  
-  // ============================================================
-  // CLASIFICAR CADA RECTÁNGULO LIBRE
-  // ============================================================
+
   mergedRects.forEach((rect, index) => {
     const { x, y, width, height } = rect
     const area = width * height
-    
-    // Ignorar espacios muy pequeños
     if (area < 1) return
-    
-    // Clasificar según forma y tamaño
-    const aspectRatio = width / height
+
     let type, label
-    
-    // Pasillos: estrechos y largos
+
     if (width <= 4 && height > 6) {
-      // Pasillo vertical (entre columnas de estanterías)
       type = width >= 3 ? 'cross_aisle' : 'aisle'
       label = width >= 3 ? 'Pasillo Transversal' : 'Pasillo Operativo'
     } else if (height <= 4 && width > 6) {
-      // Pasillo horizontal (entre filas)
       type = height >= 3 ? 'main_aisle' : 'aisle'
       label = height >= 3 ? 'Pasillo Principal' : 'Pasillo Operativo'
     } else if (width <= 5 || height <= 5) {
-      // Pasillo pequeño
       type = 'aisle'
       label = 'Pasillo'
     } else if (area > 100) {
-      // Zona grande de circulación
       type = 'circulation'
-      // Determinar posición para etiqueta
       if (y < 10) label = 'Zona Circulación Norte'
       else if (y > dimensions.width - 15) label = 'Zona Circulación Sur'
       else if (x < 10) label = 'Zona Circulación Oeste'
       else if (x > dimensions.length - 15) label = 'Zona Circulación Este'
       else label = 'Zona Circulación'
     } else {
-      // Zona libre genérica
       type = 'free_zone'
       label = 'Zona Libre'
     }
-    
+
     zones.push({
       id: `free-${index}`,
       originalId: `free-${index}`,
@@ -597,43 +529,30 @@ function detectAisles(shelves, dimensions, allElements) {
       isAutoGenerated: true
     })
   })
-  
+
   return zones
 }
 
-/**
- * Fusiona rectángulos que son adyacentes verticalmente y tienen el mismo X y ancho
- */
 function mergeVerticalRects(rects, tolerance) {
   if (rects.length === 0) return []
-  
-  // Agrupar por X y ancho similares
   const groups = new Map()
-  
+
   rects.forEach(rect => {
-    // Crear clave basada en X y ancho (con tolerancia)
     const keyX = Math.round(rect.x / tolerance) * tolerance
     const keyW = Math.round(rect.width / tolerance) * tolerance
     const key = `${keyX}-${keyW}`
-    
-    if (!groups.has(key)) {
-      groups.set(key, [])
-    }
+    if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(rect)
   })
-  
+
   const merged = []
-  
+
   groups.forEach(group => {
-    // Ordenar por Y
     group.sort((a, b) => a.y - b.y)
-    
     let current = { ...group[0] }
-    
+
     for (let i = 1; i < group.length; i++) {
       const next = group[i]
-      
-      // Si son adyacentes (o casi), fusionar
       if (Math.abs(next.y - (current.y + current.height)) <= tolerance) {
         current.height = (next.y + next.height) - current.y
       } else {
@@ -643,40 +562,29 @@ function mergeVerticalRects(rects, tolerance) {
     }
     merged.push(current)
   })
-  
-  // Segunda pasada: fusionar horizontalmente rectángulos con misma Y y altura
+
   return mergeHorizontalRects(merged, tolerance)
 }
 
-/**
- * Fusiona rectángulos que son adyacentes horizontalmente y tienen el mismo Y y altura
- */
 function mergeHorizontalRects(rects, tolerance) {
   if (rects.length === 0) return []
-  
   const groups = new Map()
-  
+
   rects.forEach(rect => {
     const keyY = Math.round(rect.y / tolerance) * tolerance
     const keyH = Math.round(rect.height / tolerance) * tolerance
     const key = `${keyY}-${keyH}`
-    
-    if (!groups.has(key)) {
-      groups.set(key, [])
-    }
+    if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(rect)
   })
-  
+
   const merged = []
-  
   groups.forEach(group => {
     group.sort((a, b) => a.x - b.x)
-    
     let current = { ...group[0] }
-    
+
     for (let i = 1; i < group.length; i++) {
       const next = group[i]
-      
       if (Math.abs(next.x - (current.x + current.width)) <= tolerance) {
         current.width = (next.x + next.width) - current.x
       } else {
@@ -686,74 +594,68 @@ function mergeHorizontalRects(rects, tolerance) {
     }
     merged.push(current)
   })
-  
+
   return merged
 }
 
 // ============================================================
 // COMPONENTE PRINCIPAL
 // ============================================================
-export default function Warehouse2DView({ 
-  dimensions = { length: 80, width: 40, height: 10 }, 
+export default function Warehouse2DView({
+  dimensions = { length: 80, width: 40, height: 10 },
   elements = [],
   onZoneSelect,
   onZoneHover,
   selectedZoneId,
   hoveredZoneId,
-  externalZones = null  // Zonas precalculadas del backend (geometría exacta)
+  externalZones = null,
+  showGrid = true,
+  showDimensions = true,
+  zoom = 100,
+  onElementMoveEnd
 }) {
   const containerRef = useRef(null)
+  const svgRef = useRef(null)
+
   const [viewBox, setViewBox] = useState({ width: 800, height: 500 })
   const [internalHover, setInternalHover] = useState(null)
   const [internalSelected, setInternalSelected] = useState(null)
-  
-  // Usar hover/selected externos si están disponibles, sino internos
+
   const effectiveHover = hoveredZoneId ?? internalHover
   const effectiveSelected = selectedZoneId ?? internalSelected
-  
-  // Procesar elementos a zonas (local)
+
   const localZones = useMemo(() => {
     return processElementsToZones(elements, dimensions)
   }, [elements, dimensions])
-  
-  // Usar zonas externas (backend) si están disponibles, sino locales
+
   const zones = useMemo(() => {
     if (externalZones && externalZones.length > 0) {
-      // Combinar zonas de elementos (no auto-generadas) + zonas del backend
       const elementZones = localZones.filter(z => !z.isAutoGenerated)
       const backendAutoZones = externalZones.filter(z => z.isAutoGenerated)
       const result = [...elementZones, ...backendAutoZones]
-      
-      // Copiar métricas
       result.freeArea = externalZones.freeArea || localZones.freeArea
       result.totalArea = externalZones.totalArea || localZones.totalArea
       result.occupiedArea = externalZones.occupiedArea || localZones.occupiedArea
-      
       return result
     }
     return localZones
   }, [externalZones, localZones])
-  
-  // Calcular escala y offset para centrar
+
+  // ✅ Importante: “scale” aquí es px_por_metro dentro del SVG (antes del zoom CSS)
   const { scale, offset } = useMemo(() => {
     const padding = 80
     const availableWidth = viewBox.width - padding * 2
     const availableHeight = viewBox.height - padding * 2
-    
     const scaleX = availableWidth / dimensions.length
     const scaleY = availableHeight / dimensions.width
-    const scale = Math.min(scaleX, scaleY)
-    
-    const offsetX = (viewBox.width - dimensions.length * scale) / 2
-    const offsetY = (viewBox.height - dimensions.width * scale) / 2
-    
-    return { 
-      scale, 
-      offset: { x: offsetX, y: offsetY } 
-    }
+    const baseScale = Math.min(scaleX, scaleY)
+    const offsetX = (viewBox.width - dimensions.length * baseScale) / 2
+    const offsetY = (viewBox.height - dimensions.width * baseScale) / 2
+    return { scale: baseScale, offset: { x: offsetX, y: offsetY } }
   }, [viewBox, dimensions])
-  
-  // Ajustar viewBox al contenedor
+
+  const zoomFactor = zoom / 100
+
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
@@ -764,94 +666,81 @@ export default function Warehouse2DView({
         })
       }
     }
-    
     updateSize()
     window.addEventListener('resize', updateSize)
     return () => window.removeEventListener('resize', updateSize)
   }, [])
-  
-  // Handlers
+
   const handleZoneMouseEnter = useCallback((id) => {
     setInternalHover(id)
     onZoneHover?.(id)
   }, [onZoneHover])
-  
+
   const handleZoneMouseLeave = useCallback(() => {
     setInternalHover(null)
     onZoneHover?.(null)
   }, [onZoneHover])
-  
+
   const handleZoneClick = useCallback((zone) => {
     setInternalSelected(zone.id)
     onZoneSelect?.(zone)
   }, [onZoneSelect])
-  
+
+  // ============================================================
+  // ✅ MOVEABLE SOBRE EL ELEMENTO SELECCIONADO (SI ES MOVIBLE)
+  // ============================================================
+  const selectedZone = useMemo(() => zones.find(z => z.id === effectiveSelected) || null, [zones, effectiveSelected])
+
+  const isSelectedMovable = !!selectedZone
+    && !!selectedZone.element
+    && !selectedZone.isAutoGenerated
+    && MOVABLE_TYPES.has(selectedZone.type)
+    && selectedZone.type !== 'dock_maneuver'
+
+  const selectedTarget = useMemo(() => {
+    if (!isSelectedMovable || !svgRef.current) return null
+    return svgRef.current.querySelector(`.zone-${selectedZone.id}`)
+  }, [isSelectedMovable, selectedZone?.id])
+
+  const dragStartRef = useRef({ x: 0, y: 0, w: 0, h: 0 })
+
   return (
-    <Box 
+    <Box
       ref={containerRef}
-      sx={{ 
-        width: '100%', 
-        height: '100%', 
+      sx={{
+        width: '100%',
+        height: '100%',
         bgcolor: '#fafafa',
         position: 'relative',
         overflow: 'hidden'
       }}
     >
       <svg
+        ref={svgRef}
         width="100%"
         height="100%"
         viewBox={`0 0 ${viewBox.width} ${viewBox.height}`}
-        style={{ 
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace"
-        }}
+        style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace" }}
       >
-        {/* Definiciones (markers para cotas) */}
         <defs>
-          <marker
-            id="arrow-start"
-            markerWidth="8"
-            markerHeight="8"
-            refX="0"
-            refY="4"
-            orient="auto"
-          >
+          <marker id="arrow-start" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
             <path d="M8,0 L0,4 L8,8" fill="none" stroke="#1e40af" strokeWidth="1" />
           </marker>
-          <marker
-            id="arrow-end"
-            markerWidth="8"
-            markerHeight="8"
-            refX="8"
-            refY="4"
-            orient="auto"
-          >
+          <marker id="arrow-end" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
             <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1e40af" strokeWidth="1" />
           </marker>
-          
-          {/* Patrón de sombra suave */}
+
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="2" dy="2" stdDeviation="3" floodOpacity="0.15" />
           </filter>
         </defs>
-        
-        {/* Fondo */}
-        <rect 
-          x={0} 
-          y={0} 
-          width={viewBox.width} 
-          height={viewBox.height} 
-          fill="#fafafa" 
-        />
-        
-        {/* Grid */}
-        <Grid2D 
-          dimensions={dimensions} 
-          scale={scale} 
-          offset={offset} 
-          gridSize={5}
-        />
-        
-        {/* Perímetro de la nave */}
+
+        <rect x={0} y={0} width={viewBox.width} height={viewBox.height} fill="#fafafa" />
+
+        {showGrid && (
+          <Grid2D dimensions={dimensions} scale={scale} offset={offset} gridSize={5} />
+        )}
+
         <rect
           x={offset.x}
           y={offset.y}
@@ -862,10 +751,8 @@ export default function Warehouse2DView({
           strokeWidth={3}
           filter="url(#shadow)"
         />
-        
-        {/* Zonas - ordenadas por tipo para que las importantes estén arriba */}
+
         <g className="zones">
-          {/* PRIMERO: Pasillos y zonas de circulación (fondo) */}
           {zones.filter(z => ['aisle', 'main_aisle', 'cross_aisle', 'circulation'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
@@ -879,8 +766,7 @@ export default function Warehouse2DView({
               onClick={handleZoneClick}
             />
           ))}
-          
-          {/* Zonas de maniobra */}
+
           {zones.filter(z => z.type === 'dock_maneuver').map(zone => (
             <Zone2D
               key={zone.id}
@@ -894,8 +780,7 @@ export default function Warehouse2DView({
               onClick={handleZoneClick}
             />
           ))}
-          
-          {/* Zonas operativas */}
+
           {zones.filter(z => ['operational_zone', 'zone', 'receiving', 'shipping', 'picking'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
@@ -909,8 +794,7 @@ export default function Warehouse2DView({
               onClick={handleZoneClick}
             />
           ))}
-          
-          {/* Oficinas y servicios */}
+
           {zones.filter(z => ['office', 'service_room', 'technical_room'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
@@ -924,8 +808,7 @@ export default function Warehouse2DView({
               onClick={handleZoneClick}
             />
           ))}
-          
-          {/* Estanterías */}
+
           {zones.filter(z => z.type === 'shelf').map(zone => (
             <Zone2D
               key={zone.id}
@@ -939,8 +822,7 @@ export default function Warehouse2DView({
               onClick={handleZoneClick}
             />
           ))}
-          
-          {/* Muelles (arriba de todo) */}
+
           {zones.filter(z => z.type === 'dock').map(zone => (
             <Zone2D
               key={zone.id}
@@ -955,22 +837,17 @@ export default function Warehouse2DView({
             />
           ))}
         </g>
-        
-        {/* Cotas generales */}
-        <DimensionLines 
-          dimensions={dimensions} 
-          scale={scale} 
-          offset={offset} 
-        />
-        
-        {/* Norte indicator */}
+
+        {showDimensions && (
+          <DimensionLines dimensions={dimensions} scale={scale} offset={offset} />
+        )}
+
         <g transform={`translate(${viewBox.width - 50}, 50)`}>
           <circle cx={0} cy={0} r={20} fill="#f1f5f9" stroke="#64748b" strokeWidth={1} />
           <path d="M0,-15 L5,10 L0,5 L-5,10 Z" fill="#374151" />
           <text x={0} y={-22} textAnchor="middle" fontSize={10} fontWeight={600} fill="#374151">N</text>
         </g>
-        
-        {/* Escala gráfica */}
+
         <g transform={`translate(${offset.x}, ${offset.y + dimensions.width * scale + 60})`}>
           <rect x={0} y={0} width={10 * scale} height={6} fill="#374151" />
           <rect x={10 * scale} y={0} width={10 * scale} height={6} fill="#94a3b8" />
@@ -978,12 +855,11 @@ export default function Warehouse2DView({
           <text x={10 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">10m</text>
           <text x={20 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">20m</text>
         </g>
-        
-        {/* Título */}
-        <text 
-          x={viewBox.width / 2} 
-          y={25} 
-          textAnchor="middle" 
+
+        <text
+          x={viewBox.width / 2}
+          y={25}
+          textAnchor="middle"
           fontSize={14}
           fontWeight={700}
           fill="#1f2937"
@@ -991,8 +867,65 @@ export default function Warehouse2DView({
           PLANO DE PLANTA - {dimensions.length}m × {dimensions.width}m ({(dimensions.length * dimensions.width).toLocaleString()}m²)
         </text>
       </svg>
-      
-      {/* Info overlay */}
+
+      {/* ✅ MOVEABLE: drag real (sin regex). */}
+      {isSelectedMovable && selectedTarget && (
+        <Moveable
+          target={selectedTarget}
+          draggable={true}
+          origin={false}
+          snappable={true}
+          // Snap en metros -> px; OJO: el SVG luego se escala por zoom CSS, por eso dividimos al convertir.
+          snapGridWidth={0.5 * scale}
+          snapGridHeight={0.5 * scale}
+          bounds={{
+            left: offset.x,
+            top: offset.y,
+            right: offset.x + dimensions.length * scale,
+            bottom: offset.y + dimensions.width * scale
+          }}
+          onDragStart={() => {
+            // Guardamos el “origen” en metros para sumar deltas
+            dragStartRef.current = {
+              x: selectedZone.x,
+              y: selectedZone.y,
+              w: selectedZone.width,
+              h: selectedZone.height
+            }
+          }}
+          onDrag={(e) => {
+            // ✅ Solución correcta para SVG: beforeTranslate + setAttribute
+            e.target.setAttribute('transform', `translate(${e.beforeTranslate[0]}, ${e.beforeTranslate[1]})`)
+          }}
+          onDragEnd={(e) => {
+            const last = e.lastEvent
+            const bt = last?.beforeTranslate || e.beforeTranslate || [0, 0]
+            const dxPx = bt[0]
+            const dyPx = bt[1]
+
+            // Convertimos px -> metros.
+            // Como el SVG está escalado por CSS (zoom), dividimos por zoomFactor antes de pasar a metros.
+            const dxMeters = (dxPx / zoomFactor) / scale
+            const dyMeters = (dyPx / zoomFactor) / scale
+
+            const start = dragStartRef.current
+
+            let newX = start.x + dxMeters
+            let newY = start.y + dyMeters
+
+            // Clamp para no salir del perímetro (en metros)
+            newX = clamp(newX, 0, dimensions.length - start.w)
+            newY = clamp(newY, 0, dimensions.width - start.h)
+
+            // Limpieza del transform temporal
+            e.target.removeAttribute('transform')
+
+            // 🔥 Notificamos al editor para que llame a OR-Tools y reubique
+            onElementMoveEnd?.(selectedZone.id, newX, newY)
+          }}
+        />
+      )}
+
       <Box
         sx={{
           position: 'absolute',
@@ -1008,9 +941,7 @@ export default function Warehouse2DView({
         }}
       >
         <Typography variant="caption" sx={{ fontWeight: 600, color: '#374151' }}>
-          Zonas: {zones.length} | 
-          Ocupado: {zones.occupiedArea?.toFixed(0) || 0}m² | 
-          Libre: {zones.freeArea?.toFixed(0) || 0}m²
+          Zonas: {zones.length} | Ocupado: {zones.occupiedArea?.toFixed(0) || 0}m² | Libre: {zones.freeArea?.toFixed(0) || 0}m²
         </Typography>
       </Box>
     </Box>
