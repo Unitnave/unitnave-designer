@@ -23,6 +23,7 @@
  * - Colores por tipo de elemento
  */
 
+
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
 import Moveable from 'react-moveable'
 import 'react-moveable/dist/moveable.css'
@@ -86,7 +87,7 @@ const ELEMENT_COLORS: Record<string, { fill: string; stroke: string; label: stri
   unknown: { fill: '#94a3b8', stroke: '#64748b', label: 'Elemento', icon: '❓' }
 }
 
-const SNAP_GRID = 0.5 // 0.5m snap - MUY IMPORTANTE
+const SNAP_GRID = 0.5 // 0.5m snap - 
 const SUPPRESS_CLICK_MS = 180 // por elemento, no global
 
 // ============================================================
