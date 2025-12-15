@@ -45,7 +45,8 @@ import {
   History as HistoryIcon
 } from '@mui/icons-material'
 
-import { useUndoRedo } from '../../hooks/useUndoRedo'
+import { useUndoRedo } from '../../hooks/useUndoRedo.js'
+
 
 // ============================================================
 // CONFIGURACIÓN
