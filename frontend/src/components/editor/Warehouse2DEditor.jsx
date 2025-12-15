@@ -6,10 +6,10 @@
  * - Leyenda lateral interactiva (ZonesLegend)
  * - Toolbar con controles
  * - Sincronización hover/selección
- * - Cálculo exacto de zonas via backend (Shapely)
- * - ✅ Drag & drop de elementos + re-optimización (OR-Tools backend)
+ * - Cálculo exacto de zonas via backend (Shapely) /analyze
+ * - ✅ Drag real (en Warehouse2DView) + re-optimización (OR-Tools backend) /full
  *
- * @version 2.2 - Unificado: COTAS + DRAG REAL + ORTOOLS
+ * @version 2.2 - Completo: COTAS + DRAG + ORTOOLS
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -47,16 +47,16 @@ const API_URL = import.meta.env.VITE_API_URL || 'https://unitnave-designer-produ
 
 // ============================================================
 // HOOK PARA OBTENER ZONAS DEL BACKEND (Geometría Exacta)
-// 👇 IMPORTANTÍSIMO: si estamos arrastrando, NO llamamos al backend
+// - pause=true => no llama (útil mientras arrastras)
 // ============================================================
-function useBackendZones(dimensions, elements, isDraggingElement) {
+function useBackendZones(dimensions, elements, pause = false) {
   const [backendZones, setBackendZones] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    if (isDraggingElement) return
+    if (pause) return
 
     if (!elements || elements.length === 0) {
       setBackendZones(null)
@@ -81,6 +81,7 @@ function useBackendZones(dimensions, elements, isDraggingElement) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const data = await response.json()
+        // console.log('📐 Geometría exacta recibida:', data.zones?.length, 'zonas')
 
         const convertedZones = (data.zones || []).map(zone => ({
           ...zone,
@@ -94,15 +95,14 @@ function useBackendZones(dimensions, elements, isDraggingElement) {
       } catch (err) {
         setError(err?.message || 'Analyze error')
         setBackendZones(null)
-        setMetrics(null)
       } finally {
         setLoading(false)
       }
     }
 
-    const t = setTimeout(fetchZones, 250)
-    return () => clearTimeout(t)
-  }, [dimensions.length, dimensions.width, elements, isDraggingElement])
+    const timeoutId = setTimeout(fetchZones, 300)
+    return () => clearTimeout(timeoutId)
+  }, [dimensions.length, dimensions.width, elements, pause])
 
   return { backendZones, metrics, loading, error }
 }
@@ -251,7 +251,11 @@ function Toolbar2D({
         <IconButton
           size="small"
           onClick={onSwitch3D}
-          sx={{ bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}
+          sx={{
+            bgcolor: 'primary.main',
+            color: 'white',
+            '&:hover': { bgcolor: 'primary.dark' }
+          }}
         >
           <View3DIcon fontSize="small" />
         </IconButton>
@@ -268,9 +272,9 @@ function Toolbar2D({
 function SelectedZoneInfo({ zone, dimensions }) {
   if (!zone) return null
 
-  const colors = ZONE_COLORS[zone.type] || ZONE_COLORS.free_zone
+  const colors = ZONE_COLORS?.[zone.type] || ZONE_COLORS?.free_zone || { fill: '#94a3b8', stroke: '#475569' }
   const totalArea = dimensions.length * dimensions.width
-  const percentage = ((zone.area / totalArea) * 100).toFixed(2)
+  const percentage = totalArea > 0 ? ((zone.area / totalArea) * 100).toFixed(2) : '0.00'
 
   return (
     <Paper
@@ -289,7 +293,7 @@ function SelectedZoneInfo({ zone, dimensions }) {
         display: 'flex',
         alignItems: 'center',
         gap: 3,
-        minWidth: 400
+        minWidth: 420
       }}
     >
       <Box
@@ -304,14 +308,14 @@ function SelectedZoneInfo({ zone, dimensions }) {
           justifyContent: 'center'
         }}
       >
-        <Typography sx={{ color: 'white', fontWeight: 700, fontSize: 14 }}>
-          {zone.type.charAt(0).toUpperCase()}
+        <Typography sx={{ color: 'white', fontWeight: 800, fontSize: 14 }}>
+          {zone.type?.charAt(0)?.toUpperCase?.() || '?'}
         </Typography>
       </Box>
 
       <Box sx={{ flex: 1 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1f2937' }}>
-          {zone.label}
+        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1f2937' }}>
+          {zone.label || zone.id}
         </Typography>
         <Typography variant="caption" sx={{ color: '#64748b' }}>
           {colors.label || zone.type}
@@ -319,56 +323,34 @@ function SelectedZoneInfo({ zone, dimensions }) {
       </Box>
 
       <Box sx={{ textAlign: 'center' }}>
-        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e40af', lineHeight: 1 }}>
-          {zone.width.toFixed(1)}m × {zone.height.toFixed(1)}m
+        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 800, color: '#1e40af', lineHeight: 1 }}>
+          {Number(zone.width || 0).toFixed(1)}m × {Number(zone.height || 0).toFixed(1)}m
         </Typography>
-        <Typography variant="caption" sx={{ color: '#64748b' }}>
-          Dimensiones
-        </Typography>
+        <Typography variant="caption" sx={{ color: '#64748b' }}>Dimensiones</Typography>
       </Box>
 
       <Box sx={{ textAlign: 'center' }}>
-        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 700, color: '#059669', lineHeight: 1 }}>
-          {zone.area.toFixed(1)}m²
+        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 800, color: '#059669', lineHeight: 1 }}>
+          {Number(zone.area || 0).toFixed(1)}m²
         </Typography>
-        <Typography variant="caption" sx={{ color: '#64748b' }}>
-          Superficie
-        </Typography>
+        <Typography variant="caption" sx={{ color: '#64748b' }}>Superficie</Typography>
       </Box>
 
       <Box sx={{ textAlign: 'center' }}>
-        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed', lineHeight: 1 }}>
+        <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 800, color: '#7c3aed', lineHeight: 1 }}>
           {percentage}%
         </Typography>
-        <Typography variant="caption" sx={{ color: '#64748b' }}>
-          del Total
-        </Typography>
+        <Typography variant="caption" sx={{ color: '#64748b' }}>del Total</Typography>
       </Box>
 
       <Box sx={{ textAlign: 'center' }}>
-        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#374151', lineHeight: 1 }}>
-          ({zone.x.toFixed(1)}, {zone.y.toFixed(1)})
+        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700, color: '#374151', lineHeight: 1 }}>
+          ({Number(zone.x || 0).toFixed(1)}, {Number(zone.y || 0).toFixed(1)})
         </Typography>
-        <Typography variant="caption" sx={{ color: '#64748b' }}>
-          Posición
-        </Typography>
+        <Typography variant="caption" sx={{ color: '#64748b' }}>Posición</Typography>
       </Box>
     </Paper>
   )
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-function applyElementPosition(list, elementId, x, y) {
-  return (list || []).map(e => {
-    if (e.id !== elementId) return e
-    const pos = e.position || { x: 0, y: 0 }
-    return {
-      ...e,
-      position: { ...pos, x, y, z: y } // mantenemos compatibilidad y/z
-    }
-  })
 }
 
 // ============================================================
@@ -380,43 +362,40 @@ export default function Warehouse2DEditor({
   onSwitch3D,
   onElementsChange
 }) {
-  // Estado LOCAL de elementos (es el que se mueve)
+  // ✅ ÚNICA fuente de verdad en el editor
   const [localElements, setLocalElements] = useState(elements || [])
   const elementsRef = useRef(localElements)
 
-  // Estado de drag (para PAUSAR analyze durante drag)
-  const [isDraggingElement, setIsDraggingElement] = useState(false)
-
-  // Sync cuando llegan elements nuevos desde fuera
   useEffect(() => {
     setLocalElements(elements || [])
   }, [elements])
 
-  // Ref siempre actualizado (evita closures viejas)
   useEffect(() => {
     elementsRef.current = localElements
   }, [localElements])
 
-  // UI
+  // Estado UI
   const [hoveredZoneId, setHoveredZoneId] = useState(null)
   const [selectedZone, setSelectedZone] = useState(null)
   const [showGrid, setShowGrid] = useState(true)
   const [showDimensions, setShowDimensions] = useState(true)
   const [zoom, setZoom] = useState(100)
   const [showLegend, setShowLegend] = useState(true)
+  const [isDraggingElement, setIsDraggingElement] = useState(false)
 
-  // Backend analyze (zonas exactas) — usando localElements
+  // Backend: full (OR-Tools)
+  const { optimizing, optError, full } = useLayoutFullAPI()
+
+  // Backend: analyze (Shapely) -> pausamos mientras arrastras
   const { backendZones, metrics, loading: loadingAnalyze, error } =
     useBackendZones(dimensions, localElements, isDraggingElement)
 
-  // Backend full (optimización al mover)
-  const { optimizing, optError, full } = useLayoutFullAPI()
-
-  // Zonas locales fallback
+  // Local zones (fallback / para elementos reales)
   const localZones = useMemo(() => {
     return processElementsToZones(localElements, dimensions)
   }, [localElements, dimensions])
 
+  // Zonas a mostrar (combina elementos reales + backend auto-zones)
   const zones = useMemo(() => {
     if (backendZones && backendZones.length > 0) {
       const elementZones = localZones.filter(z => !z.isAutoGenerated)
@@ -425,26 +404,40 @@ export default function Warehouse2DEditor({
     return localZones
   }, [backendZones, localZones])
 
+  // Métricas
+  const displayMetrics = useMemo(() => {
+    if (metrics) return metrics
+    const totalArea = dimensions.length * dimensions.width
+    const occupiedArea = localZones.occupiedArea || 0
+    const freeArea = localZones.freeArea ?? (totalArea - occupiedArea)
+    const efficiency = totalArea > 0 ? ((occupiedArea / totalArea) * 100).toFixed(1) : '0.0'
+    return { totalArea, occupiedArea, freeArea, efficiency }
+  }, [metrics, localZones, dimensions])
+
+  // Zona seleccionada completa
   const selectedZoneData = useMemo(() => {
     if (!selectedZone) return null
     return zones.find(z => z.id === selectedZone.id) || selectedZone
   }, [selectedZone, zones])
 
-  // Handlers hover/select
+  // Handlers hover/selección
   const handleZoneHover = useCallback((id) => setHoveredZoneId(id), [])
   const handleZoneSelect = useCallback((zone) => {
     setSelectedZone(prev => (prev?.id === zone.id ? null : zone))
   }, [])
 
-  // Toolbar actions
+  // Center
   const handleCenter = useCallback(() => setZoom(100), [])
 
+  // Export
   const handleExport = useCallback(() => {
     const svg = document.querySelector('.warehouse-2d-view svg')
     if (!svg) return
 
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
     const data = new XMLSerializer().serializeToString(svg)
     const img = new Image()
 
@@ -454,6 +447,7 @@ export default function Warehouse2DEditor({
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
       const link = document.createElement('a')
       link.download = `plano-nave-${dimensions.length}x${dimensions.width}.png`
       link.href = canvas.toDataURL('image/png')
@@ -461,44 +455,65 @@ export default function Warehouse2DEditor({
     }
 
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data)))
-  }, [dimensions.length, dimensions.width])
+  }, [dimensions])
 
+  // Print
   const handlePrint = useCallback(() => window.print(), [])
 
-  // ✅ Drag: preview (mientras arrastras)
-  const handleElementPreviewMove = useCallback((elementId, x, y) => {
-    setLocalElements(prev => applyElementPosition(prev, elementId, x, y))
-  }, [])
-
-  // ✅ Drag: start/end (para pausar analyze + optimizar al soltar)
-  const handleElementDragStart = useCallback(() => {
-    setIsDraggingElement(true)
-  }, [])
-
-  const handleElementDragEnd = useCallback(async (elementId, x, y) => {
-    // 1) terminar drag y dejar posición final local
-    setIsDraggingElement(false)
-
+  // ============================================================
+  // ✅ PUNTO CLAVE: AL SOLTAR UN ELEMENTO -> ORTOOLS
+  // (Warehouse2DView llama a onElementMoveEnd(id, x, y))
+  // ============================================================
+  const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
     const current = elementsRef.current || []
-    const optimistic = applyElementPosition(current, elementId, x, y)
+    const moved = current.find(e => e.id === elementId)
+    if (!moved) return
+
+    // 1) Optimistic local update (feedback inmediato)
+    const optimistic = current.map(e =>
+      e.id === elementId ? { ...e, position: { ...(e.position || {}), x: newX, y: newY } } : e
+    )
     setLocalElements(optimistic)
 
-    // 2) optimizar con OR-Tools al soltar
-    const result = await full(dimensions, optimistic, elementId, { x, y })
-    if (result?.elements) {
-      setLocalElements(result.elements)
-      onElementsChange?.(result.elements)
-    } else {
-      // si falla, al menos mantenemos optimistic y notificamos
-      onElementsChange?.(optimistic)
-    }
+    // 2) Backend solver
+    const result = await full(dimensions, optimistic, elementId, { x: newX, y: newY })
+    if (!result || !result.elements) return
+
+    // 3) Aplicar solución final
+    setLocalElements(result.elements)
+    onElementsChange?.(result.elements)
   }, [dimensions, full, onElementsChange])
 
   const loadingAny = loadingAnalyze || optimizing
 
+  // (Debug opcional) sample backendZones
+  // useEffect(() => {
+  //   if (!backendZones) return
+  //   console.log('backendZones sample:',
+  //     JSON.stringify(backendZones.slice(0, 10).map(z => ({ id: z.id, type: z.type, isAutoGenerated: z.isAutoGenerated })), null, 2)
+  //   )
+  // }, [backendZones])
+
   return (
-    <Box sx={{ width: '100%', height: '100%', display: 'flex', position: 'relative', bgcolor: '#f8fafc' }}>
-      <Box className="warehouse-2d-view" sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        position: 'relative',
+        bgcolor: '#f8fafc'
+      }}
+    >
+      {/* Área principal */}
+      <Box
+        className="warehouse-2d-view"
+        sx={{
+          flex: 1,
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
+        {/* Toolbar */}
         <Toolbar2D
           showGrid={showGrid}
           onToggleGrid={() => setShowGrid(p => !p)}
@@ -513,21 +528,24 @@ export default function Warehouse2DEditor({
           loadingAny={loadingAny}
         />
 
+        {/* Loading overlay */}
         {loadingAny && (
-          <Box sx={{
-            position: 'absolute',
-            top: 70,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 200,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            bgcolor: 'rgba(255,255,255,0.9)',
-            px: 2,
-            py: 0.5,
-            borderRadius: 1
-          }}>
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 70,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 200,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              bgcolor: 'rgba(255,255,255,0.92)',
+              px: 2,
+              py: 0.75,
+              borderRadius: 1
+            }}
+          >
             <CircularProgress size={16} />
             <Typography variant="caption">
               {optimizing ? 'Optimizando (OR-Tools)...' : 'Calculando geometría exacta...'}
@@ -535,13 +553,14 @@ export default function Warehouse2DEditor({
           </Box>
         )}
 
+        {/* Vista 2D con zoom visual */}
         <Box
           sx={{
             width: '100%',
             height: '100%',
             transform: `scale(${zoom / 100})`,
             transformOrigin: 'center center',
-            transition: 'transform 0.2s ease'
+            transition: 'transform 0.15s ease'
           }}
         >
           <Warehouse2DView
@@ -554,14 +573,17 @@ export default function Warehouse2DEditor({
             externalZones={backendZones}
             showGrid={showGrid}
             showDimensions={showDimensions}
+            zoom={zoom}
 
-            // ✅ DRAG REAL
-            onElementDragStart={handleElementDragStart}
-            onElementPreviewMove={handleElementPreviewMove}
-            onElementDragEnd={handleElementDragEnd}
+            // ✅ DRAG REAL (nombre correcto)
+            onElementMoveEnd={handleElementMoveEnd}
+
+            // ✅ para pausar analyze mientras arrastras
+            onDraggingChange={setIsDraggingElement}
           />
         </Box>
 
+        {/* Chips de estado */}
         {backendZones && (
           <Chip
             label="📐 Geometría Exacta"
@@ -589,13 +611,42 @@ export default function Warehouse2DEditor({
           />
         )}
 
+        {/* Métricas resumen */}
+        <Paper
+          elevation={2}
+          sx={{
+            position: 'absolute',
+            bottom: 16,
+            left: 16,
+            px: 2,
+            py: 1,
+            borderRadius: 1,
+            bgcolor: 'rgba(255,255,255,0.92)',
+            fontFamily: 'monospace',
+            zIndex: 120
+          }}
+        >
+          <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151' }}>
+            Total: {Number(displayMetrics.totalArea || 0).toFixed(0)}m² | Ocupado: {Number(displayMetrics.occupiedArea || 0).toFixed(0)}m² | Libre: {Number(displayMetrics.freeArea || 0).toFixed(0)}m² | Eficiencia: {displayMetrics.efficiency || '0.0'}%
+          </Typography>
+        </Paper>
+
+        {/* Info de zona seleccionada */}
         <SelectedZoneInfo zone={selectedZoneData} dimensions={dimensions} />
 
+        {/* Toggle leyenda */}
         {!showLegend && (
           <Tooltip title="Mostrar Leyenda">
             <IconButton
               onClick={() => setShowLegend(true)}
-              sx={{ position: 'absolute', top: 12, right: 12, bgcolor: 'white', boxShadow: 2, '&:hover': { bgcolor: '#f1f5f9' } }}
+              sx={{
+                position: 'absolute',
+                top: 12,
+                right: 12,
+                bgcolor: 'white',
+                boxShadow: 2,
+                '&:hover': { bgcolor: '#f1f5f9' }
+              }}
             >
               <InfoIcon />
             </IconButton>
@@ -603,6 +654,7 @@ export default function Warehouse2DEditor({
         )}
       </Box>
 
+      {/* Leyenda lateral */}
       {showLegend && (
         <Box sx={{ position: 'relative' }}>
           <IconButton
