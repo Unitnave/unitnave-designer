@@ -7,9 +7,9 @@
  * - Toolbar con controles
  * - Sincronización hover/selección
  * - Cálculo exacto de zonas via backend (Shapely) /analyze
- * - ✅ RE-OPTIMIZACIÓN COMPLETA al mover (WarehouseOptimizer) /reoptimize
+ * - ✅ RE-OPTIMIZACIÓN INTELIGENTE con zonas prohibidas /reoptimize_smart
  *
- * @version 3.0.0 - NUEVO: Usa /api/layout/reoptimize para regenerar layout completo
+ * @version 4.0.0 - NUEVO: Usa /api/layout/reoptimize_smart con forbidden zones
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -54,7 +54,7 @@ const derr = (...args) => DEBUG_2D && console.error(...args)
 const API_URL = import.meta.env.VITE_API_URL || 'https://unitnave-designer-production.up.railway.app'
 
 // ============================================================
-// Helpers saneado
+// Helpers
 // ============================================================
 const isFiniteNumber = (v) => Number.isFinite(v)
 const toPosNumber = (v, fallback) => (isFiniteNumber(v) && v > 0 ? v : fallback)
@@ -109,7 +109,6 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
 
   const input = Array.isArray(rawElements) ? rawElements : []
   const out = []
-  const problems = []
 
   for (const el of input) {
     if (!el?.id) continue
@@ -122,24 +121,6 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
     const x1 = clamp(x0, 0, Math.max(0, length - w))
     const y1 = clamp(y0raw, 0, Math.max(0, width - h))
 
-    const hadIssue =
-      (!isFiniteNumber(x0) || !isFiniteNumber(y0raw)) ||
-      w <= 0 || h <= 0 ||
-      x0 !== x1 || y0raw !== y1 ||
-      x0 < 0 || y0raw < 0 ||
-      (x0 + w) > length || (y0raw + h) > width
-
-    if (hadIssue) {
-      problems.push({
-        id: el.id,
-        type: el.type,
-        x: x0, y: y0raw, w, h,
-        length, width,
-        fixedX: x1, fixedY: y1,
-        reason
-      })
-    }
-
     out.push({
       ...el,
       position: {
@@ -148,12 +129,6 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
         y: y1
       }
     })
-  }
-
-  if (problems.length) {
-    dwarn('[2DEditor][sanitize] elementos con problemas -> corregidos:', problems.slice(0, 10))
-  } else {
-    dlog('[2DEditor][sanitize] OK (sin problemas)', { count: out.length, reason })
   }
 
   return out
@@ -182,7 +157,6 @@ function useBackendZones(dimensions, elements, pause = false) {
       setError(null)
 
       try {
-        dlog('[2DEditor][analyze] POST', `${API_URL}/api/layout/analyze`)
         const response = await fetch(`${API_URL}/api/layout/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -195,7 +169,6 @@ function useBackendZones(dimensions, elements, pause = false) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const data = await response.json()
-        dlog('[2DEditor][analyze] OK zones:', data?.zones?.length ?? 0)
 
         const convertedZones = (data.zones || []).map(zone => ({
           ...zone,
@@ -223,67 +196,30 @@ function useBackendZones(dimensions, elements, pause = false) {
 }
 
 // ============================================================
-// ✅ NUEVO: HOOK PARA RE-OPTIMIZACIÓN COMPLETA
-// Llama al nuevo endpoint /api/layout/reoptimize
+// ✅ NUEVO: HOOK PARA RE-OPTIMIZACIÓN INTELIGENTE CON ZONAS PROHIBIDAS
 // ============================================================
-function useLayoutReoptimize() {
+function useLayoutReoptimizeSmart() {
   const [optimizing, setOptimizing] = useState(false)
   const [optError, setOptError] = useState(null)
 
-  const reoptimize = useCallback(async (config, movedId, movedPos) => {
+  const reoptimize = useCallback(async (config, currentElements, movedId, movedPos, forbiddenZones) => {
     setOptimizing(true)
     setOptError(null)
 
     try {
-      console.log('🔄 [2DEditor][reoptimize] POST', `${API_URL}/api/layout/reoptimize`)
-      console.log('🔄 [2DEditor][reoptimize] Config:', config)
-      console.log('🔄 [2DEditor][reoptimize] Moved:', movedId, movedPos)
+      console.log('🧠 [2DEditor][reoptimize_smart] POST', `${API_URL}/api/layout/reoptimize_smart`)
+      console.log('🧠 [2DEditor][reoptimize_smart] Moved:', movedId, movedPos)
+      console.log('🧠 [2DEditor][reoptimize_smart] Forbidden zones:', forbiddenZones.length)
       
-      const response = await fetch(`${API_URL}/api/layout/reoptimize`, {
+      const response = await fetch(`${API_URL}/api/layout/reoptimize_smart`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // Dimensiones
-          length: config.dimensions?.length || config.length || 80,
-          width: config.dimensions?.width || config.width || 40,
-          height: config.dimensions?.height || config.height || 10,
-          
-          // Configuración de maquinaria
-          machinery: config.machinery || 'retractil',
-          
-          // Configuración de palet
-          pallet_type: config.pallet_type || config.palletType || 'EUR',
-          pallet_height: config.pallet_height || config.palletHeight || 1.5,
-          
-          // Muelles
-          n_docks: config.n_docks || config.dockConfig?.count || 4,
-          
-          // Tipo de actividad
-          activity_type: config.activity_type || config.activityType || 'industrial',
-          
-          // Trabajadores
-          workers: config.workers || null,
-          
-          // Configuración de oficinas
-          office_config: config.office_config || config.officeConfig || null,
-          
-          // Configuración de muelles
-          dock_config: config.dock_config || config.dockConfig || null,
-          
-          // Preferencias
-          preferences: config.preferences || {
-            include_offices: true,
-            include_services: true,
-            include_docks: true,
-            include_technical: true,
-            priority: 'balance',
-            warehouse_type: config.activity_type || 'industrial',
-            enable_abc_zones: false
-          },
-          
-          // Elemento movido
           moved_element_id: movedId,
-          moved_position: movedPos
+          moved_position: movedPos,
+          originalConfig: config,
+          currentElements: currentElements,
+          forbiddenZones: forbiddenZones
         })
       })
 
@@ -293,10 +229,13 @@ function useLayoutReoptimize() {
       }
 
       const json = await response.json()
-      console.log('✅ [2DEditor][reoptimize] OK', { elements: json?.elements?.length ?? null })
+      console.log('✅ [2DEditor][reoptimize_smart] OK', { 
+        elements: json?.elements?.length,
+        solve_time_ms: json?.solve_time_ms 
+      })
       return json
     } catch (err) {
-      console.error('❌ [2DEditor][reoptimize] ERROR:', err)
+      console.error('❌ [2DEditor][reoptimize_smart] ERROR:', err)
       setOptError(err?.message || 'Reoptimize error')
       return null
     } finally {
@@ -305,6 +244,85 @@ function useLayoutReoptimize() {
   }, [])
 
   return { optimizing, optError, reoptimize }
+}
+
+// ============================================================
+// ✅ FUNCIÓN PARA EXTRAER ZONAS PROHIBIDAS
+// ============================================================
+function extractForbiddenZones(elements, backendZones) {
+  const forbidden = []
+  
+  // 1. Muelles (siempre prohibidos)
+  elements.filter(el => el.type === 'dock').forEach(el => {
+    forbidden.push({
+      id: el.id,
+      type: 'dock',
+      x: el.position?.x || 0,
+      y: el.position?.y || 0,
+      width: el.dimensions?.width || 3.5,
+      height: el.dimensions?.depth || 4.0
+    })
+  })
+  
+  // 2. Oficinas (siempre prohibidas)
+  elements.filter(el => el.type === 'office').forEach(el => {
+    forbidden.push({
+      id: el.id,
+      type: 'office',
+      x: el.position?.x || 0,
+      y: el.position?.y || 0,
+      width: el.dimensions?.length || el.dimensions?.largo || 12,
+      height: el.dimensions?.width || el.dimensions?.ancho || 8
+    })
+  })
+  
+  // 3. Zonas de maniobra
+  elements.filter(el => 
+    el.type === 'operational_zone' || 
+    el.type === 'zone' ||
+    el.properties?.type === 'maneuver' ||
+    el.properties?.type === 'maniobra'
+  ).forEach(el => {
+    forbidden.push({
+      id: el.id,
+      type: 'maneuver_zone',
+      x: el.position?.x || 0,
+      y: el.position?.y || 0,
+      width: el.dimensions?.length || el.dimensions?.largo || 10,
+      height: el.dimensions?.width || el.dimensions?.ancho || 10
+    })
+  })
+  
+  // 4. Pasillos del backend (si están disponibles)
+  if (backendZones && backendZones.length > 0) {
+    backendZones
+      .filter(z => z.type === 'aisle' || z.type === 'pasillo' || z.label?.toLowerCase().includes('pasillo'))
+      .forEach(z => {
+        forbidden.push({
+          id: z.id,
+          type: 'aisle',
+          x: z.x || z.position?.x || 0,
+          y: z.y || z.position?.y || 0,
+          width: z.width || z.dimensions?.length || 5,
+          height: z.height || z.dimensions?.width || 5
+        })
+      })
+  }
+  
+  // 5. Bloque de servicios
+  elements.filter(el => el.type === 'service_room' || el.type === 'technical_room').forEach(el => {
+    forbidden.push({
+      id: el.id,
+      type: 'service',
+      x: el.position?.x || 0,
+      y: el.position?.y || 0,
+      width: el.dimensions?.length || el.dimensions?.largo || 6,
+      height: el.dimensions?.width || el.dimensions?.ancho || 4
+    })
+  })
+  
+  console.log('🚫 [extractForbiddenZones]', forbidden.length, 'zonas prohibidas')
+  return forbidden
 }
 
 // ============================================================
@@ -524,18 +542,19 @@ export default function Warehouse2DEditor({
   elements = [],
   onSwitch3D,
   onElementsChange,
-  // ✅ NUEVO: Parámetros originales del wizard para re-optimización
   originalConfig = null
 }) {
   // Estado local de elementos
   const [localElements, setLocalElements] = useState(() => sanitizeElements(elements || [], dimensions, 'init'))
   const elementsRef = useRef(localElements)
   const skipNextPropsSyncRef = useRef(false)
+  
+  // Guardar posición original antes del drag
+  const originalPositionRef = useRef(null)
 
   // Sincronización con props
   useEffect(() => {
     if (skipNextPropsSyncRef.current) {
-      dlog('[2DEditor][props-change] SKIPPED')
       skipNextPropsSyncRef.current = false
       return
     }
@@ -556,8 +575,8 @@ export default function Warehouse2DEditor({
   const [showLegend, setShowLegend] = useState(true)
   const [isDraggingElement, setIsDraggingElement] = useState(false)
 
-  // ✅ NUEVO: Hook de re-optimización completa
-  const { optimizing, optError, reoptimize } = useLayoutReoptimize()
+  // ✅ Hook de re-optimización inteligente
+  const { optimizing, optError, reoptimize } = useLayoutReoptimizeSmart()
 
   // Backend: analyze (Shapely)
   const { backendZones, metrics, loading: loadingAnalyze, error } =
@@ -629,7 +648,23 @@ export default function Warehouse2DEditor({
   }, [dimensions])
 
   // ============================================================
-  // ✅ PUNTO CLAVE: AL SOLTAR UN ELEMENTO -> RE-OPTIMIZAR TODO
+  // ✅ GUARDAR POSICIÓN ORIGINAL AL EMPEZAR A ARRASTRAR
+  // ============================================================
+  const handleDragStart = useCallback((elementId) => {
+    const current = elementsRef.current || []
+    const el = current.find(e => e.id === elementId)
+    if (el) {
+      originalPositionRef.current = {
+        id: elementId,
+        x: el.position?.x || 0,
+        y: el.position?.y || 0
+      }
+      console.log('📍 [2DEditor][dragStart] Posición original guardada:', originalPositionRef.current)
+    }
+  }, [])
+
+  // ============================================================
+  // ✅ AL SOLTAR UN ELEMENTO -> RE-OPTIMIZAR CON ZONAS PROHIBIDAS
   // ============================================================
   const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
     console.log('🎯 [2DEditor][onElementMoveEnd] recibido:', elementId, { x: newX, y: newY })
@@ -655,37 +690,50 @@ export default function Warehouse2DEditor({
     setLocalElements(optimistic)
     console.log('🎯 [2DEditor][onElementMoveEnd] optimistic update aplicado')
 
-    // 2) Construir configuración para re-optimización
+    // 2) Construir configuración
     const config = originalConfig || {
-      dimensions,
-      machinery: 'retractil',
-      n_docks: 4,
-      pallet_type: 'EUR',
-      activity_type: 'industrial'
+      length: dimensions.length,
+      width: dimensions.width,
+      height: dimensions.height || 10,
+      machinery: 'retractil'
     }
 
-    console.log('🔄 [2DEditor][onElementMoveEnd] Llamando a /api/layout/reoptimize...')
-    console.log('🔄 [2DEditor][onElementMoveEnd] Config:', config)
+    // 3) Extraer zonas prohibidas (muelles, oficinas, pasillos, zonas de maniobra)
+    const forbiddenZones = extractForbiddenZones(current, backendZones)
 
-    // 3) Llamar al backend para re-optimizar
-    const result = await reoptimize(config, elementId, { x: safeX, y: safeY })
+    console.log('🧠 [2DEditor][onElementMoveEnd] Llamando a /api/layout/reoptimize_smart...')
+    console.log('🧠 [2DEditor][onElementMoveEnd] Zonas prohibidas:', forbiddenZones.length)
 
-    if (!result || !result.elements) {
-      console.warn('⚠️ [2DEditor][reoptimize] Sin resultado. Se mantiene posición optimistic.')
-      // Mantener la posición optimistic si falla
-      onElementsChange?.(optimistic)
+    // 4) Llamar al backend para re-optimizar
+    const result = await reoptimize(config, current, elementId, { x: safeX, y: safeY }, forbiddenZones)
+
+    if (!result || result.status !== 'success') {
+      console.warn('⚠️ [2DEditor][reoptimize_smart] Sin resultado válido. Volviendo a posición original.')
+      
+      // Volver a la posición original
+      if (originalPositionRef.current && originalPositionRef.current.id === elementId) {
+        const revert = current.map(e =>
+          e.id === elementId 
+            ? { ...e, position: { ...(e.position || {}), x: originalPositionRef.current.x, y: originalPositionRef.current.y } } 
+            : e
+        )
+        skipNextPropsSyncRef.current = true
+        setLocalElements(revert)
+        console.log('↩️ [2DEditor] Elemento devuelto a posición original')
+      }
       return
     }
 
-    // 4) Aplicar resultado del backend
+    // 5) Aplicar resultado del backend
     const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-reoptimize')
     
     skipNextPropsSyncRef.current = true
     setLocalElements(sanitizedFromBackend)
     console.log('✅ [2DEditor][onElementMoveEnd] Nuevo layout aplicado:', sanitizedFromBackend.length, 'elementos')
+    console.log('⏱️ [2DEditor] Tiempo de solve:', result.solve_time_ms, 'ms')
 
     onElementsChange?.(sanitizedFromBackend)
-  }, [dimensions, reoptimize, onElementsChange, originalConfig])
+  }, [dimensions, reoptimize, onElementsChange, originalConfig, backendZones])
 
   const loadingAny = loadingAnalyze || optimizing
 
@@ -743,7 +791,7 @@ export default function Warehouse2DEditor({
           >
             <CircularProgress size={16} />
             <Typography variant="caption">
-              {optimizing ? '🔄 Re-optimizando layout completo...' : 'Calculando geometría exacta...'}
+              {optimizing ? '🧠 Re-optimizando con OR-Tools...' : 'Calculando geometría exacta...'}
             </Typography>
           </Box>
         )}
@@ -771,6 +819,7 @@ export default function Warehouse2DEditor({
             zoom={zoom}
             onElementMoveEnd={handleElementMoveEnd}
             onDraggingChange={setIsDraggingElement}
+            onDragStart={handleDragStart}
           />
         </Box>
 
@@ -795,7 +844,7 @@ export default function Warehouse2DEditor({
 
         {optError && (
           <Chip
-            label={`❌ Reoptimize: ${optError}`}
+            label={`❌ ${optError.substring(0, 30)}...`}
             size="small"
             color="error"
             sx={{ position: 'absolute', top: 84, left: 12, zIndex: 100, fontSize: '11px' }}

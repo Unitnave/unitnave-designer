@@ -1196,6 +1196,110 @@ except ImportError as e:
     logger.warning(f"⚠️ Endpoint reoptimize no disponible: {e}")
 
 
+# ==================== REOPTIMIZE SMART (CON ZONAS PROHIBIDAS) ====================
+
+class ReoptimizeSmartRequest(BaseModel):
+    """Request para re-optimización inteligente con zonas prohibidas"""
+    moved_element_id: str = Field(..., description="ID del elemento movido")
+    moved_position: Dict[str, float] = Field(..., description="Nueva posición {x, y}")
+    originalConfig: Dict[str, Any] = Field(..., description="Configuración original del wizard")
+    currentElements: List[Dict[str, Any]] = Field(..., description="Elementos actuales")
+    forbiddenZones: List[Dict[str, Any]] = Field(default=[], description="Zonas prohibidas")
+
+
+@app.post("/api/layout/reoptimize_smart")
+async def reoptimize_smart(req: ReoptimizeSmartRequest):
+    """
+    🧠 Re-optimiza el layout con zonas prohibidas.
+    
+    - El elemento movido PUEDE estar en cualquier posición (incluso zonas prohibidas)
+    - El resto de estanterías se re-organizan evitando las zonas prohibidas
+    - Si no hay solución factible, devuelve error
+    
+    Zonas prohibidas típicas:
+    - Pasillos principales
+    - Zonas de maniobra de muelles
+    - Oficinas
+    - Muelles
+    """
+    try:
+        logger.info("=" * 60)
+        logger.info("🧠 /api/layout/reoptimize_smart LLAMADO")
+        logger.info(f"   Elemento movido: {req.moved_element_id}")
+        logger.info(f"   Nueva posición: {req.moved_position}")
+        logger.info(f"   Elementos actuales: {len(req.currentElements)}")
+        logger.info(f"   Zonas prohibidas: {len(req.forbiddenZones)}")
+        logger.info("=" * 60)
+        
+        # Obtener dimensiones de la config
+        length = req.originalConfig.get('length', 80)
+        width = req.originalConfig.get('width', 40)
+        
+        # Crear optimizador OR-Tools
+        from optimizer_ortools import LayoutOptimizer
+        optimizer = LayoutOptimizer(length=length, width=width)
+        
+        # Ejecutar optimización con zonas prohibidas
+        result = optimizer.optimize(
+            elements=req.currentElements,
+            moved_element_id=req.moved_element_id,
+            moved_position=req.moved_position,
+            forbidden_zones=req.forbiddenZones,
+            max_time_seconds=5.0
+        )
+        
+        result_dict = result.to_dict()
+        
+        if not result_dict.get('success'):
+            logger.warning(f"⚠️ No se encontró solución: {result_dict.get('messages')}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"No cabe en esa posición: {result_dict.get('messages', ['Sin solución'])}"
+            )
+        
+        logger.info(f"✅ Re-optimización exitosa en {result_dict.get('solve_time_ms', 0):.0f}ms")
+        
+        # Convertir elementos a formato frontend
+        elements_out = []
+        for el in result_dict.get('elements', []):
+            elements_out.append({
+                'id': el['id'],
+                'type': el['type'],
+                'position': {
+                    'x': el['x'],
+                    'y': el['y'],
+                    'z': 0
+                },
+                'dimensions': {
+                    'length': el['width'],
+                    'depth': el['height'],
+                    'height': 10
+                },
+                'rotation': el.get('rotation', 0),
+                'was_moved': el.get('was_moved', False)
+            })
+        
+        return {
+            "status": "success",
+            "elements": elements_out,
+            "solver_status": result_dict.get('solver_status'),
+            "solve_time_ms": result_dict.get('solve_time_ms'),
+            "moved_element": req.moved_element_id,
+            "moved_position": req.moved_position
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error en reoptimize_smart: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+REOPTIMIZE_SMART_AVAILABLE = True
+logger.info("✅ Endpoint /api/layout/reoptimize_smart cargado")
+
+
 # ==================== STARTUP ====================
 
 @app.on_event("startup")

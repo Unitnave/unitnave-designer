@@ -108,7 +108,8 @@ class LayoutOptimizer:
         moved_position: Optional[Dict[str, float]] = None,
         fixed_elements: Optional[List[str]] = None,
         optimize_picking: bool = True,
-        max_time_seconds: float = 5.0
+        max_time_seconds: float = 5.0,
+        forbidden_zones: Optional[List[Dict[str, Any]]] = None
     ) -> OptimizationResult:
         """
         Optimiza el layout completo
@@ -184,6 +185,10 @@ class LayoutOptimizer:
         
         # Añadir restricciones de pasillo mínimo
         self._add_aisle_constraints(model, positions, parsed_elements)
+        
+        # ✅ NUEVO: Añadir restricciones de zonas prohibidas
+        if forbidden_zones:
+            self._add_forbidden_zones_constraints(model, positions, moved_element_id, forbidden_zones)
         
         # Función objetivo: minimizar distancia de picking
         if optimize_picking:
@@ -389,6 +394,79 @@ class LayoutOptimizer:
                 rows.append([el])
         
         return rows
+    
+    def _add_forbidden_zones_constraints(
+        self,
+        model: cp_model.CpModel,
+        positions: Dict,
+        moved_element_id: Optional[str],
+        zones: List[Dict]
+    ):
+        """
+        Añade restricciones para que las estanterías NO entren en zonas prohibidas.
+        
+        Las zonas prohibidas incluyen:
+        - Pasillos principales
+        - Zonas de maniobra de muelles
+        - Oficinas
+        - Muelles
+        
+        El elemento movido (moved_element_id) PUEDE pisar estas zonas,
+        el resto DEBE mantenerse fuera.
+        
+        Args:
+            model: Modelo CP-SAT
+            positions: Dict con variables de posición de cada elemento
+            moved_element_id: ID del elemento que el usuario movió (puede pisar zonas)
+            zones: Lista de zonas prohibidas [{id, x, y, width, height}] en metros
+        """
+        logger.info(f"🚫 Añadiendo {len(zones)} zonas prohibidas")
+        
+        for zone in zones:
+            zone_id = zone.get('id', 'unknown')
+            zone_x = zone.get('x', 0)
+            zone_y = zone.get('y', 0)
+            zone_w = zone.get('width', 0)
+            zone_h = zone.get('height', 0)
+            
+            # Convertir a milímetros
+            zx1 = int(zone_x * SCALE)
+            zy1 = int(zone_y * SCALE)
+            zx2 = int((zone_x + zone_w) * SCALE)
+            zy2 = int((zone_y + zone_h) * SCALE)
+            
+            for el_id, pos in positions.items():
+                # Solo aplicar a estanterías
+                if pos['type'] != 'shelf':
+                    continue
+                
+                # El elemento movido PUEDE pisar la zona
+                if el_id == moved_element_id:
+                    continue
+                
+                # El resto DEBE estar FUERA de la zona prohibida
+                # Crear variables booleanas para las 4 condiciones de "estar fuera"
+                b_left = model.NewBoolVar(f'{el_id}_left_of_{zone_id}')
+                b_right = model.NewBoolVar(f'{el_id}_right_of_{zone_id}')
+                b_above = model.NewBoolVar(f'{el_id}_above_{zone_id}')
+                b_below = model.NewBoolVar(f'{el_id}_below_{zone_id}')
+                
+                # Elemento a la izquierda de la zona: x + w <= zone_x1
+                model.Add(pos['x'] + pos['w'] <= zx1).OnlyEnforceIf(b_left)
+                
+                # Elemento a la derecha de la zona: x >= zone_x2
+                model.Add(pos['x'] >= zx2).OnlyEnforceIf(b_right)
+                
+                # Elemento arriba de la zona: y + h <= zone_y1
+                model.Add(pos['y'] + pos['h'] <= zy1).OnlyEnforceIf(b_above)
+                
+                # Elemento debajo de la zona: y >= zone_y2
+                model.Add(pos['y'] >= zy2).OnlyEnforceIf(b_below)
+                
+                # Al menos UNA de las condiciones debe cumplirse (estar fuera)
+                model.AddBoolOr([b_left, b_right, b_above, b_below])
+        
+        logger.info(f"✅ Restricciones de zonas prohibidas añadidas")
     
     def _add_picking_objective(
         self,
