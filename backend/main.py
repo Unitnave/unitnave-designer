@@ -9,7 +9,7 @@ ARCHIVO: backend/main.py
 import os
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request, status
