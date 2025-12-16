@@ -118,6 +118,26 @@ function ManualDesignMode({ onSwitchToWizard, onSwitchToEditor }) {
 
   const is3DView = viewMode === '3D'
 
+  const originalConfig = {
+    length: dimensions?.length || 80,
+    width: dimensions?.width || 40,
+    height: dimensions?.height || 10,
+    machinery: machinery || 'retractil',
+    n_docks: elements?.filter(e => e.type === 'dock')?.length || 4,
+    pallet_type: 'EUR',
+    pallet_height: 1.5,
+    activity_type: 'industrial',
+    preferences: {
+      include_offices: true,
+      include_services: true,
+      include_docks: true,
+      include_technical: true,
+      priority: 'balance',
+      warehouse_type: 'industrial',
+      enable_abc_zones: false
+    }
+  }
+
   return (
     <div className="app" style={{ background: '#ffffff' }}>
       <header style={{
@@ -844,6 +864,7 @@ function App() {
               initialMode="2d"
               sessionId={sessionId}
               userName={userName}
+              originalConfig={originalConfig}
             />
           </Box>
           

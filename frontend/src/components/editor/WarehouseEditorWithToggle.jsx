@@ -1,10 +1,10 @@
 /**
  * UNITNAVE Designer - Editor con Toggle 2D/3D
  *
- * - 2D: Warehouse2DEditor
+ * - 2D: Warehouse2DEditor (con re-optimización completa)
  * - 3D: Warehouse3DEditor
  *
- * @version 2.2
+ * @version 3.0 - Pasa originalConfig para re-optimización
  */
 
 import React, { useState, useCallback } from 'react'
@@ -55,7 +55,7 @@ function ViewModeSelector({ mode, onChange }) {
         }}
       >
         <ToggleButton value="2d">
-          <Tooltip title="Vista 2D - CAD con Cotas + Drag + OR-Tools">
+          <Tooltip title="Vista 2D - CAD con Cotas + Drag + Re-Optimización">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <View2DIcon fontSize="small" />
               <Typography variant="caption" sx={{ fontWeight: 600 }}>
@@ -88,7 +88,9 @@ export default function WarehouseEditorWithToggle({
   elements = [],
   machinery = 'retractil',
   onElementsChange,
-  initialMode = '2d'
+  initialMode = '2d',
+  // ✅ NUEVO: Parámetros originales del wizard para re-optimización completa
+  originalConfig = null
 }) {
   const [viewMode, setViewMode] = useState(initialMode)
 
@@ -98,6 +100,25 @@ export default function WarehouseEditorWithToggle({
 
   const handleSwitch3D = useCallback(() => setViewMode('3d'), [])
   const handleSwitch2D = useCallback(() => setViewMode('2d'), [])
+
+  // Construir config por defecto si no se proporciona
+  const effectiveConfig = originalConfig || {
+    dimensions,
+    machinery,
+    n_docks: 4,
+    pallet_type: 'EUR',
+    pallet_height: 1.5,
+    activity_type: 'industrial',
+    preferences: {
+      include_offices: true,
+      include_services: true,
+      include_docks: true,
+      include_technical: true,
+      priority: 'balance',
+      warehouse_type: 'industrial',
+      enable_abc_zones: false
+    }
+  }
 
   return (
     <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -109,6 +130,8 @@ export default function WarehouseEditorWithToggle({
           elements={elements}
           onSwitch3D={handleSwitch3D}
           onElementsChange={onElementsChange}
+          // ✅ NUEVO: Pasar config para re-optimización
+          originalConfig={effectiveConfig}
         />
       ) : (
         <Warehouse3DEditor

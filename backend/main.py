@@ -1185,12 +1185,23 @@ async def full_layout_analysis(request: FullLayoutRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== REOPTIMIZE ENDPOINT (NUEVO) ====================
+try:
+    from reoptimize_endpoint import add_reoptimize_endpoint
+    add_reoptimize_endpoint(app)
+    REOPTIMIZE_AVAILABLE = True
+    logger.info("✅ Endpoint /api/layout/reoptimize cargado")
+except ImportError as e:
+    REOPTIMIZE_AVAILABLE = False
+    logger.warning(f"⚠️ Endpoint reoptimize no disponible: {e}")
+
+
 # ==================== STARTUP ====================
 
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 80)
-    logger.info("🏭 UNITNAVE Designer API v6.3 - Motor CAD Profesional")
+    logger.info("🏭 UNITNAVE Designer API v6.3.1 - Motor CAD Profesional + Reoptimize")
     logger.info("🎯 LOGGING ULTRA-DETALLADO ACTIVADO")
     logger.info("🌐 CORS WEBSOCKET MIDDLEWARE ACTIVADO")
     logger.info("🔍 DEBUG ENDPOINT ACTIVADO: /debug/websocket-diagnosis")
@@ -1203,6 +1214,7 @@ async def startup():
     logger.info(f"🧮 Optimizador (OR-Tools): {ORTOOLS_AVAILABLE}")
     logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
     logger.info(f"🔌 WebSocket Interactivo: {WEBSOCKET_AVAILABLE}")
+    logger.info(f"🔄 Reoptimize Endpoint: {REOPTIMIZE_AVAILABLE}")
     logger.info("=" * 80)
 
 

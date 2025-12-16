@@ -7,9 +7,9 @@
  * - Toolbar con controles
  * - Sincronización hover/selección
  * - Cálculo exacto de zonas via backend (Shapely) /analyze
- * - ✅ Drag real + re-optimización (OR-Tools backend) /full
+ * - ✅ RE-OPTIMIZACIÓN COMPLETA al mover (WarehouseOptimizer) /reoptimize
  *
- * @version 2.3.1 - FIX: skipNextPropsSyncRef para evitar que props-change pise el drag
+ * @version 3.0.0 - NUEVO: Usa /api/layout/reoptimize para regenerar layout completo
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -62,8 +62,6 @@ const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 
 function getElementWH(el) {
   const type = el?.type
-  // ⚠️ OJO: esto debe seguir la misma lógica que processElementsToZones del View
-  // para que clamp sea coherente.
   if (!el) return { w: 1, h: 1 }
 
   switch (type) {
@@ -121,7 +119,6 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
     const x0 = isFiniteNumber(el.position?.x) ? el.position.x : 0
     const y0raw = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
 
-    // Clamp en metros dentro del perímetro
     const x1 = clamp(x0, 0, Math.max(0, length - w))
     const y1 = clamp(y0raw, 0, Math.max(0, width - h))
 
@@ -154,7 +151,7 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
   }
 
   if (problems.length) {
-    dwarn('[2DEditor][sanitize] elementos con problemas -> corregidos:', problems.slice(0, 10), problems.length > 10 ? `(+${problems.length - 10} más)` : '')
+    dwarn('[2DEditor][sanitize] elementos con problemas -> corregidos:', problems.slice(0, 10))
   } else {
     dlog('[2DEditor][sanitize] OK (sin problemas)', { count: out.length, reason })
   }
@@ -164,7 +161,6 @@ function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
 
 // ============================================================
 // HOOK PARA OBTENER ZONAS DEL BACKEND (Geometría Exacta)
-// - pause=true => no llama (útil mientras arrastras)
 // ============================================================
 function useBackendZones(dimensions, elements, pause = false) {
   const [backendZones, setBackendZones] = useState(null)
@@ -186,7 +182,7 @@ function useBackendZones(dimensions, elements, pause = false) {
       setError(null)
 
       try {
-        dlog('[2DEditor][analyze] POST', `${API_URL}/api/layout/analyze`, { elements: elements.length })
+        dlog('[2DEditor][analyze] POST', `${API_URL}/api/layout/analyze`)
         const response = await fetch(`${API_URL}/api/layout/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -227,44 +223,88 @@ function useBackendZones(dimensions, elements, pause = false) {
 }
 
 // ============================================================
-// HOOK FULL (OPTIMIZA AL MOVER) - OR-TOOLS
+// ✅ NUEVO: HOOK PARA RE-OPTIMIZACIÓN COMPLETA
+// Llama al nuevo endpoint /api/layout/reoptimize
 // ============================================================
-function useLayoutFullAPI() {
+function useLayoutReoptimize() {
   const [optimizing, setOptimizing] = useState(false)
   const [optError, setOptError] = useState(null)
 
-  const full = useCallback(async (dimensions, elements, movedId = null, movedPos = null) => {
+  const reoptimize = useCallback(async (config, movedId, movedPos) => {
     setOptimizing(true)
     setOptError(null)
 
     try {
-      dlog('[2DEditor][full] POST', `${API_URL}/api/layout/full`, { movedId, movedPos, count: elements?.length })
-      const response = await fetch(`${API_URL}/api/layout/full`, {
+      console.log('🔄 [2DEditor][reoptimize] POST', `${API_URL}/api/layout/reoptimize`)
+      console.log('🔄 [2DEditor][reoptimize] Config:', config)
+      console.log('🔄 [2DEditor][reoptimize] Moved:', movedId, movedPos)
+      
+      const response = await fetch(`${API_URL}/api/layout/reoptimize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          dimensions: { length: dimensions.length, width: dimensions.width },
-          elements,
+          // Dimensiones
+          length: config.dimensions?.length || config.length || 80,
+          width: config.dimensions?.width || config.width || 40,
+          height: config.dimensions?.height || config.height || 10,
+          
+          // Configuración de maquinaria
+          machinery: config.machinery || 'retractil',
+          
+          // Configuración de palet
+          pallet_type: config.pallet_type || config.palletType || 'EUR',
+          pallet_height: config.pallet_height || config.palletHeight || 1.5,
+          
+          // Muelles
+          n_docks: config.n_docks || config.dockConfig?.count || 4,
+          
+          // Tipo de actividad
+          activity_type: config.activity_type || config.activityType || 'industrial',
+          
+          // Trabajadores
+          workers: config.workers || null,
+          
+          // Configuración de oficinas
+          office_config: config.office_config || config.officeConfig || null,
+          
+          // Configuración de muelles
+          dock_config: config.dock_config || config.dockConfig || null,
+          
+          // Preferencias
+          preferences: config.preferences || {
+            include_offices: true,
+            include_services: true,
+            include_docks: true,
+            include_technical: true,
+            priority: 'balance',
+            warehouse_type: config.activity_type || 'industrial',
+            enable_abc_zones: false
+          },
+          
+          // Elemento movido
           moved_element_id: movedId,
-          moved_position: movedPos,
-          optimize: !!movedId
+          moved_position: movedPos
         })
       })
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      if (!response.ok) {
+        const errText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${errText}`)
+      }
+
       const json = await response.json()
-      dlog('[2DEditor][full] OK', { elements: json?.elements?.length ?? null })
+      console.log('✅ [2DEditor][reoptimize] OK', { elements: json?.elements?.length ?? null })
       return json
     } catch (err) {
-      derr('[2DEditor][full] ERROR:', err)
-      setOptError(err?.message || 'Full error')
+      console.error('❌ [2DEditor][reoptimize] ERROR:', err)
+      setOptError(err?.message || 'Reoptimize error')
       return null
     } finally {
       setOptimizing(false)
     }
   }, [])
 
-  return { optimizing, optError, full }
+  return { optimizing, optError, reoptimize }
 }
 
 // ============================================================
@@ -483,19 +523,19 @@ export default function Warehouse2DEditor({
   dimensions = { length: 80, width: 40, height: 10 },
   elements = [],
   onSwitch3D,
-  onElementsChange
+  onElementsChange,
+  // ✅ NUEVO: Parámetros originales del wizard para re-optimización
+  originalConfig = null
 }) {
-  // ✅ ÚNICA fuente de verdad en el editor
+  // Estado local de elementos
   const [localElements, setLocalElements] = useState(() => sanitizeElements(elements || [], dimensions, 'init'))
   const elementsRef = useRef(localElements)
-
-  // ✅ REF para evitar que props-change pise el drag
   const skipNextPropsSyncRef = useRef(false)
 
-  // ✅ Sincronización con props externas (respetando el skip)
+  // Sincronización con props
   useEffect(() => {
     if (skipNextPropsSyncRef.current) {
-      dlog('[2DEditor][props-change] SKIPPED (skipNextPropsSyncRef=true)')
+      dlog('[2DEditor][props-change] SKIPPED')
       skipNextPropsSyncRef.current = false
       return
     }
@@ -505,7 +545,6 @@ export default function Warehouse2DEditor({
 
   useEffect(() => {
     elementsRef.current = localElements
-    dlog('[2DEditor][state] localElements:', localElements.length)
   }, [localElements])
 
   // Estado UI
@@ -517,19 +556,19 @@ export default function Warehouse2DEditor({
   const [showLegend, setShowLegend] = useState(true)
   const [isDraggingElement, setIsDraggingElement] = useState(false)
 
-  // Backend: full (OR-Tools)
-  const { optimizing, optError, full } = useLayoutFullAPI()
+  // ✅ NUEVO: Hook de re-optimización completa
+  const { optimizing, optError, reoptimize } = useLayoutReoptimize()
 
-  // Backend: analyze (Shapely) -> pausamos mientras arrastras
+  // Backend: analyze (Shapely)
   const { backendZones, metrics, loading: loadingAnalyze, error } =
     useBackendZones(dimensions, localElements, isDraggingElement)
 
-  // Local zones (fallback / para elementos reales)
+  // Local zones
   const localZones = useMemo(() => {
     return processElementsToZones(localElements, dimensions)
   }, [localElements, dimensions])
 
-  // Zonas a mostrar (combina elementos reales + backend auto-zones)
+  // Zonas combinadas
   const zones = useMemo(() => {
     if (backendZones && backendZones.length > 0) {
       const elementZones = localZones.filter(z => !z.isAutoGenerated)
@@ -548,22 +587,20 @@ export default function Warehouse2DEditor({
     return { totalArea, occupiedArea, freeArea, efficiency }
   }, [metrics, localZones, dimensions])
 
-  // Zona seleccionada completa
+  // Zona seleccionada
   const selectedZoneData = useMemo(() => {
     if (!selectedZone) return null
     return zones.find(z => z.id === selectedZone.id) || selectedZone
   }, [selectedZone, zones])
 
-  // Handlers hover/selección
+  // Handlers
   const handleZoneHover = useCallback((id) => setHoveredZoneId(id), [])
   const handleZoneSelect = useCallback((zone) => {
     setSelectedZone(prev => (prev?.id === zone.id ? null : zone))
   }, [])
-
-  // Center
   const handleCenter = useCallback(() => setZoom(100), [])
+  const handlePrint = useCallback(() => window.print(), [])
 
-  // Export
   const handleExport = useCallback(() => {
     const svg = document.querySelector('.warehouse-2d-view svg')
     if (!svg) return
@@ -591,59 +628,64 @@ export default function Warehouse2DEditor({
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(data)))
   }, [dimensions])
 
-  // Print
-  const handlePrint = useCallback(() => window.print(), [])
-
   // ============================================================
-  // ✅ PUNTO CLAVE: AL SOLTAR UN ELEMENTO -> ORTOOLS
-  // (Warehouse2DView llama a onElementMoveEnd(id, x, y))
+  // ✅ PUNTO CLAVE: AL SOLTAR UN ELEMENTO -> RE-OPTIMIZAR TODO
   // ============================================================
   const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
-    // ✅ LOG para confirmar que llega
-    dlog('[2DEditor][onElementMoveEnd] recibido:', elementId, { x: newX, y: newY })
+    console.log('🎯 [2DEditor][onElementMoveEnd] recibido:', elementId, { x: newX, y: newY })
 
     const current = elementsRef.current || []
     const moved = current.find(e => e.id === elementId)
     if (!moved) {
-      dwarn('[2DEditor][onElementMoveEnd] elementId no encontrado en current:', elementId)
+      console.warn('[2DEditor][onElementMoveEnd] elementId no encontrado:', elementId)
       return
     }
 
-    // Clamp final defensivo
+    // Clamp
     const { w, h } = getElementWH(moved)
     const safeX = clamp(newX, 0, Math.max(0, dimensions.length - w))
     const safeY = clamp(newY, 0, Math.max(0, dimensions.width - h))
-    if (safeX !== newX || safeY !== newY) {
-      dwarn('[2DEditor][onElementMoveEnd] clamp aplicado:', { from: { x: newX, y: newY }, to: { x: safeX, y: safeY }, w, h })
-    }
 
-    // 1) Optimistic local update (feedback inmediato)
+    // 1) Optimistic update
     const optimistic = current.map(e =>
       e.id === elementId ? { ...e, position: { ...(e.position || {}), x: safeX, y: safeY } } : e
     )
 
-    // ✅ Marcar skip ANTES de setLocalElements para que el useEffect no lo pise
     skipNextPropsSyncRef.current = true
     setLocalElements(optimistic)
-    dlog('[2DEditor][onElementMoveEnd] optimistic update aplicado, skipNextPropsSyncRef=true')
+    console.log('🎯 [2DEditor][onElementMoveEnd] optimistic update aplicado')
 
-    // 2) Backend solver
-    const result = await full(dimensions, optimistic, elementId, { x: safeX, y: safeY })
+    // 2) Construir configuración para re-optimización
+    const config = originalConfig || {
+      dimensions,
+      machinery: 'retractil',
+      n_docks: 4,
+      pallet_type: 'EUR',
+      activity_type: 'industrial'
+    }
+
+    console.log('🔄 [2DEditor][onElementMoveEnd] Llamando a /api/layout/reoptimize...')
+    console.log('🔄 [2DEditor][onElementMoveEnd] Config:', config)
+
+    // 3) Llamar al backend para re-optimizar
+    const result = await reoptimize(config, elementId, { x: safeX, y: safeY })
+
     if (!result || !result.elements) {
-      dwarn('[2DEditor][full] result null o sin elements. Se mantiene optimistic.')
+      console.warn('⚠️ [2DEditor][reoptimize] Sin resultado. Se mantiene posición optimistic.')
+      // Mantener la posición optimistic si falla
+      onElementsChange?.(optimistic)
       return
     }
 
-    // 3) Saneamos también lo que venga del backend
-    const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-full')
-
-    // ✅ Marcar skip de nuevo antes de aplicar resultado del backend
+    // 4) Aplicar resultado del backend
+    const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-reoptimize')
+    
     skipNextPropsSyncRef.current = true
     setLocalElements(sanitizedFromBackend)
-    dlog('[2DEditor][onElementMoveEnd] backend result aplicado, skipNextPropsSyncRef=true')
+    console.log('✅ [2DEditor][onElementMoveEnd] Nuevo layout aplicado:', sanitizedFromBackend.length, 'elementos')
 
     onElementsChange?.(sanitizedFromBackend)
-  }, [dimensions, full, onElementsChange])
+  }, [dimensions, reoptimize, onElementsChange, originalConfig])
 
   const loadingAny = loadingAnalyze || optimizing
 
@@ -701,12 +743,12 @@ export default function Warehouse2DEditor({
           >
             <CircularProgress size={16} />
             <Typography variant="caption">
-              {optimizing ? 'Optimizando (OR-Tools)...' : 'Calculando geometría exacta...'}
+              {optimizing ? '🔄 Re-optimizando layout completo...' : 'Calculando geometría exacta...'}
             </Typography>
           </Box>
         )}
 
-        {/* Vista 2D con zoom visual */}
+        {/* Vista 2D */}
         <Box
           sx={{
             width: '100%',
@@ -727,11 +769,7 @@ export default function Warehouse2DEditor({
             showGrid={showGrid}
             showDimensions={showDimensions}
             zoom={zoom}
-
-            // ✅ DRAG REAL
             onElementMoveEnd={handleElementMoveEnd}
-
-            // ✅ pausa analyze mientras arrastras
             onDraggingChange={setIsDraggingElement}
           />
         </Box>
@@ -757,14 +795,14 @@ export default function Warehouse2DEditor({
 
         {optError && (
           <Chip
-            label={`❌ Optimizer: ${optError}`}
+            label={`❌ Reoptimize: ${optError}`}
             size="small"
             color="error"
             sx={{ position: 'absolute', top: 84, left: 12, zIndex: 100, fontSize: '11px' }}
           />
         )}
 
-        {/* Métricas resumen */}
+        {/* Métricas */}
         <Paper
           elevation={2}
           sx={{
@@ -780,11 +818,14 @@ export default function Warehouse2DEditor({
           }}
         >
           <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151' }}>
-            Total: {Number(displayMetrics.totalArea || 0).toFixed(0)}m² | Ocupado: {Number(displayMetrics.occupiedArea || 0).toFixed(0)}m² | Libre: {Number(displayMetrics.freeArea || 0).toFixed(0)}m² | Eficiencia: {displayMetrics.efficiency || '0.0'}%
+            Total: {Number(displayMetrics.totalArea || 0).toFixed(0)}m² | 
+            Ocupado: {Number(displayMetrics.occupiedArea || 0).toFixed(0)}m² | 
+            Libre: {Number(displayMetrics.freeArea || 0).toFixed(0)}m² | 
+            Eficiencia: {displayMetrics.efficiency || '0.0'}%
           </Typography>
         </Paper>
 
-        {/* Info de zona seleccionada */}
+        {/* Info zona seleccionada */}
         <SelectedZoneInfo zone={selectedZoneData} dimensions={dimensions} />
 
         {/* Toggle leyenda */}
