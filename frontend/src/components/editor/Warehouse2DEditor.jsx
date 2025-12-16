@@ -7,9 +7,9 @@
  * - Toolbar con controles
  * - Sincronización hover/selección
  * - Cálculo exacto de zonas via backend (Shapely) /analyze
- * - ✅ Drag real (en Warehouse2DView) + re-optimización (OR-Tools backend) /full
+ * - ✅ Drag real + re-optimización (OR-Tools backend) /full
  *
- * @version 2.2.9 - DEBUG PACK (logs exhaustivos)
+ * @version 2.3 - FIX CRÍTICO: Saneado + logs + aisles robusto (evita <rect width/height negativos)
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -40,19 +40,127 @@ import {
 import Warehouse2DView, { processElementsToZones, ZONE_COLORS } from './Warehouse2DView'
 import ZonesLegend from './ZonesLegend'
 
-// ===================== DEBUG =====================
-const BUILD_TAG = `Warehouse2DEditor v2.2.9 ${new Date().toISOString()}`
-const DEBUG = typeof window !== 'undefined' && localStorage.getItem('UNITNAVE_DEBUG') === '1'
-const dlog = (...args) => DEBUG && console.log(...args)
-const dwarn = (...args) => DEBUG && console.warn(...args)
-const derr = (...args) => DEBUG && console.error(...args)
-// ================================================
+// ============================================================
+// DEBUG
+// ============================================================
+const DEBUG_2D = typeof window !== 'undefined' && window.localStorage?.getItem('UN_DEBUG_2D') === '1'
+const dlog = (...args) => DEBUG_2D && console.log(...args)
+const dwarn = (...args) => DEBUG_2D && console.warn(...args)
+const derr = (...args) => DEBUG_2D && console.error(...args)
 
 // ============================================================
 // API CONFIGURATION
 // ============================================================
-const API_URL =
-  import.meta.env.VITE_API_URL || 'https://unitnave-designer-production.up.railway.app'
+const API_URL = import.meta.env.VITE_API_URL || 'https://unitnave-designer-production.up.railway.app'
+
+// ============================================================
+// Helpers saneado
+// ============================================================
+const isFiniteNumber = (v) => Number.isFinite(v)
+const toPosNumber = (v, fallback) => (isFiniteNumber(v) && v > 0 ? v : fallback)
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+function getElementWH(el) {
+  const type = el?.type
+  // ⚠️ OJO: esto debe seguir la misma lógica que processElementsToZones del View
+  // para que clamp sea coherente.
+  if (!el) return { w: 1, h: 1 }
+
+  switch (type) {
+    case 'shelf':
+      return {
+        w: toPosNumber(el.dimensions?.length, 2.7),
+        h: toPosNumber(el.dimensions?.depth, 1.1)
+      }
+    case 'dock':
+      return {
+        w: toPosNumber(el.dimensions?.width, 3.5),
+        h: toPosNumber(el.dimensions?.depth, 0.5)
+      }
+    case 'office':
+      return {
+        w: toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 12),
+        h: toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 8)
+      }
+    case 'operational_zone':
+    case 'zone':
+    case 'receiving':
+    case 'shipping':
+    case 'picking':
+      return {
+        w: toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 10),
+        h: toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 10)
+      }
+    case 'service_room':
+    case 'technical_room':
+      return {
+        w: toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 5),
+        h: toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 4)
+      }
+    default:
+      return {
+        w: toPosNumber(el.dimensions?.length, 3),
+        h: toPosNumber(el.dimensions?.depth ?? el.dimensions?.width, 3)
+      }
+  }
+}
+
+function sanitizeElements(rawElements, dimensions, reason = 'unknown') {
+  const length = toPosNumber(dimensions?.length, 80)
+  const width = toPosNumber(dimensions?.width, 40)
+
+  const input = Array.isArray(rawElements) ? rawElements : []
+  const out = []
+  const problems = []
+
+  for (const el of input) {
+    if (!el?.id) continue
+
+    const { w, h } = getElementWH(el)
+
+    const x0 = isFiniteNumber(el.position?.x) ? el.position.x : 0
+    const y0raw = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
+
+    // Clamp en metros dentro del perímetro
+    const x1 = clamp(x0, 0, Math.max(0, length - w))
+    const y1 = clamp(y0raw, 0, Math.max(0, width - h))
+
+    const hadIssue =
+      (!isFiniteNumber(x0) || !isFiniteNumber(y0raw)) ||
+      w <= 0 || h <= 0 ||
+      x0 !== x1 || y0raw !== y1 ||
+      x0 < 0 || y0raw < 0 ||
+      (x0 + w) > length || (y0raw + h) > width
+
+    if (hadIssue) {
+      problems.push({
+        id: el.id,
+        type: el.type,
+        x: x0, y: y0raw, w, h,
+        length, width,
+        fixedX: x1, fixedY: y1,
+        reason
+      })
+    }
+
+    out.push({
+      ...el,
+      position: {
+        ...(el.position || {}),
+        x: x1,
+        y: y1
+      }
+    })
+  }
+
+  if (problems.length) {
+    dwarn('[2DEditor][sanitize] elementos con problemas -> corregidos:', problems.slice(0, 10), problems.length > 10 ? `(+${problems.length - 10} más)` : '')
+  } else {
+    dlog('[2DEditor][sanitize] OK (sin problemas)', { count: out.length, reason })
+  }
+
+  return out
+}
 
 // ============================================================
 // HOOK PARA OBTENER ZONAS DEL BACKEND (Geometría Exacta)
@@ -65,31 +173,20 @@ function useBackendZones(dimensions, elements, pause = false) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    if (pause) {
-      dlog('[2DEditor][analyze] paused=true -> skip')
-      return
-    }
+    if (pause) return
 
     if (!elements || elements.length === 0) {
-      dlog('[2DEditor][analyze] no elements -> reset zones/metrics')
       setBackendZones(null)
       setMetrics(null)
       return
     }
-
-    const reqId = `analyze_${Date.now()}_${Math.random().toString(16).slice(2)}`
-    dlog('[2DEditor][analyze] START', {
-      reqId,
-      url: `${API_URL}/api/layout/analyze`,
-      dims: { length: dimensions.length, width: dimensions.width },
-      elementsCount: elements.length
-    })
 
     const fetchZones = async () => {
       setLoading(true)
       setError(null)
 
       try {
+        dlog('[2DEditor][analyze] POST', `${API_URL}/api/layout/analyze`, { elements: elements.length })
         const response = await fetch(`${API_URL}/api/layout/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -99,21 +196,12 @@ function useBackendZones(dimensions, elements, pause = false) {
           })
         })
 
-        if (!response.ok) {
-          const body = await response.text().catch(() => '')
-          throw new Error(
-            `HTTP ${response.status} ${response.statusText} | body: ${body?.slice(0, 800)}`
-          )
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const data = await response.json()
-        dlog('[2DEditor][analyze] OK', {
-          reqId,
-          zonesCount: data?.zones?.length,
-          hasMetrics: !!data?.metrics
-        })
+        dlog('[2DEditor][analyze] OK zones:', data?.zones?.length ?? 0)
 
-        const convertedZones = (data.zones || []).map((zone) => ({
+        const convertedZones = (data.zones || []).map(zone => ({
           ...zone,
           originalId: zone.id,
           rotation: 0,
@@ -122,28 +210,16 @@ function useBackendZones(dimensions, elements, pause = false) {
 
         setBackendZones(convertedZones)
         setMetrics(data.metrics || null)
-
-        if (DEBUG) {
-          dlog(
-            '[2DEditor][analyze] sample zones:',
-            convertedZones.slice(0, 5).map((z) => ({
-              id: z.id,
-              type: z.type,
-              isAutoGenerated: z.isAutoGenerated
-            }))
-          )
-        }
       } catch (err) {
-        dwarn('[2DEditor][analyze] FAIL', { reqId, msg: err?.message })
+        derr('[2DEditor][analyze] ERROR:', err)
         setError(err?.message || 'Analyze error')
         setBackendZones(null)
       } finally {
         setLoading(false)
-        dlog('[2DEditor][analyze] END', { reqId })
       }
     }
 
-    const timeoutId = setTimeout(fetchZones, 300)
+    const timeoutId = setTimeout(fetchZones, 250)
     return () => clearTimeout(timeoutId)
   }, [dimensions.length, dimensions.width, elements, pause])
 
@@ -158,20 +234,11 @@ function useLayoutFullAPI() {
   const [optError, setOptError] = useState(null)
 
   const full = useCallback(async (dimensions, elements, movedId = null, movedPos = null) => {
-    const reqId = `full_${Date.now()}_${Math.random().toString(16).slice(2)}`
     setOptimizing(true)
     setOptError(null)
 
-    dlog('[2DEditor][full] START', {
-      reqId,
-      url: `${API_URL}/api/layout/full`,
-      movedId,
-      movedPos,
-      optimize: !!movedId,
-      elementsCount: elements?.length
-    })
-
     try {
+      dlog('[2DEditor][full] POST', `${API_URL}/api/layout/full`, { movedId, movedPos, count: elements?.length })
       const response = await fetch(`${API_URL}/api/layout/full`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -184,27 +251,16 @@ function useLayoutFullAPI() {
         })
       })
 
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        throw new Error(
-          `HTTP ${response.status} ${response.statusText} | body: ${body?.slice(0, 800)}`
-        )
-      }
-
-      const data = await response.json()
-      dlog('[2DEditor][full] OK', {
-        reqId,
-        hasElements: !!data?.elements,
-        elementsCount: data?.elements?.length
-      })
-      return data
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const json = await response.json()
+      dlog('[2DEditor][full] OK', { elements: json?.elements?.length ?? null })
+      return json
     } catch (err) {
-      derr('[2DEditor][full] FAIL', { reqId, msg: err?.message })
+      derr('[2DEditor][full] ERROR:', err)
       setOptError(err?.message || 'Full error')
       return null
     } finally {
       setOptimizing(false)
-      dlog('[2DEditor][full] END', { reqId })
     }
   }, [])
 
@@ -253,11 +309,7 @@ function Toolbar2D({
       </Tooltip>
 
       <Tooltip title={showDimensions ? 'Ocultar Cotas' : 'Mostrar Cotas'}>
-        <IconButton
-          size="small"
-          onClick={onToggleDimensions}
-          color={showDimensions ? 'primary' : 'default'}
-        >
+        <IconButton size="small" onClick={onToggleDimensions} color={showDimensions ? 'primary' : 'default'}>
           <DimensionsIcon fontSize="small" />
         </IconButton>
       </Tooltip>
@@ -265,11 +317,7 @@ function Toolbar2D({
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
       <Tooltip title="Alejar">
-        <IconButton
-          size="small"
-          onClick={() => onZoomChange(Math.max(50, zoom - 10))}
-          disabled={zoom <= 50}
-        >
+        <IconButton size="small" onClick={() => onZoomChange(Math.max(50, zoom - 10))} disabled={zoom <= 50}>
           <ZoomOutIcon fontSize="small" />
         </IconButton>
       </Tooltip>
@@ -288,11 +336,7 @@ function Toolbar2D({
       </Box>
 
       <Tooltip title="Acercar">
-        <IconButton
-          size="small"
-          onClick={() => onZoomChange(Math.min(200, zoom + 10))}
-          disabled={zoom >= 200}
-        >
+        <IconButton size="small" onClick={() => onZoomChange(Math.min(200, zoom + 10))} disabled={zoom >= 200}>
           <ZoomInIcon fontSize="small" />
         </IconButton>
       </Tooltip>
@@ -441,23 +485,18 @@ export default function Warehouse2DEditor({
   onSwitch3D,
   onElementsChange
 }) {
-  useEffect(() => {
-    console.log('[LOAD][Warehouse2DEditor]', BUILD_TAG)
-    dlog('[2DEditor][API_URL]', API_URL)
-  }, [])
-
   // ✅ ÚNICA fuente de verdad en el editor
-  const [localElements, setLocalElements] = useState(elements || [])
+  const [localElements, setLocalElements] = useState(() => sanitizeElements(elements || [], dimensions, 'init'))
   const elementsRef = useRef(localElements)
 
   useEffect(() => {
-    dlog('[2DEditor][props] elements changed -> localElements', elements?.length)
-    setLocalElements(elements || [])
-  }, [elements])
+    const next = sanitizeElements(elements || [], dimensions, 'props-change')
+    setLocalElements(next)
+  }, [elements, dimensions.length, dimensions.width])
 
   useEffect(() => {
     elementsRef.current = localElements
-    dlog('[2DEditor][state] localElements:', localElements?.length)
+    dlog('[2DEditor][state] localElements:', localElements.length)
   }, [localElements])
 
   // Estado UI
@@ -469,10 +508,6 @@ export default function Warehouse2DEditor({
   const [showLegend, setShowLegend] = useState(true)
   const [isDraggingElement, setIsDraggingElement] = useState(false)
 
-  useEffect(() => {
-    dlog('[2DEditor][dragging]', isDraggingElement)
-  }, [isDraggingElement])
-
   // Backend: full (OR-Tools)
   const { optimizing, optError, full } = useLayoutFullAPI()
 
@@ -481,12 +516,14 @@ export default function Warehouse2DEditor({
     useBackendZones(dimensions, localElements, isDraggingElement)
 
   // Local zones (fallback / para elementos reales)
-  const localZones = useMemo(() => processElementsToZones(localElements, dimensions), [localElements, dimensions])
+  const localZones = useMemo(() => {
+    return processElementsToZones(localElements, dimensions)
+  }, [localElements, dimensions])
 
   // Zonas a mostrar (combina elementos reales + backend auto-zones)
   const zones = useMemo(() => {
     if (backendZones && backendZones.length > 0) {
-      const elementZones = localZones.filter((z) => !z.isAutoGenerated)
+      const elementZones = localZones.filter(z => !z.isAutoGenerated)
       return [...elementZones, ...backendZones]
     }
     return localZones
@@ -505,13 +542,13 @@ export default function Warehouse2DEditor({
   // Zona seleccionada completa
   const selectedZoneData = useMemo(() => {
     if (!selectedZone) return null
-    return zones.find((z) => z.id === selectedZone.id) || selectedZone
+    return zones.find(z => z.id === selectedZone.id) || selectedZone
   }, [selectedZone, zones])
 
   // Handlers hover/selección
   const handleZoneHover = useCallback((id) => setHoveredZoneId(id), [])
   const handleZoneSelect = useCallback((zone) => {
-    setSelectedZone((prev) => (prev?.id === zone.id ? null : zone))
+    setSelectedZone(prev => (prev?.id === zone.id ? null : zone))
   }, [])
 
   // Center
@@ -553,71 +590,69 @@ export default function Warehouse2DEditor({
   // (Warehouse2DView llama a onElementMoveEnd(id, x, y))
   // ============================================================
   const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
+    dlog('[2DEditor][drag-end] element:', elementId, '->', { x: newX, y: newY })
+
     const current = elementsRef.current || []
-    const moved = current.find((e) => e.id === elementId)
-
-    window.__UNITNAVE_LAST_MOVE_END__ = { elementId, newX, newY, ts: Date.now() }
-    dlog('[2DEditor][MOVE_END] called', {
-      elementId,
-      newX,
-      newY,
-      currentCount: current.length,
-      movedFound: !!moved
-    })
-
+    const moved = current.find(e => e.id === elementId)
     if (!moved) {
-      derr('[2DEditor][MOVE_END] moved element not found in elementsRef.current', {
-        elementId,
-        idsSample: current.slice(0, 15).map((e) => e.id)
-      })
+      dwarn('[2DEditor][drag-end] elementId no encontrado en current:', elementId)
       return
+    }
+
+    // Clamp final defensivo
+    const { w, h } = getElementWH(moved)
+    const safeX = clamp(newX, 0, Math.max(0, dimensions.length - w))
+    const safeY = clamp(newY, 0, Math.max(0, dimensions.width - h))
+    if (safeX !== newX || safeY !== newY) {
+      dwarn('[2DEditor][drag-end] clamp aplicado:', { from: { x: newX, y: newY }, to: { x: safeX, y: safeY }, w, h })
     }
 
     // 1) Optimistic local update (feedback inmediato)
-    const optimistic = current.map((e) =>
-      e.id === elementId ? { ...e, position: { ...(e.position || {}), x: newX, y: newY } } : e
+    const optimistic = current.map(e =>
+      e.id === elementId ? { ...e, position: { ...(e.position || {}), x: safeX, y: safeY } } : e
     )
-
-    dlog('[2DEditor][MOVE_END] optimistic update', {
-      elementId,
-      before: moved.position,
-      after: { x: newX, y: newY }
-    })
-
     setLocalElements(optimistic)
 
     // 2) Backend solver
-    dlog('[2DEditor][FULL] calling /full', { elementId, newX, newY })
-    const result = await full(dimensions, optimistic, elementId, { x: newX, y: newY })
-
+    const result = await full(dimensions, optimistic, elementId, { x: safeX, y: safeY })
     if (!result || !result.elements) {
-      derr('[2DEditor][FULL] result null or missing elements', { result })
+      dwarn('[2DEditor][full] result null o sin elements. Se mantiene optimistic.')
       return
     }
 
-    // 3) Aplicar solución final
-    dlog('[2DEditor][FULL] OK apply result.elements', { count: result.elements.length })
-    setLocalElements(result.elements)
-    onElementsChange?.(result.elements)
+    // 3) Saneamos también lo que venga del backend
+    const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-full')
+    setLocalElements(sanitizedFromBackend)
+    onElementsChange?.(sanitizedFromBackend)
   }, [dimensions, full, onElementsChange])
 
   const loadingAny = loadingAnalyze || optimizing
 
-  useEffect(() => {
-    if (!backendZones) return
-    dlog('[2DEditor][backendZones sample]', backendZones.slice(0, 5).map(z => ({
-      id: z.id, type: z.type, isAutoGenerated: z.isAutoGenerated
-    })))
-  }, [backendZones])
-
   return (
-    <Box sx={{ width: '100%', height: '100%', display: 'flex', position: 'relative', bgcolor: '#f8fafc' }}>
-      <Box className="warehouse-2d-view" sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        position: 'relative',
+        bgcolor: '#f8fafc'
+      }}
+    >
+      {/* Área principal */}
+      <Box
+        className="warehouse-2d-view"
+        sx={{
+          flex: 1,
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
+        {/* Toolbar */}
         <Toolbar2D
           showGrid={showGrid}
-          onToggleGrid={() => setShowGrid((p) => !p)}
+          onToggleGrid={() => setShowGrid(p => !p)}
           showDimensions={showDimensions}
-          onToggleDimensions={() => setShowDimensions((p) => !p)}
+          onToggleDimensions={() => setShowDimensions(p => !p)}
           onCenter={handleCenter}
           onExport={handleExport}
           onPrint={handlePrint}
@@ -627,6 +662,7 @@ export default function Warehouse2DEditor({
           loadingAny={loadingAny}
         />
 
+        {/* Loading overlay */}
         {loadingAny && (
           <Box
             sx={{
@@ -651,6 +687,7 @@ export default function Warehouse2DEditor({
           </Box>
         )}
 
+        {/* Vista 2D con zoom visual */}
         <Box
           sx={{
             width: '100%',
@@ -675,11 +712,12 @@ export default function Warehouse2DEditor({
             // ✅ DRAG REAL
             onElementMoveEnd={handleElementMoveEnd}
 
-            // ✅ para pausar analyze mientras arrastras
+            // ✅ pausa analyze mientras arrastras
             onDraggingChange={setIsDraggingElement}
           />
         </Box>
 
+        {/* Chips de estado */}
         {backendZones && (
           <Chip
             label="📐 Geometría Exacta"
@@ -691,7 +729,7 @@ export default function Warehouse2DEditor({
 
         {error && !backendZones && (
           <Chip
-            label={`⚠️ Analyze: ${error}`}
+            label="⚠️ Modo Local"
             size="small"
             color="warning"
             sx={{ position: 'absolute', top: 60, left: 12, zIndex: 100, fontSize: '11px' }}
@@ -700,13 +738,14 @@ export default function Warehouse2DEditor({
 
         {optError && (
           <Chip
-            label={`❌ Full: ${optError}`}
+            label={`❌ Optimizer: ${optError}`}
             size="small"
             color="error"
             sx={{ position: 'absolute', top: 84, left: 12, zIndex: 100, fontSize: '11px' }}
           />
         )}
 
+        {/* Métricas resumen */}
         <Paper
           elevation={2}
           sx={{
@@ -722,15 +761,14 @@ export default function Warehouse2DEditor({
           }}
         >
           <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151' }}>
-            Total: {Number(displayMetrics.totalArea || 0).toFixed(0)}m² | Ocupado:{' '}
-            {Number(displayMetrics.occupiedArea || 0).toFixed(0)}m² | Libre:{' '}
-            {Number(displayMetrics.freeArea || 0).toFixed(0)}m² | Eficiencia:{' '}
-            {displayMetrics.efficiency || '0.0'}%
+            Total: {Number(displayMetrics.totalArea || 0).toFixed(0)}m² | Ocupado: {Number(displayMetrics.occupiedArea || 0).toFixed(0)}m² | Libre: {Number(displayMetrics.freeArea || 0).toFixed(0)}m² | Eficiencia: {displayMetrics.efficiency || '0.0'}%
           </Typography>
         </Paper>
 
+        {/* Info de zona seleccionada */}
         <SelectedZoneInfo zone={selectedZoneData} dimensions={dimensions} />
 
+        {/* Toggle leyenda */}
         {!showLegend && (
           <Tooltip title="Mostrar Leyenda">
             <IconButton
@@ -750,6 +788,7 @@ export default function Warehouse2DEditor({
         )}
       </Box>
 
+      {/* Leyenda lateral */}
       {showLegend && (
         <Box sx={{ position: 'relative' }}>
           <IconButton

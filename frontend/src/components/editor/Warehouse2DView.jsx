@@ -1,21 +1,38 @@
 /**
  * UNITNAVE Designer - Vista 2D CAD Profesional
  *
- * ✅ Ahora con:
- * - Cotas como antes
- * - Drag & drop REAL en SVG (sin Moveable)
- * - onElementMoveEnd(id,x,y) para re-optimizar en backend
+ * ✅ FIX CRÍTICO:
+ * - Nunca renderiza rects con width/height <= 0
+ * - detectAisles blindado contra width/height negativos
+ * - Drag SVG con pointer events (robusto)
+ * - ✅ FIX REAL: scale NUNCA negativo aunque el contenedor sea pequeño
  *
- * @version 2.2
+ * @version 2.3.1
  */
 
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { Box, Typography } from '@mui/material'
 
 // ============================================================
+// DEBUG
+// ============================================================
+const DEBUG_2D = typeof window !== 'undefined' && window.localStorage?.getItem('UN_DEBUG_2D') === '1'
+const dlog = (...args: any[]) => DEBUG_2D && console.log(...args)
+const dwarn = (...args: any[]) => DEBUG_2D && console.warn(...args)
+const derr = (...args: any[]) => DEBUG_2D && console.error(...args)
+
+const onceSet = new Set<string>()
+const warnOnce = (key: string, ...args: any[]) => {
+  if (!DEBUG_2D) return
+  if (onceSet.has(key)) return
+  onceSet.add(key)
+  console.warn(...args)
+}
+
+// ============================================================
 // COLORES POR TIPO DE ZONA (Estilo CAD profesional)
 // ============================================================
-const ZONE_COLORS = {
+const ZONE_COLORS: any = {
   shelf: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Estanterías' },
   dock: { fill: '#22c55e', stroke: '#15803d', label: 'Muelles' },
   dock_maneuver: { fill: '#86efac', stroke: '#22c55e', label: 'Zona Maniobra' },
@@ -44,8 +61,10 @@ const ZONE_COLORS = {
 // ============================================================
 // HELPERS
 // ============================================================
-const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
-const snap = (v, step = 0.5) => Math.round(v / step) * step
+const isFiniteNumber = (v: any) => Number.isFinite(v)
+const toPosNumber = (v: any, fallback: number) => (isFiniteNumber(v) && v > 0 ? v : fallback)
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
+const snap = (v: number, step = 0.5) => Math.round(v / step) * step
 
 // ✅ Qué zonas son “movibles” (elementos reales). NO pasillos, NO free_zone, NO dock_maneuver auto.
 const MOVABLE_TYPES = new Set([
@@ -74,8 +93,14 @@ function Zone2D({
   onMouseLeave,
   onClick,
   onPointerDownZone
-}) {
+}: any) {
   const { x, y, width, height, type, id, label, rotation = 0 } = zone
+
+  // ✅ No render si zona inválida
+  if (!(width > 0) || !(height > 0) || !isFiniteNumber(width) || !isFiniteNumber(height)) {
+    warnOnce(`invalid-zone-${id}`, '[2DView] Zona inválida (no se dibuja):', { id, type, x, y, width, height })
+    return null
+  }
 
   const colors = useMemo(() => {
     if (isSelected) return ZONE_COLORS.selected
@@ -87,6 +112,11 @@ function Zone2D({
   const svgY = offset.y + (y * scale)
   const svgWidth = width * scale
   const svgHeight = height * scale
+
+  if (!(svgWidth > 0) || !(svgHeight > 0) || !isFiniteNumber(svgWidth) || !isFiniteNumber(svgHeight)) {
+    warnOnce(`invalid-svg-${id}`, '[2DView] Rect SVG inválido (no se dibuja):', { id, type, svgWidth, svgHeight, scale })
+    return null
+  }
 
   const centerX = svgX + svgWidth / 2
   const centerY = svgY + svgHeight / 2
@@ -103,7 +133,7 @@ function Zone2D({
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(zone)}
-      onPointerDown={draggable ? (e) => onPointerDownZone?.(zone, e) : undefined}
+      onPointerDown={draggable ? (e: any) => onPointerDownZone?.(zone, e) : undefined}
       style={{ cursor: draggable ? 'grab' : 'pointer' }}
     >
       <rect
@@ -180,7 +210,7 @@ function Zone2D({
             fontFamily="'JetBrains Mono', monospace"
             fill="#374151"
           >
-            {width.toFixed(1)}m
+            {Number(width).toFixed(1)}m
           </text>
           <text
             x={svgX + svgWidth + 6}
@@ -191,7 +221,7 @@ function Zone2D({
             fontFamily="'JetBrains Mono', monospace"
             fill="#374151"
           >
-            {height.toFixed(1)}m
+            {Number(height).toFixed(1)}m
           </text>
         </g>
       )}
@@ -202,8 +232,10 @@ function Zone2D({
 // ============================================================
 // COMPONENTE COTAS/DIMENSIONES
 // ============================================================
-function DimensionLines({ dimensions, scale, offset }) {
-  const { length, width } = dimensions
+function DimensionLines({ dimensions, scale, offset }: any) {
+  const length = toPosNumber(dimensions?.length, 80)
+  const width = toPosNumber(dimensions?.width, 40)
+
   const svgLength = length * scale
   const svgWidth = width * scale
 
@@ -265,11 +297,12 @@ function DimensionLines({ dimensions, scale, offset }) {
 // ============================================================
 // COMPONENTE GRID
 // ============================================================
-function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
-  const { length, width } = dimensions
+function Grid2D({ dimensions, scale, offset, gridSize = 5 }: any) {
+  const length = toPosNumber(dimensions?.length, 80)
+  const width = toPosNumber(dimensions?.width, 40)
 
   const lines = useMemo(() => {
-    const result = []
+    const result: any[] = []
     for (let x = 0; x <= length; x += gridSize) {
       result.push({
         key: `v-${x}`,
@@ -291,11 +324,11 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
       })
     }
     return result
-  }, [dimensions, scale, offset, gridSize])
+  }, [length, width, scale, offset, gridSize])
 
   return (
     <g className="grid-2d" pointerEvents="none">
-      {lines.map(line => (
+      {lines.map((line) => (
         <line
           key={line.key}
           x1={line.x1}
@@ -311,49 +344,68 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
 }
 
 // ============================================================
-// FUNCIÓN PARA PROCESAR ELEMENTOS A ZONAS (tu código intacto)
+// FUNCIÓN PARA PROCESAR ELEMENTOS A ZONAS
 // ============================================================
-function processElementsToZones(elements, dimensions) {
-  const zones = []
-  const shelves = []
+function processElementsToZones(elements: any[], dimensions: any) {
+  const zones: any = []
+  const shelves: any[] = []
 
-  elements.forEach((el, index) => {
+  const L = toPosNumber(dimensions?.length, 80)
+  const W = toPosNumber(dimensions?.width, 40)
+
+  ;(elements || []).forEach((el, index) => {
     const type = el.type
-    const x = el.position?.x ?? 0
-    const y = el.position?.y ?? el.position?.z ?? 0
-    const rotation = el.rotation || 0
+    const x = isFiniteNumber(el.position?.x) ? el.position.x : 0
+    const y = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
+    const rotation = isFiniteNumber(el.rotation) ? el.rotation : 0
 
-    let width, height
+    let width: number, height: number
 
     switch (type) {
       case 'shelf':
-        width = el.dimensions?.length ?? 2.7
-        height = el.dimensions?.depth ?? 1.1
+        width = toPosNumber(el.dimensions?.length, 2.7)
+        height = toPosNumber(el.dimensions?.depth, 1.1)
         break
       case 'dock':
-        width = el.dimensions?.width ?? 3.5
-        height = el.dimensions?.depth ?? 0.5
+        width = toPosNumber(el.dimensions?.width, 3.5)
+        height = toPosNumber(el.dimensions?.depth, 0.5)
         break
       case 'office':
-        width = el.dimensions?.length ?? el.dimensions?.largo ?? 12
-        height = el.dimensions?.width ?? el.dimensions?.ancho ?? 8
+        width = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 12)
+        height = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 8)
         break
       case 'operational_zone':
       case 'zone':
-        width = el.dimensions?.length ?? el.dimensions?.largo ?? 10
-        height = el.dimensions?.width ?? el.dimensions?.ancho ?? 10
+      case 'receiving':
+      case 'shipping':
+      case 'picking':
+        width = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 10)
+        height = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 10)
         break
       case 'service_room':
       case 'technical_room':
-        width = el.dimensions?.length ?? el.dimensions?.largo ?? 5
-        height = el.dimensions?.width ?? el.dimensions?.ancho ?? 4
+        width = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 5)
+        height = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 4)
         break
       default:
-        width = el.dimensions?.length ?? 3
-        height = el.dimensions?.depth ?? el.dimensions?.width ?? 3
+        width = toPosNumber(el.dimensions?.length, 3)
+        height = toPosNumber(el.dimensions?.depth ?? el.dimensions?.width, 3)
     }
 
-    const zoneData = {
+    if (!(width > 0) || !(height > 0)) {
+      warnOnce(`bad-el-size-${el.id}`, '[2DView] Elemento con size inválido (saltado):', { id: el.id, type, width, height })
+      return
+    }
+
+    if (DEBUG_2D) {
+      const outX = x < 0 || (x + width) > L
+      const outY = y < 0 || (y + height) > W
+      if (outX || outY) {
+        dwarn('[2DView] Elemento fuera de límites:', { id: el.id, type, x, y, width, height, L, W })
+      }
+    }
+
+    const zoneData: any = {
       id: el.id,
       originalId: el.id,
       type,
@@ -368,17 +420,16 @@ function processElementsToZones(elements, dimensions) {
     }
 
     zones.push(zoneData)
-
     if (type === 'shelf') shelves.push(zoneData)
 
     if (type === 'dock') {
-      const maneuverZone = el.dimensions?.maneuverZone ?? 4
+      const maneuverZone = toPosNumber(el.dimensions?.maneuverZone, 4)
       zones.push({
         id: `${el.id}-maneuver`,
         originalId: el.id,
         type: 'dock_maneuver',
         x: x,
-        y: y + (el.dimensions?.depth ?? 0.5),
+        y: y + height,
         width: width,
         height: maneuverZone,
         rotation: 0,
@@ -389,11 +440,11 @@ function processElementsToZones(elements, dimensions) {
     }
   })
 
-  const aisles = detectAisles(shelves, dimensions, elements)
-  aisles.forEach(aisle => zones.push(aisle))
+  const aisles = detectAisles(shelves, dimensions, elements || [])
+  aisles.forEach((aisle: any) => zones.push(aisle))
 
-  const totalArea = dimensions.length * dimensions.width
-  const occupiedArea = zones.reduce((sum, z) => sum + z.area, 0)
+  const totalArea = L * W
+  const occupiedArea = zones.reduce((sum: number, z: any) => sum + (z.area || 0), 0)
   const freeArea = totalArea - occupiedArea
 
   zones.freeArea = freeArea
@@ -404,108 +455,143 @@ function processElementsToZones(elements, dimensions) {
 }
 
 // ============================================================
-// detectAisles + helpers (tu código intacto)
+// detectAisles + helpers (BLINDADO)
 // ============================================================
-function elementToRect(el) {
-  const x = el.position?.x ?? 0
-  const y = el.position?.y ?? el.position?.z ?? 0
-  let w, h
+function elementToRect(el: any) {
+  const x0 = isFiniteNumber(el.position?.x) ? el.position.x : 0
+  const y0 = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
+
+  let w: number, h: number
 
   switch (el.type) {
     case 'shelf':
-      w = el.dimensions?.length ?? 2.7
-      h = el.dimensions?.depth ?? 1.1
+      w = toPosNumber(el.dimensions?.length, 2.7)
+      h = toPosNumber(el.dimensions?.depth, 1.1)
       break
     case 'dock':
-      w = el.dimensions?.width ?? 3.5
-      h = (el.dimensions?.depth ?? 0.5) + 4
+      w = toPosNumber(el.dimensions?.width, 3.5)
+      h = toPosNumber(el.dimensions?.depth, 0.5) + 4
       break
     case 'office':
-      w = el.dimensions?.length ?? el.dimensions?.largo ?? 12
-      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 8
+      w = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 12)
+      h = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 8)
       break
     case 'operational_zone':
     case 'zone':
-      w = el.dimensions?.length ?? el.dimensions?.largo ?? 10
-      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 10
+    case 'receiving':
+    case 'shipping':
+    case 'picking':
+      w = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 10)
+      h = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 10)
       break
     case 'service_room':
     case 'technical_room':
-      w = el.dimensions?.length ?? el.dimensions?.largo ?? 5
-      h = el.dimensions?.width ?? el.dimensions?.ancho ?? 4
+      w = toPosNumber(el.dimensions?.length ?? el.dimensions?.largo, 5)
+      h = toPosNumber(el.dimensions?.width ?? el.dimensions?.ancho, 4)
       break
     default:
-      w = el.dimensions?.length ?? 3
-      h = el.dimensions?.depth ?? el.dimensions?.width ?? 3
+      w = toPosNumber(el.dimensions?.length, 3)
+      h = toPosNumber(el.dimensions?.depth ?? el.dimensions?.width, 3)
   }
 
-  return { x, y, w, h, x2: x + w, y2: y + h, type: el.type }
+  return { x: x0, y: y0, w, h, x2: x0 + w, y2: y0 + h, type: el.type }
 }
 
-function detectAisles(shelves, dimensions, allElements) {
-  const zones = []
-  const PRECISION = 0.5
-  const obstacles = allElements.map(elementToRect)
+function clampRectToBounds(r: any, L: number, W: number) {
+  const x1 = clamp(r.x, 0, L)
+  const y1 = clamp(r.y, 0, W)
+  const x2 = clamp(r.x2, 0, L)
+  const y2 = clamp(r.y2, 0, W)
 
-  allElements.forEach(el => {
+  const left = Math.min(x1, x2)
+  const right = Math.max(x1, x2)
+  const top = Math.min(y1, y2)
+  const bottom = Math.max(y1, y2)
+
+  const w = right - left
+  const h = bottom - top
+
+  if (!(w > 0) || !(h > 0)) return null
+
+  return { x: left, y: top, w, h, x2: right, y2: bottom, type: r.type }
+}
+
+function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
+  const zones: any[] = []
+  const PRECISION = 0.5
+
+  const L = toPosNumber(dimensions?.length, 80)
+  const W = toPosNumber(dimensions?.width, 40)
+
+  const obstaclesRaw = allElements.map(elementToRect)
+
+  allElements.forEach((el) => {
     if (el.type === 'dock') {
-      const x = el.position?.x ?? 0
-      const y = el.position?.y ?? 0
-      const w = el.dimensions?.width ?? 3.5
+      const x = isFiniteNumber(el.position?.x) ? el.position.x : 0
+      const y = isFiniteNumber(el.position?.y) ? el.position.y : 0
+      const w = toPosNumber(el.dimensions?.width, 3.5)
+      const depth = toPosNumber(el.dimensions?.depth, 0.5)
       const maneuverDepth = 4
-      obstacles.push({
-        x,
-        y: y + (el.dimensions?.depth ?? 0.5),
-        w,
-        h: maneuverDepth,
-        x2: x + w,
-        y2: y + (el.dimensions?.depth ?? 0.5) + maneuverDepth,
+
+      obstaclesRaw.push({
+        x, y: y + depth,
+        w, h: maneuverDepth,
+        x2: x + w, y2: y + depth + maneuverDepth,
         type: 'dock_maneuver'
       })
     }
   })
 
-  const yPoints = new Set([0, dimensions.width])
-  obstacles.forEach(obs => {
-    yPoints.add(Math.max(0, obs.y))
-    yPoints.add(Math.min(dimensions.width, obs.y2))
+  const obstacles = obstaclesRaw
+    .map((r: any) => clampRectToBounds(r, L, W))
+    .filter(Boolean)
+
+  const yPoints = new Set<number>([0, W])
+  obstacles.forEach((obs: any) => {
+    yPoints.add(obs.y)
+    yPoints.add(obs.y2)
   })
   const sortedY = [...yPoints].sort((a, b) => a - b)
 
-  const freeRects = []
+  const freeRects: any[] = []
 
   for (let i = 0; i < sortedY.length - 1; i++) {
     const y1 = sortedY[i]
     const y2 = sortedY[i + 1]
     const stripHeight = y2 - y1
-    if (stripHeight < PRECISION) continue
+    if (!(stripHeight > PRECISION)) continue
 
     const stripObstacles = obstacles
-      .filter(obs => obs.y < y2 && obs.y2 > y1)
-      .sort((a, b) => a.x - b.x)
+      .filter((obs: any) => obs.y < y2 && obs.y2 > y1)
+      .sort((a: any, b: any) => a.x - b.x)
 
     let currentX = 0
 
-    stripObstacles.forEach(obs => {
-      if (obs.x > currentX) {
-        freeRects.push({ x: currentX, y: y1, width: obs.x - currentX, height: stripHeight })
+    for (const obs of stripObstacles) {
+      const gapW = obs.x - currentX
+      if (gapW > PRECISION) {
+        freeRects.push({ x: currentX, y: y1, width: gapW, height: stripHeight })
       }
       currentX = Math.max(currentX, obs.x2)
-    })
+      if (currentX >= L) break
+    }
 
-    if (currentX < dimensions.length) {
-      freeRects.push({ x: currentX, y: y1, width: dimensions.length - currentX, height: stripHeight })
+    const tailW = L - currentX
+    if (tailW > PRECISION) {
+      freeRects.push({ x: currentX, y: y1, width: tailW, height: stripHeight })
     }
   }
 
   const mergedRects = mergeVerticalRects(freeRects, PRECISION)
 
-  mergedRects.forEach((rect, index) => {
+  mergedRects.forEach((rect: any, index: number) => {
     const { x, y, width, height } = rect
+    if (!(width > 0) || !(height > 0)) return
+
     const area = width * height
     if (area < 1) return
 
-    let type, label
+    let type: string, label: string
 
     if (width <= 4 && height > 6) {
       type = width >= 3 ? 'cross_aisle' : 'aisle'
@@ -519,9 +605,9 @@ function detectAisles(shelves, dimensions, allElements) {
     } else if (area > 100) {
       type = 'circulation'
       if (y < 10) label = 'Zona Circulación Norte'
-      else if (y > dimensions.width - 15) label = 'Zona Circulación Sur'
+      else if (y > W - 15) label = 'Zona Circulación Sur'
       else if (x < 10) label = 'Zona Circulación Oeste'
-      else if (x > dimensions.length - 15) label = 'Zona Circulación Este'
+      else if (x > L - 15) label = 'Zona Circulación Este'
       else label = 'Zona Circulación'
     } else {
       type = 'free_zone'
@@ -546,21 +632,22 @@ function detectAisles(shelves, dimensions, allElements) {
   return zones
 }
 
-function mergeVerticalRects(rects, tolerance) {
-  if (rects.length === 0) return []
-  const groups = new Map()
+function mergeVerticalRects(rects: any[], tolerance: number) {
+  if (!rects.length) return []
+  const groups = new Map<string, any[]>()
 
-  rects.forEach(rect => {
+  rects.forEach((rect) => {
+    if (!(rect.width > 0) || !(rect.height > 0)) return
     const keyX = Math.round(rect.x / tolerance) * tolerance
     const keyW = Math.round(rect.width / tolerance) * tolerance
     const key = `${keyX}-${keyW}`
     if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(rect)
+    groups.get(key)!.push(rect)
   })
 
-  const merged = []
+  const merged: any[] = []
 
-  groups.forEach(group => {
+  groups.forEach((group) => {
     group.sort((a, b) => a.y - b.y)
     let current = { ...group[0] }
 
@@ -579,21 +666,21 @@ function mergeVerticalRects(rects, tolerance) {
   return mergeHorizontalRects(merged, tolerance)
 }
 
-function mergeHorizontalRects(rects, tolerance) {
-  if (rects.length === 0) return []
-  const groups = new Map()
+function mergeHorizontalRects(rects: any[], tolerance: number) {
+  if (!rects.length) return []
+  const groups = new Map<string, any[]>()
 
-  rects.forEach(rect => {
+  rects.forEach((rect) => {
+    if (!(rect.width > 0) || !(rect.height > 0)) return
     const keyY = Math.round(rect.y / tolerance) * tolerance
     const keyH = Math.round(rect.height / tolerance) * tolerance
     const key = `${keyY}-${keyH}`
     if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(rect)
+    groups.get(key)!.push(rect)
   })
 
-  const merged = []
-
-  groups.forEach(group => {
+  const merged: any[] = []
+  groups.forEach((group) => {
     group.sort((a, b) => a.x - b.x)
     let current = { ...group[0] }
 
@@ -628,13 +715,13 @@ export default function Warehouse2DView({
   zoom = 100,
   onElementMoveEnd,
   onDraggingChange
-}) {
-  const containerRef = useRef(null)
-  const svgRef = useRef(null)
+}: any) {
+  const containerRef = useRef<any>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
 
   const [viewBox, setViewBox] = useState({ width: 800, height: 500 })
-  const [internalHover, setInternalHover] = useState(null)
-  const [internalSelected, setInternalSelected] = useState(null)
+  const [internalHover, setInternalHover] = useState<string | null>(null)
+  const [internalSelected, setInternalSelected] = useState<string | null>(null)
 
   const effectiveHover = hoveredZoneId ?? internalHover
   const effectiveSelected = selectedZoneId ?? internalSelected
@@ -645,27 +732,38 @@ export default function Warehouse2DView({
 
   const zones = useMemo(() => {
     if (externalZones && externalZones.length > 0) {
-      const elementZones = localZones.filter(z => !z.isAutoGenerated)
-      const backendAutoZones = externalZones.filter(z => z.isAutoGenerated)
-      const result = [...elementZones, ...backendAutoZones]
+      const elementZones = localZones.filter((z: any) => !z.isAutoGenerated)
+      const backendAutoZones = externalZones.filter((z: any) => z.isAutoGenerated)
+
+      const result: any = [...elementZones, ...backendAutoZones]
       result.freeArea = externalZones.freeArea || localZones.freeArea
       result.totalArea = externalZones.totalArea || localZones.totalArea
       result.occupiedArea = externalZones.occupiedArea || localZones.occupiedArea
+
       return result
     }
     return localZones
   }, [externalZones, localZones])
 
-  // scale = unidades SVG por metro
+  // ✅ scale = unidades SVG por metro (FIX: nunca negativo)
   const { scale, offset } = useMemo(() => {
     const padding = 80
-    const availableWidth = viewBox.width - padding * 2
-    const availableHeight = viewBox.height - padding * 2
-    const scaleX = availableWidth / dimensions.length
-    const scaleY = availableHeight / dimensions.width
-    const baseScale = Math.min(scaleX, scaleY)
-    const offsetX = (viewBox.width - dimensions.length * baseScale) / 2
-    const offsetY = (viewBox.height - dimensions.width * baseScale) / 2
+    const L = toPosNumber(dimensions.length, 80)
+    const W = toPosNumber(dimensions.width, 40)
+
+    // ✅ evita available negativos cuando el contenedor es pequeño
+    const availableWidth = Math.max(50, viewBox.width - padding * 2)
+    const availableHeight = Math.max(50, viewBox.height - padding * 2)
+
+    const scaleX = availableWidth / L
+    const scaleY = availableHeight / W
+
+    // ✅ scale SIEMPRE positiva y finita
+    const baseScale = Math.max(0.01, Math.min(scaleX, scaleY))
+
+    const offsetX = (viewBox.width - L * baseScale) / 2
+    const offsetY = (viewBox.height - W * baseScale) / 2
+
     return { scale: baseScale, offset: { x: offsetX, y: offsetY } }
   }, [viewBox, dimensions.length, dimensions.width])
 
@@ -673,10 +771,11 @@ export default function Warehouse2DView({
     const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
-        setViewBox({
-          width: rect.width || 800,
-          height: rect.height || 500
-        })
+        // ✅ evita viewBox minúsculo durante renders/transiciones
+        const w = Math.max(200, rect.width || 0)
+        const h = Math.max(200, rect.height || 0)
+        setViewBox({ width: w || 800, height: h || 500 })
+        dlog('[2DView][resize] container:', rect.width, rect.height, '-> viewBox', w, h)
       }
     }
     updateSize()
@@ -684,7 +783,7 @@ export default function Warehouse2DView({
     return () => window.removeEventListener('resize', updateSize)
   }, [])
 
-  const handleZoneMouseEnter = useCallback((id) => {
+  const handleZoneMouseEnter = useCallback((id: string) => {
     setInternalHover(id)
     onZoneHover?.(id)
   }, [onZoneHover])
@@ -694,34 +793,44 @@ export default function Warehouse2DView({
     onZoneHover?.(null)
   }, [onZoneHover])
 
-  const handleZoneClick = useCallback((zone) => {
+  const handleZoneClick = useCallback((zone: any) => {
     setInternalSelected(zone.id)
     onZoneSelect?.(zone)
   }, [onZoneSelect])
 
   // ============================================================
-  // ✅ DRAG REAL SVG (SIN MOVEABLE)
+  // ✅ DRAG REAL SVG
   // ============================================================
-  const dragRef = useRef(null)
+  const dragRef = useRef<any>(null)
 
-  const clientToMeters = useCallback((clientX, clientY) => {
+  const clientToMeters = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current
     if (!svg) return { mx: 0, my: 0 }
 
     const rect = svg.getBoundingClientRect()
     const vx = (clientX - rect.left) * (viewBox.width / rect.width)
     const vy = (clientY - rect.top) * (viewBox.height / rect.height)
-
     const mx = (vx - offset.x) / scale
     const my = (vy - offset.y) / scale
     return { mx, my }
   }, [viewBox.width, viewBox.height, offset.x, offset.y, scale])
 
-  const onPointerDownZone = useCallback((zone, e) => {
+  const onPointerDownZone = useCallback((zone: any, e: any) => {
     if (e.button !== 0) return
 
     e.preventDefault()
     e.stopPropagation()
+
+    const draggable =
+      !!zone.element &&
+      !zone.isAutoGenerated &&
+      zone.type !== 'dock_maneuver' &&
+      MOVABLE_TYPES.has(zone.type)
+
+    if (!draggable) {
+      dlog('[2DView][drag] pointerDown en zona NO movible:', { id: zone.id, type: zone.type })
+      return
+    }
 
     onDraggingChange?.(true)
 
@@ -741,12 +850,20 @@ export default function Warehouse2DView({
       w: zone.width,
       h: zone.height,
       lastX: zone.x,
-      lastY: zone.y
+      lastY: zone.y,
+      moves: 0
     }
 
     try { g.style.cursor = 'grabbing' } catch {}
 
-    const onMove = (ev) => {
+    dlog('[2DView][drag] START', {
+      id: dragRef.current.elementId,
+      startX: zone.x, startY: zone.y,
+      w: zone.width, h: zone.height,
+      mouse: { mx, my }
+    })
+
+    const onMove = (ev: any) => {
       if (!dragRef.current) return
       ev.preventDefault()
 
@@ -758,8 +875,9 @@ export default function Warehouse2DView({
 
       newX = snap(newX, 0.5)
       newY = snap(newY, 0.5)
-      newX = clamp(newX, 0, dimensions.length - d.w)
-      newY = clamp(newY, 0, dimensions.width - d.h)
+
+      newX = clamp(newX, 0, toPosNumber(dimensions.length, 80) - d.w)
+      newY = clamp(newY, 0, toPosNumber(dimensions.width, 40) - d.h)
 
       d.lastX = newX
       d.lastY = newY
@@ -767,9 +885,14 @@ export default function Warehouse2DView({
       const dxSvg = (newX - d.startX) * scale
       const dySvg = (newY - d.startY) * scale
       d.targetEl.setAttribute('transform', `translate(${dxSvg}, ${dySvg})`)
+
+      d.moves += 1
+      if (DEBUG_2D && d.moves % 20 === 0) {
+        dlog('[2DView][drag] MOVE', { id: d.elementId, newX, newY, moves: d.moves })
+      }
     }
 
-    const onUp = (ev) => {
+    const onUp = (ev: any) => {
       if (!dragRef.current) return
       ev.preventDefault()
 
@@ -779,8 +902,9 @@ export default function Warehouse2DView({
       try { d.targetEl.removeAttribute('transform') } catch {}
       try { d.targetEl.style.cursor = 'grab' } catch {}
 
-      onElementMoveEnd?.(d.elementId, d.lastX, d.lastY)
+      dlog('[2DView][drag] END', { id: d.elementId, x: d.lastX, y: d.lastY, moves: d.moves })
 
+      onElementMoveEnd?.(d.elementId, d.lastX, d.lastY)
       onDraggingChange?.(false)
 
       window.removeEventListener('pointermove', onMove)
@@ -801,9 +925,28 @@ export default function Warehouse2DView({
     onDraggingChange
   ])
 
-  // ============================================================
-  // ✅ RETURN (cierres correctos)
-  // ============================================================
+  useEffect(() => {
+    if (!DEBUG_2D) return
+    const invalid = zones.filter((z: any) => !(z.width > 0) || !(z.height > 0))
+    if (invalid.length) {
+      derr('[2DView] ZONAS INVÁLIDAS (no deberían existir). sample:', invalid.slice(0, 10))
+    } else {
+      dlog('[2DView] zones OK:', zones.length)
+    }
+  }, [zones])
+
+  // ✅ Guard final: si algo raro pasa con scale, no renderizamos SVG roto.
+  if (!Number.isFinite(scale) || !(scale > 0)) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Typography variant="body2">Vista 2D no disponible (scale inválido).</Typography>
+      </Box>
+    )
+  }
+
+  const Lm = toPosNumber(dimensions.length, 80)
+  const Wm = toPosNumber(dimensions.width, 40)
+
   return (
     <Box
       ref={containerRef}
@@ -845,11 +988,12 @@ export default function Warehouse2DView({
           <Grid2D dimensions={dimensions} scale={scale} offset={offset} gridSize={5} />
         )}
 
+        {/* ✅ perímetro (siempre positivo porque scale>0 y Lm/Wm>0) */}
         <rect
           x={offset.x}
           y={offset.y}
-          width={dimensions.length * scale}
-          height={dimensions.width * scale}
+          width={Lm * scale}
+          height={Wm * scale}
           fill="#ffffff"
           stroke="#374151"
           strokeWidth={3}
@@ -857,7 +1001,7 @@ export default function Warehouse2DView({
         />
 
         <g className="zones">
-          {zones.filter(z => ['aisle', 'main_aisle', 'cross_aisle', 'circulation'].includes(z.type)).map(zone => (
+          {zones.filter((z: any) => ['aisle', 'main_aisle', 'cross_aisle', 'circulation'].includes(z.type)).map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -872,7 +1016,7 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter(z => z.type === 'dock_maneuver').map(zone => (
+          {zones.filter((z: any) => z.type === 'dock_maneuver').map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -887,7 +1031,7 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter(z => ['operational_zone', 'zone', 'receiving', 'shipping', 'picking'].includes(z.type)).map(zone => (
+          {zones.filter((z: any) => ['operational_zone', 'zone', 'receiving', 'shipping', 'picking'].includes(z.type)).map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -902,7 +1046,7 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter(z => ['office', 'service_room', 'technical_room'].includes(z.type)).map(zone => (
+          {zones.filter((z: any) => ['office', 'service_room', 'technical_room'].includes(z.type)).map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -917,7 +1061,7 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter(z => z.type === 'shelf').map(zone => (
+          {zones.filter((z: any) => z.type === 'shelf').map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -932,7 +1076,7 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter(z => z.type === 'dock').map(zone => (
+          {zones.filter((z: any) => z.type === 'dock').map((zone: any) => (
             <Zone2D
               key={zone.id}
               zone={zone}
@@ -958,7 +1102,7 @@ export default function Warehouse2DView({
           <text x={0} y={-22} textAnchor="middle" fontSize={10} fontWeight={600} fill="#374151">N</text>
         </g>
 
-        <g transform={`translate(${offset.x}, ${offset.y + dimensions.width * scale + 60})`}>
+        <g transform={`translate(${offset.x}, ${offset.y + Wm * scale + 60})`}>
           <rect x={0} y={0} width={10 * scale} height={6} fill="#374151" />
           <rect x={10 * scale} y={0} width={10 * scale} height={6} fill="#94a3b8" />
           <text x={0} y={18} fontSize={9} fill="#64748b">0</text>
@@ -974,11 +1118,10 @@ export default function Warehouse2DView({
           fontWeight={700}
           fill="#1f2937"
         >
-          PLANO DE PLANTA - {dimensions.length}m × {dimensions.width}m ({(dimensions.length * dimensions.width).toLocaleString()}m²)
+          PLANO DE PLANTA - {Lm}m × {Wm}m ({(Lm * Wm).toLocaleString()}m²)
         </text>
       </svg>
 
-      {/* ✅ MUI fuera del SVG (IMPORTANTE para que no rompa JSX) */}
       <Box
         sx={{
           position: 'absolute',
@@ -994,12 +1137,11 @@ export default function Warehouse2DView({
         }}
       >
         <Typography variant="caption" sx={{ fontWeight: 600, color: '#374151' }}>
-          Zonas: {zones.length} | Ocupado: {Number(zones.occupiedArea || 0).toFixed(0)}m² | Libre: {Number(zones.freeArea || 0).toFixed(0)}m²
+          Zonas: {zones.length} | Ocupado: {zones.occupiedArea?.toFixed(0) || 0}m² | Libre: {zones.freeArea?.toFixed(0) || 0}m²
         </Typography>
       </Box>
     </Box>
   )
 }
 
-// Exportar función de procesamiento para uso en leyenda
 export { processElementsToZones, ZONE_COLORS }

@@ -1,26 +1,21 @@
 /**
  * UNITNAVE Designer - Editor con Toggle 2D/3D
  *
- * VERSIÓN DEFINITIVA + DEBUG:
- * - 2D: Warehouse2DEditor (COTAS + DRAG + OR-Tools)
+ * - 2D: Warehouse2DEditor
  * - 3D: Warehouse3DEditor
  *
- * @version 2.2.9 - DEBUG PACK
+ * @version 2.2
  */
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback } from 'react'
 import { Box, ToggleButtonGroup, ToggleButton, Paper, Tooltip, Typography } from '@mui/material'
-import { ViewInAr as View3DIcon, CropFree as View2DIcon } from '@mui/icons-material'
+import {
+  ViewInAr as View3DIcon,
+  CropFree as View2DIcon,
+} from '@mui/icons-material'
 
-// Componentes
 import Warehouse3DEditor from './Warehouse3DEditor'
 import Warehouse2DEditor from './Warehouse2DEditor'
-
-// ===================== DEBUG =====================
-const BUILD_TAG = `WarehouseEditorWithToggle v2.2.9 ${new Date().toISOString()}`
-const DEBUG = typeof window !== 'undefined' && localStorage.getItem('UNITNAVE_DEBUG') === '1'
-const dlog = (...args) => DEBUG && console.log(...args)
-// ================================================
 
 // ============================================================
 // SELECTOR DE MODO
@@ -52,7 +47,9 @@ function ViewModeSelector({ mode, onChange }) {
             '&.Mui-selected': {
               bgcolor: 'primary.main',
               color: 'white',
-              '&:hover': { bgcolor: 'primary.dark' }
+              '&:hover': {
+                bgcolor: 'primary.dark'
+              }
             }
           }
         }}
@@ -95,21 +92,10 @@ export default function WarehouseEditorWithToggle({
 }) {
   const [viewMode, setViewMode] = useState(initialMode)
 
-  useEffect(() => {
-    console.log('[LOAD][WarehouseEditorWithToggle]', BUILD_TAG)
-    dlog('[Toggle][props]', {
-      dimensions,
-      elementsCount: elements?.length,
-      machinery,
-      initialMode
-    })
+  const handleModeChange = useCallback((newMode) => {
+    setViewMode(newMode)
   }, [])
 
-  useEffect(() => {
-    dlog('[Toggle][mode]', viewMode)
-  }, [viewMode])
-
-  const handleModeChange = useCallback((newMode) => setViewMode(newMode), [])
   const handleSwitch3D = useCallback(() => setViewMode('3d'), [])
   const handleSwitch2D = useCallback(() => setViewMode('2d'), [])
 
