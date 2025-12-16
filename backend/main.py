@@ -175,19 +175,9 @@ async def websocket_cors_middleware(request: Request, call_next):
     FastAPI no aplica CORS al handshake WebSocket de forma nativa.
     Este middleware manual inyecta los headers necesarios para que
     el navegador permita la conexión.
-    """
-    # Dominios permitidos (tu frontend en Vercel + desarrollo local)
-    allowed_origins = [
-        "https://unitnave-designer.vercel.app",
-        "https://unitnave.vercel.app",
-        "https://unitnave.com",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000"
-    ]
     
+    NOTA: Temporalmente permite todos los orígenes para debugging.
+    """
     # Obtener el Origin del request
     origin = request.headers.get("origin", "")
     
@@ -197,48 +187,58 @@ async def websocket_cors_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         logger.info(f"🔄 Preflight OPTIONS request desde {origin}")
         response = Response(status_code=200)
-        if origin in allowed_origins or origin == "":
-            response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-            response.headers["Access-Control-Allow-Headers"] = (
-                "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
-                "Connection, Upgrade, Sec-WebSocket-Key, Sec-WebSocket-Version, "
-                "Sec-WebSocket-Extensions, Sec-WebSocket-Protocol"
-            )
-            response.headers["Access-Control-Max-Age"] = "86400"
+        # Permitir cualquier origen temporalmente
+        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Max-Age"] = "86400"
         return response
     
     # Procesar la petición normal
     response = await call_next(request)
     
-    # Si el Origin está en la lista permitida, inyectar headers
-    if origin in allowed_origins:
+    # Inyectar headers CORS para cualquier origen
+    if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
-            "Connection, Upgrade, Sec-WebSocket-Key, Sec-WebSocket-Version, "
-            "Sec-WebSocket-Extensions, Sec-WebSocket-Protocol"
-        )
+        response.headers["Access-Control-Allow-Headers"] = "*"
     
     return response
 # ==================== FIN MIDDLEWARE CORS WEBSOCKET ====================
 
 
 # ==================== CORS ESTÁNDAR (para REST API) ====================
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080,https://unitnave.vercel.app,https://unitnave.com,https://unitnave-designer.vercel.app,https://unitnave-designer-production.up.railway.app"
-).split(",")
+# CORS con lista explícita de orígenes permitidos
+ALLOWED_ORIGINS_DEFAULT = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "https://unitnave.vercel.app",
+    "https://unitnave.com",
+    "https://unitnave-designer.vercel.app",
+    "https://unitnave-designer-production.up.railway.app"
+]
+
+# Leer de variable de entorno si existe
+ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
+if ALLOWED_ORIGINS_ENV:
+    ALLOWED_ORIGINS_LIST = [origin.strip() for origin in ALLOWED_ORIGINS_ENV.split(",") if origin.strip()]
+else:
+    ALLOWED_ORIGINS_LIST = ALLOWED_ORIGINS_DEFAULT
+
+logger.info(f"🌐 CORS configurado para: {ALLOWED_ORIGINS_LIST}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS_LIST,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -293,9 +293,8 @@ async def websocket_diagnosis(request: Request):
             "sec_websocket_version": request.headers.get("sec-websocket-version"),
         },
         "cors_config": {
-            "allowed_origins": ALLOWED_ORIGINS,
-            "has_spaces": any(" " in origin for origin in ALLOWED_ORIGINS),
-            "clean_origins": [origin.strip() for origin in ALLOWED_ORIGINS],
+            "allowed_origins": ALLOWED_ORIGINS_LIST,
+            "raw_env": ALLOWED_ORIGINS_ENV,
         },
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
@@ -1310,7 +1309,7 @@ async def startup():
     logger.info("🌐 CORS WEBSOCKET MIDDLEWARE ACTIVADO")
     logger.info("🔍 DEBUG ENDPOINT ACTIVADO: /debug/websocket-diagnosis")
     logger.info("=" * 80)
-    logger.info(f"📍 CORS: {ALLOWED_ORIGINS}")
+    logger.info(f"📍 CORS: {ALLOWED_ORIGINS_LIST}")
     logger.info(f"🎯 Multi-Escenario: Activo")
     logger.info(f"📊 Fitness Evaluation: Activo")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
