@@ -5,9 +5,9 @@
  * - Nunca renderiza rects con width/height <= 0
  * - detectAisles blindado contra width/height negativos
  * - Drag SVG con pointer events (robusto)
- * - ✅ FIX REAL: scale NUNCA negativo aunque el contenedor sea pequeño
+ * - ✅ FIX SCALE: scale NUNCA puede ser negativo (evita <rect width="-40">)
  *
- * @version 2.3.1
+ * @version 2.3.2
  */
 
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
@@ -17,12 +17,12 @@ import { Box, Typography } from '@mui/material'
 // DEBUG
 // ============================================================
 const DEBUG_2D = typeof window !== 'undefined' && window.localStorage?.getItem('UN_DEBUG_2D') === '1'
-const dlog = (...args: any[]) => DEBUG_2D && console.log(...args)
-const dwarn = (...args: any[]) => DEBUG_2D && console.warn(...args)
-const derr = (...args: any[]) => DEBUG_2D && console.error(...args)
+const dlog = (...args) => DEBUG_2D && console.log(...args)
+const dwarn = (...args) => DEBUG_2D && console.warn(...args)
+const derr = (...args) => DEBUG_2D && console.error(...args)
 
-const onceSet = new Set<string>()
-const warnOnce = (key: string, ...args: any[]) => {
+const onceSet = new Set()
+const warnOnce = (key, ...args) => {
   if (!DEBUG_2D) return
   if (onceSet.has(key)) return
   onceSet.add(key)
@@ -32,7 +32,7 @@ const warnOnce = (key: string, ...args: any[]) => {
 // ============================================================
 // COLORES POR TIPO DE ZONA (Estilo CAD profesional)
 // ============================================================
-const ZONE_COLORS: any = {
+const ZONE_COLORS = {
   shelf: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Estanterías' },
   dock: { fill: '#22c55e', stroke: '#15803d', label: 'Muelles' },
   dock_maneuver: { fill: '#86efac', stroke: '#22c55e', label: 'Zona Maniobra' },
@@ -59,14 +59,14 @@ const ZONE_COLORS: any = {
 }
 
 // ============================================================
-// HELPERS
+// HELPERS (JS PURO: sin :number)
 // ============================================================
-const isFiniteNumber = (v: any) => Number.isFinite(v)
-const toPosNumber = (v: any, fallback: number) => (isFiniteNumber(v) && v > 0 ? v : fallback)
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
-const snap = (v: number, step = 0.5) => Math.round(v / step) * step
+const isFiniteNumber = (v) => Number.isFinite(v)
+const toPosNumber = (v, fallback) => (isFiniteNumber(v) && v > 0 ? v : fallback)
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+const snap = (v, step = 0.5) => Math.round(v / step) * step
 
-// ✅ Qué zonas son “movibles” (elementos reales). NO pasillos, NO free_zone, NO dock_maneuver auto.
+// ✅ Qué zonas son “movibles”
 const MOVABLE_TYPES = new Set([
   'shelf',
   'dock',
@@ -93,7 +93,7 @@ function Zone2D({
   onMouseLeave,
   onClick,
   onPointerDownZone
-}: any) {
+}) {
   const { x, y, width, height, type, id, label, rotation = 0 } = zone
 
   // ✅ No render si zona inválida
@@ -113,6 +113,7 @@ function Zone2D({
   const svgWidth = width * scale
   const svgHeight = height * scale
 
+  // ✅ si scale fuese raro (0/negativo), NO dibujamos
   if (!(svgWidth > 0) || !(svgHeight > 0) || !isFiniteNumber(svgWidth) || !isFiniteNumber(svgHeight)) {
     warnOnce(`invalid-svg-${id}`, '[2DView] Rect SVG inválido (no se dibuja):', { id, type, svgWidth, svgHeight, scale })
     return null
@@ -133,7 +134,7 @@ function Zone2D({
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(zone)}
-      onPointerDown={draggable ? (e: any) => onPointerDownZone?.(zone, e) : undefined}
+      onPointerDown={draggable ? (e) => onPointerDownZone?.(zone, e) : undefined}
       style={{ cursor: draggable ? 'grab' : 'pointer' }}
     >
       <rect
@@ -232,12 +233,15 @@ function Zone2D({
 // ============================================================
 // COMPONENTE COTAS/DIMENSIONES
 // ============================================================
-function DimensionLines({ dimensions, scale, offset }: any) {
+function DimensionLines({ dimensions, scale, offset }) {
   const length = toPosNumber(dimensions?.length, 80)
   const width = toPosNumber(dimensions?.width, 40)
 
   const svgLength = length * scale
   const svgWidth = width * scale
+
+  // ✅ si scale está mal, no dibujes cotas
+  if (!(svgLength > 0) || !(svgWidth > 0)) return null
 
   return (
     <g className="dimension-lines" pointerEvents="none">
@@ -297,12 +301,14 @@ function DimensionLines({ dimensions, scale, offset }: any) {
 // ============================================================
 // COMPONENTE GRID
 // ============================================================
-function Grid2D({ dimensions, scale, offset, gridSize = 5 }: any) {
+function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
   const length = toPosNumber(dimensions?.length, 80)
   const width = toPosNumber(dimensions?.width, 40)
 
+  if (!(scale > 0)) return null
+
   const lines = useMemo(() => {
-    const result: any[] = []
+    const result = []
     for (let x = 0; x <= length; x += gridSize) {
       result.push({
         key: `v-${x}`,
@@ -328,7 +334,7 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }: any) {
 
   return (
     <g className="grid-2d" pointerEvents="none">
-      {lines.map((line) => (
+      {lines.map(line => (
         <line
           key={line.key}
           x1={line.x1}
@@ -346,9 +352,9 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }: any) {
 // ============================================================
 // FUNCIÓN PARA PROCESAR ELEMENTOS A ZONAS
 // ============================================================
-function processElementsToZones(elements: any[], dimensions: any) {
-  const zones: any = []
-  const shelves: any[] = []
+function processElementsToZones(elements, dimensions) {
+  const zones = []
+  const shelves = []
 
   const L = toPosNumber(dimensions?.length, 80)
   const W = toPosNumber(dimensions?.width, 40)
@@ -359,7 +365,7 @@ function processElementsToZones(elements: any[], dimensions: any) {
     const y = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
     const rotation = isFiniteNumber(el.rotation) ? el.rotation : 0
 
-    let width: number, height: number
+    let width, height
 
     switch (type) {
       case 'shelf':
@@ -405,7 +411,7 @@ function processElementsToZones(elements: any[], dimensions: any) {
       }
     }
 
-    const zoneData: any = {
+    const zoneData = {
       id: el.id,
       originalId: el.id,
       type,
@@ -441,10 +447,10 @@ function processElementsToZones(elements: any[], dimensions: any) {
   })
 
   const aisles = detectAisles(shelves, dimensions, elements || [])
-  aisles.forEach((aisle: any) => zones.push(aisle))
+  aisles.forEach(aisle => zones.push(aisle))
 
   const totalArea = L * W
-  const occupiedArea = zones.reduce((sum: number, z: any) => sum + (z.area || 0), 0)
+  const occupiedArea = zones.reduce((sum, z) => sum + (z.area || 0), 0)
   const freeArea = totalArea - occupiedArea
 
   zones.freeArea = freeArea
@@ -457,11 +463,11 @@ function processElementsToZones(elements: any[], dimensions: any) {
 // ============================================================
 // detectAisles + helpers (BLINDADO)
 // ============================================================
-function elementToRect(el: any) {
+function elementToRect(el) {
   const x0 = isFiniteNumber(el.position?.x) ? el.position.x : 0
   const y0 = isFiniteNumber(el.position?.y) ? el.position.y : (isFiniteNumber(el.position?.z) ? el.position.z : 0)
 
-  let w: number, h: number
+  let w, h
 
   switch (el.type) {
     case 'shelf':
@@ -497,7 +503,7 @@ function elementToRect(el: any) {
   return { x: x0, y: y0, w, h, x2: x0 + w, y2: y0 + h, type: el.type }
 }
 
-function clampRectToBounds(r: any, L: number, W: number) {
+function clampRectToBounds(r, L, W) {
   const x1 = clamp(r.x, 0, L)
   const y1 = clamp(r.y, 0, W)
   const x2 = clamp(r.x2, 0, L)
@@ -516,8 +522,8 @@ function clampRectToBounds(r: any, L: number, W: number) {
   return { x: left, y: top, w, h, x2: right, y2: bottom, type: r.type }
 }
 
-function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
-  const zones: any[] = []
+function detectAisles(shelves, dimensions, allElements) {
+  const zones = []
   const PRECISION = 0.5
 
   const L = toPosNumber(dimensions?.length, 80)
@@ -525,7 +531,7 @@ function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
 
   const obstaclesRaw = allElements.map(elementToRect)
 
-  allElements.forEach((el) => {
+  allElements.forEach(el => {
     if (el.type === 'dock') {
       const x = isFiniteNumber(el.position?.x) ? el.position.x : 0
       const y = isFiniteNumber(el.position?.y) ? el.position.y : 0
@@ -543,17 +549,17 @@ function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
   })
 
   const obstacles = obstaclesRaw
-    .map((r: any) => clampRectToBounds(r, L, W))
+    .map(r => clampRectToBounds(r, L, W))
     .filter(Boolean)
 
-  const yPoints = new Set<number>([0, W])
-  obstacles.forEach((obs: any) => {
+  const yPoints = new Set([0, W])
+  obstacles.forEach(obs => {
     yPoints.add(obs.y)
     yPoints.add(obs.y2)
   })
   const sortedY = [...yPoints].sort((a, b) => a - b)
 
-  const freeRects: any[] = []
+  const freeRects = []
 
   for (let i = 0; i < sortedY.length - 1; i++) {
     const y1 = sortedY[i]
@@ -562,8 +568,8 @@ function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
     if (!(stripHeight > PRECISION)) continue
 
     const stripObstacles = obstacles
-      .filter((obs: any) => obs.y < y2 && obs.y2 > y1)
-      .sort((a: any, b: any) => a.x - b.x)
+      .filter(obs => obs.y < y2 && obs.y2 > y1)
+      .sort((a, b) => a.x - b.x)
 
     let currentX = 0
 
@@ -584,14 +590,14 @@ function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
 
   const mergedRects = mergeVerticalRects(freeRects, PRECISION)
 
-  mergedRects.forEach((rect: any, index: number) => {
+  mergedRects.forEach((rect, index) => {
     const { x, y, width, height } = rect
     if (!(width > 0) || !(height > 0)) return
 
     const area = width * height
     if (area < 1) return
 
-    let type: string, label: string
+    let type, label
 
     if (width <= 4 && height > 6) {
       type = width >= 3 ? 'cross_aisle' : 'aisle'
@@ -632,22 +638,22 @@ function detectAisles(shelves: any[], dimensions: any, allElements: any[]) {
   return zones
 }
 
-function mergeVerticalRects(rects: any[], tolerance: number) {
+function mergeVerticalRects(rects, tolerance) {
   if (!rects.length) return []
-  const groups = new Map<string, any[]>()
+  const groups = new Map()
 
-  rects.forEach((rect) => {
+  rects.forEach(rect => {
     if (!(rect.width > 0) || !(rect.height > 0)) return
     const keyX = Math.round(rect.x / tolerance) * tolerance
     const keyW = Math.round(rect.width / tolerance) * tolerance
     const key = `${keyX}-${keyW}`
     if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(rect)
+    groups.get(key).push(rect)
   })
 
-  const merged: any[] = []
+  const merged = []
 
-  groups.forEach((group) => {
+  groups.forEach(group => {
     group.sort((a, b) => a.y - b.y)
     let current = { ...group[0] }
 
@@ -666,21 +672,21 @@ function mergeVerticalRects(rects: any[], tolerance: number) {
   return mergeHorizontalRects(merged, tolerance)
 }
 
-function mergeHorizontalRects(rects: any[], tolerance: number) {
+function mergeHorizontalRects(rects, tolerance) {
   if (!rects.length) return []
-  const groups = new Map<string, any[]>()
+  const groups = new Map()
 
-  rects.forEach((rect) => {
+  rects.forEach(rect => {
     if (!(rect.width > 0) || !(rect.height > 0)) return
     const keyY = Math.round(rect.y / tolerance) * tolerance
     const keyH = Math.round(rect.height / tolerance) * tolerance
     const key = `${keyY}-${keyH}`
     if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(rect)
+    groups.get(key).push(rect)
   })
 
-  const merged: any[] = []
-  groups.forEach((group) => {
+  const merged = []
+  groups.forEach(group => {
     group.sort((a, b) => a.x - b.x)
     let current = { ...group[0] }
 
@@ -715,13 +721,13 @@ export default function Warehouse2DView({
   zoom = 100,
   onElementMoveEnd,
   onDraggingChange
-}: any) {
-  const containerRef = useRef<any>(null)
-  const svgRef = useRef<SVGSVGElement | null>(null)
+}) {
+  const containerRef = useRef(null)
+  const svgRef = useRef(null)
 
   const [viewBox, setViewBox] = useState({ width: 800, height: 500 })
-  const [internalHover, setInternalHover] = useState<string | null>(null)
-  const [internalSelected, setInternalSelected] = useState<string | null>(null)
+  const [internalHover, setInternalHover] = useState(null)
+  const [internalSelected, setInternalSelected] = useState(null)
 
   const effectiveHover = hoveredZoneId ?? internalHover
   const effectiveSelected = selectedZoneId ?? internalSelected
@@ -732,10 +738,10 @@ export default function Warehouse2DView({
 
   const zones = useMemo(() => {
     if (externalZones && externalZones.length > 0) {
-      const elementZones = localZones.filter((z: any) => !z.isAutoGenerated)
-      const backendAutoZones = externalZones.filter((z: any) => z.isAutoGenerated)
+      const elementZones = localZones.filter(z => !z.isAutoGenerated)
+      const backendAutoZones = externalZones.filter(z => z.isAutoGenerated)
 
-      const result: any = [...elementZones, ...backendAutoZones]
+      const result = [...elementZones, ...backendAutoZones]
       result.freeArea = externalZones.freeArea || localZones.freeArea
       result.totalArea = externalZones.totalArea || localZones.totalArea
       result.occupiedArea = externalZones.occupiedArea || localZones.occupiedArea
@@ -745,20 +751,22 @@ export default function Warehouse2DView({
     return localZones
   }, [externalZones, localZones])
 
-  // ✅ scale = unidades SVG por metro (FIX: nunca negativo)
+  // ============================================================
+  // ✅ FIX SCALE/OFFSET: scale SIEMPRE POSITIVO
+  // ============================================================
   const { scale, offset } = useMemo(() => {
     const padding = 80
     const L = toPosNumber(dimensions.length, 80)
     const W = toPosNumber(dimensions.width, 40)
 
-    // ✅ evita available negativos cuando el contenedor es pequeño
+    // cuando el contenedor es pequeño/0 al montar, esto evita available negativo
     const availableWidth = Math.max(50, viewBox.width - padding * 2)
     const availableHeight = Math.max(50, viewBox.height - padding * 2)
 
     const scaleX = availableWidth / L
     const scaleY = availableHeight / W
 
-    // ✅ scale SIEMPRE positiva y finita
+    // NUNCA 0, NUNCA negativo
     const baseScale = Math.max(0.01, Math.min(scaleX, scaleY))
 
     const offsetX = (viewBox.width - L * baseScale) / 2
@@ -771,11 +779,11 @@ export default function Warehouse2DView({
     const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
-        // ✅ evita viewBox minúsculo durante renders/transiciones
-        const w = Math.max(200, rect.width || 0)
-        const h = Math.max(200, rect.height || 0)
-        setViewBox({ width: w || 800, height: h || 500 })
-        dlog('[2DView][resize] container:', rect.width, rect.height, '-> viewBox', w, h)
+        setViewBox({
+          width: rect.width || 800,
+          height: rect.height || 500
+        })
+        dlog('[2DView][resize] container:', rect.width, rect.height)
       }
     }
     updateSize()
@@ -783,7 +791,7 @@ export default function Warehouse2DView({
     return () => window.removeEventListener('resize', updateSize)
   }, [])
 
-  const handleZoneMouseEnter = useCallback((id: string) => {
+  const handleZoneMouseEnter = useCallback((id) => {
     setInternalHover(id)
     onZoneHover?.(id)
   }, [onZoneHover])
@@ -793,7 +801,7 @@ export default function Warehouse2DView({
     onZoneHover?.(null)
   }, [onZoneHover])
 
-  const handleZoneClick = useCallback((zone: any) => {
+  const handleZoneClick = useCallback((zone) => {
     setInternalSelected(zone.id)
     onZoneSelect?.(zone)
   }, [onZoneSelect])
@@ -801,9 +809,9 @@ export default function Warehouse2DView({
   // ============================================================
   // ✅ DRAG REAL SVG
   // ============================================================
-  const dragRef = useRef<any>(null)
+  const dragRef = useRef(null)
 
-  const clientToMeters = useCallback((clientX: number, clientY: number) => {
+  const clientToMeters = useCallback((clientX, clientY) => {
     const svg = svgRef.current
     if (!svg) return { mx: 0, my: 0 }
 
@@ -815,7 +823,7 @@ export default function Warehouse2DView({
     return { mx, my }
   }, [viewBox.width, viewBox.height, offset.x, offset.y, scale])
 
-  const onPointerDownZone = useCallback((zone: any, e: any) => {
+  const onPointerDownZone = useCallback((zone, e) => {
     if (e.button !== 0) return
 
     e.preventDefault()
@@ -863,7 +871,7 @@ export default function Warehouse2DView({
       mouse: { mx, my }
     })
 
-    const onMove = (ev: any) => {
+    const onMove = (ev) => {
       if (!dragRef.current) return
       ev.preventDefault()
 
@@ -892,7 +900,7 @@ export default function Warehouse2DView({
       }
     }
 
-    const onUp = (ev: any) => {
+    const onUp = (ev) => {
       if (!dragRef.current) return
       ev.preventDefault()
 
@@ -927,25 +935,16 @@ export default function Warehouse2DView({
 
   useEffect(() => {
     if (!DEBUG_2D) return
-    const invalid = zones.filter((z: any) => !(z.width > 0) || !(z.height > 0))
+    const invalid = zones.filter(z => !(z.width > 0) || !(z.height > 0))
     if (invalid.length) {
       derr('[2DView] ZONAS INVÁLIDAS (no deberían existir). sample:', invalid.slice(0, 10))
     } else {
-      dlog('[2DView] zones OK:', zones.length)
+      dlog('[2DView] zones OK:', zones.length, 'scale:', scale)
     }
-  }, [zones])
+  }, [zones, scale])
 
-  // ✅ Guard final: si algo raro pasa con scale, no renderizamos SVG roto.
-  if (!Number.isFinite(scale) || !(scale > 0)) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Typography variant="body2">Vista 2D no disponible (scale inválido).</Typography>
-      </Box>
-    )
-  }
-
-  const Lm = toPosNumber(dimensions.length, 80)
-  const Wm = toPosNumber(dimensions.width, 40)
+  // si algo raro pasa con scale, no dibujamos para no romper el SVG
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 0.01
 
   return (
     <Box
@@ -985,15 +984,14 @@ export default function Warehouse2DView({
         <rect x={0} y={0} width={viewBox.width} height={viewBox.height} fill="#fafafa" />
 
         {showGrid && (
-          <Grid2D dimensions={dimensions} scale={scale} offset={offset} gridSize={5} />
+          <Grid2D dimensions={dimensions} scale={safeScale} offset={offset} gridSize={5} />
         )}
 
-        {/* ✅ perímetro (siempre positivo porque scale>0 y Lm/Wm>0) */}
         <rect
           x={offset.x}
           y={offset.y}
-          width={Lm * scale}
-          height={Wm * scale}
+          width={toPosNumber(dimensions.length, 80) * safeScale}
+          height={toPosNumber(dimensions.width, 40) * safeScale}
           fill="#ffffff"
           stroke="#374151"
           strokeWidth={3}
@@ -1001,11 +999,11 @@ export default function Warehouse2DView({
         />
 
         <g className="zones">
-          {zones.filter((z: any) => ['aisle', 'main_aisle', 'cross_aisle', 'circulation'].includes(z.type)).map((zone: any) => (
+          {zones.filter(z => ['aisle', 'main_aisle', 'cross_aisle', 'circulation'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id}
               isHovered={effectiveHover === zone.id}
@@ -1016,11 +1014,11 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter((z: any) => z.type === 'dock_maneuver').map((zone: any) => (
+          {zones.filter(z => z.type === 'dock_maneuver').map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id || effectiveSelected === zone.originalId}
               isHovered={effectiveHover === zone.id || effectiveHover === zone.originalId}
@@ -1031,11 +1029,11 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter((z: any) => ['operational_zone', 'zone', 'receiving', 'shipping', 'picking'].includes(z.type)).map((zone: any) => (
+          {zones.filter(z => ['operational_zone', 'zone', 'receiving', 'shipping', 'picking'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id}
               isHovered={effectiveHover === zone.id}
@@ -1046,11 +1044,11 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter((z: any) => ['office', 'service_room', 'technical_room'].includes(z.type)).map((zone: any) => (
+          {zones.filter(z => ['office', 'service_room', 'technical_room'].includes(z.type)).map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id}
               isHovered={effectiveHover === zone.id}
@@ -1061,11 +1059,11 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter((z: any) => z.type === 'shelf').map((zone: any) => (
+          {zones.filter(z => z.type === 'shelf').map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id}
               isHovered={effectiveHover === zone.id}
@@ -1076,11 +1074,11 @@ export default function Warehouse2DView({
             />
           ))}
 
-          {zones.filter((z: any) => z.type === 'dock').map((zone: any) => (
+          {zones.filter(z => z.type === 'dock').map(zone => (
             <Zone2D
               key={zone.id}
               zone={zone}
-              scale={scale}
+              scale={safeScale}
               offset={offset}
               isSelected={effectiveSelected === zone.id}
               isHovered={effectiveHover === zone.id}
@@ -1093,7 +1091,7 @@ export default function Warehouse2DView({
         </g>
 
         {showDimensions && (
-          <DimensionLines dimensions={dimensions} scale={scale} offset={offset} />
+          <DimensionLines dimensions={dimensions} scale={safeScale} offset={offset} />
         )}
 
         <g transform={`translate(${viewBox.width - 50}, 50)`}>
@@ -1102,12 +1100,12 @@ export default function Warehouse2DView({
           <text x={0} y={-22} textAnchor="middle" fontSize={10} fontWeight={600} fill="#374151">N</text>
         </g>
 
-        <g transform={`translate(${offset.x}, ${offset.y + Wm * scale + 60})`}>
-          <rect x={0} y={0} width={10 * scale} height={6} fill="#374151" />
-          <rect x={10 * scale} y={0} width={10 * scale} height={6} fill="#94a3b8" />
+        <g transform={`translate(${offset.x}, ${offset.y + toPosNumber(dimensions.width, 40) * safeScale + 60})`}>
+          <rect x={0} y={0} width={10 * safeScale} height={6} fill="#374151" />
+          <rect x={10 * safeScale} y={0} width={10 * safeScale} height={6} fill="#94a3b8" />
           <text x={0} y={18} fontSize={9} fill="#64748b">0</text>
-          <text x={10 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">10m</text>
-          <text x={20 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">20m</text>
+          <text x={10 * safeScale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">10m</text>
+          <text x={20 * safeScale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">20m</text>
         </g>
 
         <text
@@ -1118,7 +1116,7 @@ export default function Warehouse2DView({
           fontWeight={700}
           fill="#1f2937"
         >
-          PLANO DE PLANTA - {Lm}m × {Wm}m ({(Lm * Wm).toLocaleString()}m²)
+          PLANO DE PLANTA - {toPosNumber(dimensions.length, 80)}m × {toPosNumber(dimensions.width, 40)}m ({(toPosNumber(dimensions.length, 80) * toPosNumber(dimensions.width, 40)).toLocaleString()}m²)
         </text>
       </svg>
 
