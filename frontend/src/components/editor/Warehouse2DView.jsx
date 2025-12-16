@@ -7,7 +7,7 @@
  * - Drag SVG con pointer events (robusto)
  * - ✅ FIX SCALE: scale NUNCA puede ser negativo (evita <rect width="-40">)
  *
- * @version 2.3.2
+ * @version 2.3.3
  */
 
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
@@ -66,7 +66,7 @@ const toPosNumber = (v, fallback) => (isFiniteNumber(v) && v > 0 ? v : fallback)
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 const snap = (v, step = 0.5) => Math.round(v / step) * step
 
-// ✅ Qué zonas son “movibles”
+// ✅ Qué zonas son "movibles"
 const MOVABLE_TYPES = new Set([
   'shelf',
   'dock',
@@ -864,10 +864,13 @@ export default function Warehouse2DView({
 
     try { g.style.cursor = 'grabbing' } catch {}
 
+    // ✅ LOG 1: Al empezar el drag
     dlog('[2DView][drag] START', {
       id: dragRef.current.elementId,
-      startX: zone.x, startY: zone.y,
-      w: zone.width, h: zone.height,
+      startX: zone.x,
+      startY: zone.y,
+      w: zone.width,
+      h: zone.height,
       mouse: { mx, my }
     })
 
@@ -895,8 +898,16 @@ export default function Warehouse2DView({
       d.targetEl.setAttribute('transform', `translate(${dxSvg}, ${dySvg})`)
 
       d.moves += 1
-      if (DEBUG_2D && d.moves % 20 === 0) {
-        dlog('[2DView][drag] MOVE', { id: d.elementId, newX, newY, moves: d.moves })
+
+      // ✅ LOG 2: Durante el movimiento (cada 10 movimientos)
+      if (DEBUG_2D && d.moves % 10 === 0) {
+        dlog('[2DView][drag] MOVE', {
+          id: d.elementId,
+          newX,
+          newY,
+          dx: (newX - d.startX),
+          dy: (newY - d.startY)
+        })
       }
     }
 
@@ -910,7 +921,12 @@ export default function Warehouse2DView({
       try { d.targetEl.removeAttribute('transform') } catch {}
       try { d.targetEl.style.cursor = 'grab' } catch {}
 
-      dlog('[2DView][drag] END', { id: d.elementId, x: d.lastX, y: d.lastY, moves: d.moves })
+      // ✅ LOG 3: Al soltar (lo más importante)
+      dlog('[2DView][drag] END -> onElementMoveEnd', {
+        id: d.elementId,
+        x: d.lastX,
+        y: d.lastY
+      })
 
       onElementMoveEnd?.(d.elementId, d.lastX, d.lastY)
       onDraggingChange?.(false)

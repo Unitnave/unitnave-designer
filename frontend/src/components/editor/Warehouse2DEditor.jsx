@@ -9,7 +9,7 @@
  * - Cálculo exacto de zonas via backend (Shapely) /analyze
  * - ✅ Drag real + re-optimización (OR-Tools backend) /full
  *
- * @version 2.3 - FIX CRÍTICO: Saneado + logs + aisles robusto (evita <rect width/height negativos)
+ * @version 2.3.1 - FIX: skipNextPropsSyncRef para evitar que props-change pise el drag
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
@@ -489,7 +489,16 @@ export default function Warehouse2DEditor({
   const [localElements, setLocalElements] = useState(() => sanitizeElements(elements || [], dimensions, 'init'))
   const elementsRef = useRef(localElements)
 
+  // ✅ REF para evitar que props-change pise el drag
+  const skipNextPropsSyncRef = useRef(false)
+
+  // ✅ Sincronización con props externas (respetando el skip)
   useEffect(() => {
+    if (skipNextPropsSyncRef.current) {
+      dlog('[2DEditor][props-change] SKIPPED (skipNextPropsSyncRef=true)')
+      skipNextPropsSyncRef.current = false
+      return
+    }
     const next = sanitizeElements(elements || [], dimensions, 'props-change')
     setLocalElements(next)
   }, [elements, dimensions.length, dimensions.width])
@@ -590,12 +599,13 @@ export default function Warehouse2DEditor({
   // (Warehouse2DView llama a onElementMoveEnd(id, x, y))
   // ============================================================
   const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
-    dlog('[2DEditor][drag-end] element:', elementId, '->', { x: newX, y: newY })
+    // ✅ LOG para confirmar que llega
+    dlog('[2DEditor][onElementMoveEnd] recibido:', elementId, { x: newX, y: newY })
 
     const current = elementsRef.current || []
     const moved = current.find(e => e.id === elementId)
     if (!moved) {
-      dwarn('[2DEditor][drag-end] elementId no encontrado en current:', elementId)
+      dwarn('[2DEditor][onElementMoveEnd] elementId no encontrado en current:', elementId)
       return
     }
 
@@ -604,14 +614,18 @@ export default function Warehouse2DEditor({
     const safeX = clamp(newX, 0, Math.max(0, dimensions.length - w))
     const safeY = clamp(newY, 0, Math.max(0, dimensions.width - h))
     if (safeX !== newX || safeY !== newY) {
-      dwarn('[2DEditor][drag-end] clamp aplicado:', { from: { x: newX, y: newY }, to: { x: safeX, y: safeY }, w, h })
+      dwarn('[2DEditor][onElementMoveEnd] clamp aplicado:', { from: { x: newX, y: newY }, to: { x: safeX, y: safeY }, w, h })
     }
 
     // 1) Optimistic local update (feedback inmediato)
     const optimistic = current.map(e =>
       e.id === elementId ? { ...e, position: { ...(e.position || {}), x: safeX, y: safeY } } : e
     )
+
+    // ✅ Marcar skip ANTES de setLocalElements para que el useEffect no lo pise
+    skipNextPropsSyncRef.current = true
     setLocalElements(optimistic)
+    dlog('[2DEditor][onElementMoveEnd] optimistic update aplicado, skipNextPropsSyncRef=true')
 
     // 2) Backend solver
     const result = await full(dimensions, optimistic, elementId, { x: safeX, y: safeY })
@@ -622,7 +636,12 @@ export default function Warehouse2DEditor({
 
     // 3) Saneamos también lo que venga del backend
     const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-full')
+
+    // ✅ Marcar skip de nuevo antes de aplicar resultado del backend
+    skipNextPropsSyncRef.current = true
     setLocalElements(sanitizedFromBackend)
+    dlog('[2DEditor][onElementMoveEnd] backend result aplicado, skipNextPropsSyncRef=true')
+
     onElementsChange?.(sanitizedFromBackend)
   }, [dimensions, full, onElementsChange])
 
