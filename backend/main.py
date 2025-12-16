@@ -1,7 +1,12 @@
 """
-UNITNAVE API v6.3 - Motor CAD Profesional
-Backend con Optimizador V5 + Geometría Exacta (Shapely) + OR-Tools + DXF + WebSocket
-+ LOGGING ULTRA-DETALLADO + CORS WEBSOCKET + DEBUG ENDPOINT
+UNITNAVE API v6.3.1 - Motor CAD Profesional
+Backend con Optimizador Unificado + Geometría Exacta (Shapely) + DXF + WebSocket
+
+CAMBIOS v6.3.1:
+- ✅ Optimizer unificado con ConfigResolver (usa machinery del usuario)
+- ✅ /api/layout/reoptimize_smart pasa machinery al optimizer
+- ✅ /api/layout/full pasa machinery al optimizer
+- ✅ FullLayoutRequest incluye campo machinery
 
 ARCHIVO: backend/main.py
 """
@@ -57,15 +62,17 @@ except ImportError as e:
     analyze_layout = None
     logger.warning(f"⚠️ Servicio de geometría no disponible: {e}")
 
-# Importar OR-Tools
+# Importar Optimizer Unificado (antes OR-Tools, ahora con Quantum Brain)
 try:
-    from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer
+    from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer, AISLE_WIDTHS
     ORTOOLS_AVAILABLE = True
-    logger.info("✅ Optimizador OR-Tools cargado")
+    logger.info("✅ Optimizador Unificado cargado (Quantum Brain)")
 except ImportError as e:
     ORTOOLS_AVAILABLE = False
     ortools_optimize = None
-    logger.warning(f"⚠️ OR-Tools no disponible: {e}")
+    LayoutOptimizer = None
+    AISLE_WIDTHS = {}
+    logger.warning(f"⚠️ Optimizador no disponible: {e}")
 
 # Importar DXF
 try:
@@ -78,8 +85,6 @@ except ImportError as e:
     logger.warning(f"⚠️ Exportador DXF no disponible: {e}")
 
 # ==================== WEBSOCKET (NUEVO) ====================
-# NOTA: El import real y montaje se hace en el bloque DEBUG más abajo
-# Este bloque solo inicializa las variables por si el DEBUG falla
 WEBSOCKET_AVAILABLE = False
 ws_router = None
 layout_engines = {}
@@ -88,30 +93,27 @@ layout_engines = {}
 app = FastAPI(
     title="UNITNAVE Designer API",
     description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
-    version="6.3.0",
+    version="6.3.1",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
 
-# ==================== DEBUG WEBSOCKET (NO TOCAR) ====================
+# ==================== DEBUG WEBSOCKET ====================
 
 print("=" * 60)
 print("🔍 DEBUG: Verificando WebSocket...")
 
-# Intentar importar y montar FORZADAMENTE
 try:
     from websocket_routes import router as ws_router
     print("✅ websocket_routes.py importado correctamente")
     
-    # Verificar rutas
     routes = [r.path for r in ws_router.routes]
     print(f"✅ Rutas en el router: {routes}")
     
-    # Montar en FastAPI
     app.include_router(ws_router)
     print("✅ Router montado en app")
     
-    WEBSOCKET_AVAILABLE = True  # Forzar True
+    WEBSOCKET_AVAILABLE = True
     
 except Exception as e:
     print(f"❌ ERROR AL IMPORTAR/MONTAR: {e}")
@@ -122,26 +124,20 @@ except Exception as e:
 print(f"🔌 Estado final WEBSOCKET_AVAILABLE: {WEBSOCKET_AVAILABLE}")
 print("=" * 60)
 
-# ==================== FIN DEBUG ====================
 
-# ==================== 🎯 MIDDLEWARE DE LOGGING ULTRA-DETALLADO ====================
+# ==================== MIDDLEWARE DE LOGGING ====================
 @app.middleware("http")
 async def log_every_single_request(request: Request, call_next):
     """Middleware para logging detallado de TODAS las requests"""
     logger.info("=" * 80)
     logger.info(f"🎯 INCOMING REQUEST: {request.method} {request.url}")
     logger.info(f"🎯 Client HOST: {request.client.host if request.client else 'UNKNOWN'}")
-    logger.info(f"🎯 HEADERS COMPLETOS:")
-    for key, value in request.headers.items():
-        logger.info(f"  {key}: {value}")
     
-    # Log del body (solo para POST/PUT)
     if request.method in ["POST", "PUT"]:
         try:
             body = await request.body()
             body_str = body.decode()[:500] if body else "<empty>"
             logger.info(f"🎯 BODY: {body_str}")
-            # Importante: recrear el body para que esté disponible después
             from starlette.requests import Request as StarletteRequest
             async def receive():
                 return {"type": "http.request", "body": body}
@@ -149,18 +145,10 @@ async def log_every_single_request(request: Request, call_next):
         except Exception as e:
             logger.info(f"🎯 BODY: <could not read: {e}>")
     
-    # Procesar request
-    logger.info("🎯 Llamando a siguiente middleware/endpoint...")
-    
     try:
         response = await call_next(request)
-        
         logger.info(f"🎯 RESPONSE STATUS: {response.status_code}")
-        logger.info(f"🎯 RESPONSE HEADERS:")
-        for key, value in response.headers.items():
-            logger.info(f"  {key}: {value}")
         logger.info("=" * 80)
-        
         return response
     except Exception as e:
         logger.error(f"🔥 ERROR EN REQUEST: {e}")
@@ -168,26 +156,13 @@ async def log_every_single_request(request: Request, call_next):
         raise
 
 
-# ==================== MIDDLEWARE CORS PARA WEBSOCKET (CRÍTICO) ====================
+# ==================== MIDDLEWARE CORS PARA WEBSOCKET ====================
 @app.middleware("http")
 async def websocket_cors_middleware(request: Request, call_next):
-    """
-    FastAPI no aplica CORS al handshake WebSocket de forma nativa.
-    Este middleware manual inyecta los headers necesarios para que
-    el navegador permita la conexión.
-    
-    NOTA: Temporalmente permite todos los orígenes para debugging.
-    """
-    # Obtener el Origin del request
     origin = request.headers.get("origin", "")
     
-    logger.debug(f"🌐 CORS Check - Origin: {origin}, Path: {request.url.path}")
-    
-    # Manejar preflight OPTIONS primero
     if request.method == "OPTIONS":
-        logger.info(f"🔄 Preflight OPTIONS request desde {origin}")
         response = Response(status_code=200)
-        # Permitir cualquier origen temporalmente
         response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
@@ -195,10 +170,8 @@ async def websocket_cors_middleware(request: Request, call_next):
         response.headers["Access-Control-Max-Age"] = "86400"
         return response
     
-    # Procesar la petición normal
     response = await call_next(request)
     
-    # Inyectar headers CORS para cualquier origen
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
@@ -206,11 +179,9 @@ async def websocket_cors_middleware(request: Request, call_next):
         response.headers["Access-Control-Allow-Headers"] = "*"
     
     return response
-# ==================== FIN MIDDLEWARE CORS WEBSOCKET ====================
 
 
-# ==================== CORS ESTÁNDAR (para REST API) ====================
-# CORS con lista explícita de orígenes permitidos
+# ==================== CORS ESTÁNDAR ====================
 ALLOWED_ORIGINS_DEFAULT = [
     "http://localhost:5173",
     "http://localhost:3000",
@@ -223,7 +194,6 @@ ALLOWED_ORIGINS_DEFAULT = [
     "https://unitnave-designer-production.up.railway.app"
 ]
 
-# Leer de variable de entorno si existe
 ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
 if ALLOWED_ORIGINS_ENV:
     ALLOWED_ORIGINS_LIST = [origin.strip() for origin in ALLOWED_ORIGINS_ENV.split(",") if origin.strip()]
@@ -242,18 +212,10 @@ app.add_middleware(
 )
 
 
-# ==================== DEBUG ENDPOINT (NO NECESITA CONSOLA) ====================
+# ==================== DEBUG ENDPOINT ====================
 @app.get("/debug/websocket-diagnosis")
 async def websocket_diagnosis(request: Request):
-    """
-    Endpoint que te dice EXACTAMENTE qué está pasando con WebSocket.
-    Accesible desde: https://unitnave-designer-production.up.railway.app/debug/websocket-diagnosis
-    """
-    logger.info("=" * 100)
-    logger.info("🔍 DIAGNÓSTICO WEBSOCKET SOLICITADO")
-    logger.info("=" * 100)
-    
-    # Verificar si el router está montado
+    """Endpoint de diagnóstico"""
     routes = [route.path for route in app.routes if hasattr(route, "path")]
     websocket_routes = ["/ws/layout/{session_id}", "/realtime/layout/{session_id}"]
     
@@ -264,38 +226,11 @@ async def websocket_diagnosis(request: Request):
     
     is_mounted = len(mounted_routes) > 0
     
-    logger.info(f"📍 Router WebSocket montado: {is_mounted}")
-    if is_mounted:
-        logger.info(f"✅ Rutas encontradas: {mounted_routes}")
-    else:
-        logger.error(f"❌ Rutas WebSocket NO encontradas en: {routes}")
-    
-    # Log de headers recibidos (esto es CRÍTICO)
-    logger.info(f"🔑 Origin recibido: {request.headers.get('origin', 'NO ORIGIN')}")
-    logger.info(f"🔑 Connection: {request.headers.get('connection', 'NO CONNECTION')}")
-    logger.info(f"🔑 Upgrade: {request.headers.get('upgrade', 'NO UPGRADE')}")
-    logger.info(f"🔑 Sec-WebSocket-Key: {request.headers.get('sec-websocket-key', 'NO KEY')}")
-    logger.info(f"🔑 Sec-WebSocket-Version: {request.headers.get('sec-websocket-version', 'NO VERSION')}")
-    
-    logger.info("=" * 100)
-    
     return {
         "status": "diagnosis_complete",
         "websocket_available": WEBSOCKET_AVAILABLE,
         "websocket_route_mounted": is_mounted,
         "mounted_routes": mounted_routes,
-        "all_routes": routes,
-        "headers_received": {
-            "origin": request.headers.get("origin"),
-            "connection": request.headers.get("connection"),
-            "upgrade": request.headers.get("upgrade"),
-            "sec_websocket_key": request.headers.get("sec-websocket-key"),
-            "sec_websocket_version": request.headers.get("sec-websocket-version"),
-        },
-        "cors_config": {
-            "allowed_origins": ALLOWED_ORIGINS_LIST,
-            "raw_env": ALLOWED_ORIGINS_ENV,
-        },
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
             "ortools": ORTOOLS_AVAILABLE,
@@ -303,22 +238,8 @@ async def websocket_diagnosis(request: Request):
             "ga": GA_AVAILABLE,
             "websocket": WEBSOCKET_AVAILABLE
         },
-        "recommendation": (
-            "Si 'websocket_route_mounted' es false, el router no está incluido. "
-            "Si 'origin' es null, CORS no está configurado. "
-            "Si 'websocket_available' es false, hay error de import en websocket_routes.py"
-        )
+        "aisle_widths": AISLE_WIDTHS if ORTOOLS_AVAILABLE else {}
     }
-# ==================== FIN DEBUG ENDPOINT ====================
-
-
-# ==================== WEBSOCKET ROUTER ====================
-# NOTA: El router ya está montado en el bloque DEBUG más arriba (línea ~116)
-# Este bloque solo hace logging del estado
-if WEBSOCKET_AVAILABLE:
-    logger.info("✅ Router WebSocket está activo")
-else:
-    logger.warning("⚠️ Router WebSocket NO incluido - WEBSOCKET_AVAILABLE=" + str(WEBSOCKET_AVAILABLE))
 
 
 # ==================== MODELOS REQUEST ====================
@@ -438,6 +359,10 @@ class OptimizeLayoutRequest(BaseModel):
         None,
         description="IDs de elementos que no deben moverse"
     )
+    machinery: Optional[str] = Field(
+        None,
+        description="Tipo de maquinaria para calcular pasillo"
+    )
 
 
 class ExportDXFRequest(BaseModel):
@@ -475,6 +400,7 @@ class FullLayoutRequest(BaseModel):
     moved_element_id: Optional[str] = None
     moved_position: Optional[Dict[str, float]] = None
     optimize: bool = True
+    machinery: Optional[str] = None  # ✅ AÑADIDO: machinery del usuario
 
 
 # ==================== BASE DE DATOS (Memoria) ====================
@@ -552,20 +478,20 @@ async def root():
     logger.info("🏠 Root endpoint llamado")
     return {
         "name": "UNITNAVE Designer API",
-        "version": "6.3.0",
+        "version": "6.3.1",
         "status": "running",
         "features": {
             "multi_scenario": True,
             "fitness_evaluation": True,
             "detailed_report": True,
             "geometry_exact": GEOMETRY_AVAILABLE,
-            "ortools_optimizer": ORTOOLS_AVAILABLE,
+            "quantum_brain_optimizer": ORTOOLS_AVAILABLE,
             "dxf_export": DXF_AVAILABLE,
             "ga_optimizer": GA_AVAILABLE,
             "websocket_interactive": WEBSOCKET_AVAILABLE,
-            "websocket_cors": True,
-            "debug_endpoint": True
+            "machinery_aisle_widths": True
         },
+        "aisle_widths": AISLE_WIDTHS if ORTOOLS_AVAILABLE else {},
         "endpoints": {
             "optimize": "/api/optimize",
             "scenarios": "/api/scenarios",
@@ -576,6 +502,7 @@ async def root():
             "layout_optimize": "/api/layout/optimize",
             "layout_export_dxf": "/api/layout/export/dxf",
             "layout_full": "/api/layout/full",
+            "reoptimize_smart": "/api/layout/reoptimize_smart",
             "websocket": "/ws/layout/{session_id}",
             "debug": "/debug/websocket-diagnosis",
             "docs": "/api/docs"
@@ -589,16 +516,38 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "6.3.0",
+        "version": "6.3.1",
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
-            "ortools": ORTOOLS_AVAILABLE,
+            "quantum_brain": ORTOOLS_AVAILABLE,
             "dxf": DXF_AVAILABLE,
             "ga": GA_AVAILABLE,
-            "websocket": WEBSOCKET_AVAILABLE,
-            "websocket_cors": True
+            "websocket": WEBSOCKET_AVAILABLE
         },
+        "aisle_widths": AISLE_WIDTHS if ORTOOLS_AVAILABLE else {},
         "active_sessions": len(layout_engines) if WEBSOCKET_AVAILABLE else 0
+    }
+
+
+# ==================== ENDPOINT: ANCHOS DE PASILLO ====================
+
+@app.get("/api/aisle-widths")
+async def get_aisle_widths():
+    """Retorna los anchos de pasillo por tipo de maquinaria"""
+    if ORTOOLS_AVAILABLE and AISLE_WIDTHS:
+        return {
+            "aisle_widths": AISLE_WIDTHS,
+            "default": 3.0
+        }
+    return {
+        "aisle_widths": {
+            'transpaleta': 1.8,
+            'apilador': 2.4,
+            'retractil': 2.8,
+            'contrapesada': 3.6,
+            'trilateral': 1.9
+        },
+        "default": 3.0
     }
 
 
@@ -606,16 +555,7 @@ async def health():
 
 @app.post("/api/optimize")
 async def optimize_layout(request: OptimizeRequest):
-    """
-    🚀 Optimización V5.2 Multi-Escenario
-    
-    - Genera 5-8 escenarios según tipo de almacén (15-20 con ABC)
-    - Evalúa con fitness multi-criterio
-    - Selecciona el mejor + alternativas
-    - Incluye informe detallado con medidas
-    - Soporta optimización ABC por zonas
-    - V5.2: Configuración completa de oficinas por plantas
-    """
+    """🚀 Optimización V5.2 Multi-Escenario"""
     try:
         logger.info(f"🚀 Optimización solicitada: {request.length}x{request.width}x{request.height}")
         
@@ -640,11 +580,7 @@ async def optimize_layout(request: OptimizeRequest):
 
 @app.post("/api/scenarios")
 async def get_all_scenarios(request: OptimizeRequest):
-    """
-    📊 Obtener TODOS los escenarios evaluados
-    
-    Útil para mostrar comparativa completa en frontend
-    """
+    """📊 Obtener TODOS los escenarios evaluados"""
     try:
         logger.info(f"📊 Escenarios solicitados: {request.length}x{request.width}")
         
@@ -698,12 +634,7 @@ async def get_all_scenarios(request: OptimizeRequest):
 
 @app.post("/api/optimize/compare")
 async def compare_priorities(request: OptimizeRequest):
-    """
-    ⚖️ Comparar mismo layout con diferentes prioridades
-    
-    Ejecuta optimización con capacity, balance y operations
-    para mostrar trade-offs
-    """
+    """⚖️ Comparar mismo layout con diferentes prioridades"""
     try:
         logger.info(f"⚖️ Comparación de prioridades: {request.length}x{request.width}")
         
@@ -759,13 +690,11 @@ async def compare_priorities(request: OptimizeRequest):
 
 @app.post("/api/optimize/ga")
 async def optimize_genetic(request: OptimizeRequest):
-    """
-    🧬 Optimización con Algoritmo Genético (Experimental)
-    """
+    """🧬 Optimización con Algoritmo Genético"""
     if not GA_AVAILABLE:
         raise HTTPException(
             status_code=501,
-            detail="Optimizador GA no disponible. Verifica que optimizer_ga.py existe."
+            detail="Optimizador GA no disponible."
         )
     
     try:
@@ -798,7 +727,6 @@ async def optimize_genetic(request: OptimizeRequest):
                 weight_distance=request.ga_config.weight_distance
             )
         
-        logger.info("🧬 Iniciando optimización GA...")
         result = optimize_with_ga(input_data, ga_config)
         
         logger.info(f"✅ GA completado: {result.capacity.total_pallets} palets")
@@ -812,10 +740,7 @@ async def optimize_genetic(request: OptimizeRequest):
 
 @app.post("/api/optimize/scenarios")
 async def optimize_scenarios(request: OptimizeRequest):
-    """
-    📊 Comparador de escenarios por maquinaria
-    Genera 3 variantes con diferentes maquinarias
-    """
+    """📊 Comparador de escenarios por maquinaria"""
     try:
         logger.info(f"📊 Escenarios por maquinaria: {request.length}x{request.width}")
         
@@ -943,9 +868,7 @@ async def delete_design(design_id: str):
 
 @app.post("/api/report")
 async def generate_detailed_report(request: OptimizeRequest):
-    """
-    📋 Genera informe detallado con todas las mediciones (en cm)
-    """
+    """📋 Genera informe detallado"""
     try:
         logger.info(f"📋 Generando informe: {request.length}x{request.width}")
         
@@ -961,7 +884,7 @@ async def generate_detailed_report(request: OptimizeRequest):
         report = generator.generate()
         report_dict = generator.to_dict()
         
-        logger.info(f"📋 Informe generado: {report_dict.get('resumen_palets', {}).get('total_palets', 0)} palets")
+        logger.info(f"📋 Informe generado")
         
         return report_dict
         
@@ -974,9 +897,7 @@ async def generate_detailed_report(request: OptimizeRequest):
 
 @app.post("/api/report/pdf")
 async def generate_pdf_report(request: OptimizeRequest):
-    """
-    📄 Genera informe en PDF
-    """
+    """📄 Genera informe en PDF"""
     try:
         logger.info(f"📄 Generando PDF: {request.length}x{request.width}")
         
@@ -1017,7 +938,7 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
     if not GEOMETRY_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Servicio de geometría no disponible. Instalar: pip install shapely"
+            detail="Servicio de geometría no disponible."
         )
     
     try:
@@ -1038,7 +959,7 @@ async def analyze_layout_geometry(request: LayoutAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== OR-TOOLS OPTIMIZATION ====================
+# ==================== LAYOUT OPTIMIZE ====================
 
 @app.post("/api/layout/optimize")
 async def optimize_layout_ortools(request: OptimizeLayoutRequest):
@@ -1046,18 +967,21 @@ async def optimize_layout_ortools(request: OptimizeLayoutRequest):
     if not ORTOOLS_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="OR-Tools no disponible. Instalar: pip install ortools"
+            detail="Optimizador no disponible."
         )
     
     try:
         logger.info(f"🧮 Optimizando layout: {len(request.elements)} elementos")
+        logger.info(f"    Maquinaria: {request.machinery or 'no especificada'}")
         
+        # ✅ PASAR MACHINERY AL OPTIMIZER
         result = ortools_optimize(
             dimensions=request.dimensions,
             elements=request.elements,
             moved_element_id=request.moved_element_id,
             moved_position=request.moved_position,
-            fixed_elements=request.fixed_elements
+            fixed_elements=request.fixed_elements,
+            machinery=request.machinery  # ✅ AÑADIDO
         )
         
         logger.info(f"✅ Optimización completada: {result['solver_status']}")
@@ -1078,7 +1002,7 @@ async def export_layout_dxf(request: ExportDXFRequest):
     if not DXF_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Exportador DXF no disponible. Instalar: pip install ezdxf"
+            detail="Exportador DXF no disponible."
         )
     
     try:
@@ -1109,13 +1033,14 @@ async def export_layout_dxf(request: ExportDXFRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== ENDPOINT COMBINADO ====================
+# ==================== ENDPOINT COMBINADO: /api/layout/full ====================
 
 @app.post("/api/layout/full")
 async def full_layout_analysis(request: FullLayoutRequest):
     """Endpoint completo para frontend inteligente"""
     try:
         logger.info(f"🔄 Análisis completo: {len(request.elements)} elementos")
+        logger.info(f"    Maquinaria: {request.machinery or 'no especificada'}")
         
         result_elements = request.elements
         optimization_result = None
@@ -1124,34 +1049,27 @@ async def full_layout_analysis(request: FullLayoutRequest):
         if request.optimize and request.moved_element_id and ORTOOLS_AVAILABLE:
             logger.info(f"🧮 Optimizando por movimiento de {request.moved_element_id}")
             
+            # ✅ PASAR MACHINERY AL OPTIMIZER
             opt_result = ortools_optimize(
                 dimensions=request.dimensions,
                 elements=request.elements,
                 moved_element_id=request.moved_element_id,
-                moved_position=request.moved_position
+                moved_position=request.moved_position,
+                machinery=request.machinery  # ✅ AÑADIDO
             )
             
             if opt_result['success']:
-                result_elements = []
-                for opt_el in opt_result['elements']:
-                    original = next(
-                        (e for e in request.elements if e.get('id') == opt_el['id']),
-                        {}
-                    )
-                    updated = {**original}
-                    if 'position' in updated:
-                        updated['position']['x'] = opt_el['x']
-                        updated['position']['y'] = opt_el['y']
-                    else:
-                        updated['x'] = opt_el['x']
-                        updated['y'] = opt_el['y']
-                    result_elements.append(updated)
+                result_elements = opt_result.get('elements', request.elements)
                 
                 optimization_result = {
                     'success': True,
                     'solver_status': opt_result['solver_status'],
                     'solve_time_ms': opt_result['solve_time_ms'],
-                    'messages': opt_result['messages']
+                    'messages': opt_result['messages'],
+                    'affected_shelves': opt_result.get('affected_shelves', []),
+                    'animation_data': opt_result.get('animation_data', []),
+                    'metrics': opt_result.get('metrics', {}),
+                    'config': opt_result.get('config', {})
                 }
         
         # 2. Analizar geometría
@@ -1184,7 +1102,7 @@ async def full_layout_analysis(request: FullLayoutRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== REOPTIMIZE ENDPOINT (NUEVO) ====================
+# ==================== REOPTIMIZE ENDPOINT (OPCIONAL) ====================
 try:
     from reoptimize_endpoint import add_reoptimize_endpoint
     add_reoptimize_endpoint(app)
@@ -1209,18 +1127,19 @@ class ReoptimizeSmartRequest(BaseModel):
 @app.post("/api/layout/reoptimize_smart")
 async def reoptimize_smart(req: ReoptimizeSmartRequest):
     """
-    🧠 Re-optimiza el layout con zonas prohibidas.
+    🧠 Re-optimiza el layout usando el Quantum Brain.
     
-    - El elemento movido PUEDE estar en cualquier posición (incluso zonas prohibidas)
-    - El resto de estanterías se re-organizan evitando las zonas prohibidas
-    - Si no hay solución factible, devuelve error
-    
-    Zonas prohibidas típicas:
-    - Pasillos principales
-    - Zonas de maniobra de muelles
-    - Oficinas
-    - Muelles
+    - Usa la MAQUINARIA del usuario para calcular pasillos
+    - Detecta filas automáticamente
+    - Desplaza estanterías vecinas si hay colisión
+    - Hace snap a filas existentes
     """
+    if not ORTOOLS_AVAILABLE or not LayoutOptimizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Optimizador no disponible."
+        )
+    
     try:
         logger.info("=" * 60)
         logger.info("🧠 /api/layout/reoptimize_smart LLAMADO")
@@ -1228,61 +1147,49 @@ async def reoptimize_smart(req: ReoptimizeSmartRequest):
         logger.info(f"   Nueva posición: {req.moved_position}")
         logger.info(f"   Elementos actuales: {len(req.currentElements)}")
         logger.info(f"   Zonas prohibidas: {len(req.forbiddenZones)}")
-        logger.info("=" * 60)
         
-        # Obtener dimensiones de la config
+        # Obtener dimensiones y MAQUINARIA de la config
         length = req.originalConfig.get('length', 80)
         width = req.originalConfig.get('width', 40)
+        machinery = req.originalConfig.get('machinery', 'retractil')  # ✅ OBTENER MACHINERY
         
-        # Crear optimizador OR-Tools
-        from optimizer_ortools import LayoutOptimizer
-        optimizer = LayoutOptimizer(length=length, width=width)
+        logger.info(f"   Maquinaria: {machinery}")
+        logger.info("=" * 60)
         
-        # Ejecutar optimización con zonas prohibidas
+        # ✅ CREAR OPTIMIZER CON MACHINERY DEL USUARIO
+        optimizer = LayoutOptimizer(
+            length=length, 
+            width=width, 
+            machinery=machinery  # ✅ PASAR MACHINERY
+        )
+        
+        # Ejecutar optimización
         result = optimizer.optimize(
             elements=req.currentElements,
             moved_element_id=req.moved_element_id,
             moved_position=req.moved_position,
-            forbidden_zones=req.forbiddenZones,
             max_time_seconds=5.0
         )
         
-        result_dict = result.to_dict()
-        
-        if not result_dict.get('success'):
-            logger.warning(f"⚠️ No se encontró solución: {result_dict.get('messages')}")
+        if not result.get('success'):
+            logger.warning(f"⚠️ No se encontró solución: {result.get('messages')}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"No cabe en esa posición: {result_dict.get('messages', ['Sin solución'])}"
+                detail=f"No cabe en esa posición: {result.get('messages', ['Sin solución'])}"
             )
         
-        logger.info(f"✅ Re-optimización exitosa en {result_dict.get('solve_time_ms', 0):.0f}ms")
-        
-        # Convertir elementos a formato frontend
-        elements_out = []
-        for el in result_dict.get('elements', []):
-            elements_out.append({
-                'id': el['id'],
-                'type': el['type'],
-                'position': {
-                    'x': el['x'],
-                    'y': el['y'],
-                    'z': 0
-                },
-                'dimensions': {
-                    'length': el['width'],
-                    'depth': el['height'],
-                    'height': 10
-                },
-                'rotation': el.get('rotation', 0),
-                'was_moved': el.get('was_moved', False)
-            })
+        logger.info(f"✅ Re-optimización exitosa en {result.get('solve_time_ms', 0):.0f}ms")
+        logger.info(f"   Config usada: {result.get('config', {})}")
         
         return {
             "status": "success",
-            "elements": elements_out,
-            "solver_status": result_dict.get('solver_status'),
-            "solve_time_ms": result_dict.get('solve_time_ms'),
+            "elements": result.get('elements', []),
+            "solver_status": result.get('solver_status'),
+            "solve_time_ms": result.get('solve_time_ms'),
+            "affected_shelves": result.get('affected_shelves', []),
+            "animation_data": result.get('animation_data', []),
+            "metrics": result.get('metrics', {}),
+            "config": result.get('config', {}),
             "moved_element": req.moved_element_id,
             "moved_position": req.moved_position
         }
@@ -1304,20 +1211,20 @@ logger.info("✅ Endpoint /api/layout/reoptimize_smart cargado")
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 80)
-    logger.info("🏭 UNITNAVE Designer API v6.3.1 - Motor CAD Profesional + Reoptimize")
-    logger.info("🎯 LOGGING ULTRA-DETALLADO ACTIVADO")
-    logger.info("🌐 CORS WEBSOCKET MIDDLEWARE ACTIVADO")
-    logger.info("🔍 DEBUG ENDPOINT ACTIVADO: /debug/websocket-diagnosis")
+    logger.info("🏭 UNITNAVE Designer API v6.3.1 - Quantum Brain Edition")
+    logger.info("🧠 Optimizador con detección de filas + machinery del usuario")
     logger.info("=" * 80)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS_LIST}")
     logger.info(f"🎯 Multi-Escenario: Activo")
     logger.info(f"📊 Fitness Evaluation: Activo")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
     logger.info(f"📐 Geometría exacta (Shapely): {GEOMETRY_AVAILABLE}")
-    logger.info(f"🧮 Optimizador (OR-Tools): {ORTOOLS_AVAILABLE}")
+    logger.info(f"🧠 Quantum Brain Optimizer: {ORTOOLS_AVAILABLE}")
     logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
-    logger.info(f"🔌 WebSocket Interactivo: {WEBSOCKET_AVAILABLE}")
-    logger.info(f"🔄 Reoptimize Endpoint: {REOPTIMIZE_AVAILABLE}")
+    logger.info(f"🔌 WebSocket: {WEBSOCKET_AVAILABLE}")
+    logger.info(f"🔄 Reoptimize Smart: {REOPTIMIZE_SMART_AVAILABLE}")
+    if ORTOOLS_AVAILABLE:
+        logger.info(f"🚜 Anchos de pasillo: {AISLE_WIDTHS}")
     logger.info("=" * 80)
 
 
