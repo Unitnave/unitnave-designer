@@ -12,40 +12,42 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { Box, Typography } from '@mui/material'
 
-// ===================== DEBUG =====================
-const DBG = true
-const log = (...a) => DBG && console.log('[2DView]', ...a)
-const group = (t, fn) => {
-  if (!DBG) return
-  console.groupCollapsed(t)
-  try { fn?.() } finally { console.groupEnd() }
-}
-// ================================================
-
+// ============================================================
+// COLORES POR TIPO DE ZONA (Estilo CAD profesional)
+// ============================================================
 const ZONE_COLORS = {
   shelf: { fill: '#3b82f6', stroke: '#1d4ed8', label: 'Estanterías' },
   dock: { fill: '#22c55e', stroke: '#15803d', label: 'Muelles' },
   dock_maneuver: { fill: '#86efac', stroke: '#22c55e', label: 'Zona Maniobra' },
   office: { fill: '#a855f7', stroke: '#7c3aed', label: 'Oficinas' },
+
   operational_zone: { fill: '#06b6d4', stroke: '#0891b2', label: 'Zona Operativa' },
   receiving: { fill: '#fbbf24', stroke: '#d97706', label: 'Recepción' },
   shipping: { fill: '#fb923c', stroke: '#ea580c', label: 'Expedición' },
   picking: { fill: '#f472b6', stroke: '#db2777', label: 'Picking' },
+
   service_room: { fill: '#f59e0b', stroke: '#b45309', label: 'Servicios' },
   technical_room: { fill: '#ef4444', stroke: '#b91c1c', label: 'Sala Técnica' },
+
   aisle: { fill: '#e2e8f0', stroke: '#94a3b8', label: 'Pasillo Operativo' },
   main_aisle: { fill: '#fef3c7', stroke: '#f59e0b', label: 'Pasillo Principal' },
   cross_aisle: { fill: '#dbeafe', stroke: '#3b82f6', label: 'Pasillo Transversal' },
   circulation: { fill: '#dcfce7', stroke: '#22c55e', label: 'Zona Circulación' },
+
   free_zone: { fill: '#f8fafc', stroke: '#cbd5e1', label: 'Zona Libre' },
   wall: { fill: '#64748b', stroke: '#475569', label: 'Muro' },
+
   selected: { fill: '#fef08a', stroke: '#eab308' },
   hover: { fill: '#bfdbfe', stroke: '#3b82f6' }
 }
 
+// ============================================================
+// HELPERS
+// ============================================================
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 const snap = (v, step = 0.5) => Math.round(v / step) * step
 
+// ✅ Qué zonas son “movibles” (elementos reales). NO pasillos, NO free_zone, NO dock_maneuver auto.
 const MOVABLE_TYPES = new Set([
   'shelf',
   'dock',
@@ -59,6 +61,9 @@ const MOVABLE_TYPES = new Set([
   'picking'
 ])
 
+// ============================================================
+// COMPONENTE ZONA INDIVIDUAL
+// ============================================================
 function Zone2D({
   zone,
   scale,
@@ -98,9 +103,9 @@ function Zone2D({
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(zone)}
+      onPointerDown={draggable ? (e) => onPointerDownZone?.(zone, e) : undefined}
       style={{ cursor: draggable ? 'grab' : 'pointer' }}
     >
-      {/* ✅ HANDLER AQUÍ (rect) = MUCHO MÁS FIABLE */}
       <rect
         x={svgX}
         y={svgY}
@@ -113,9 +118,6 @@ function Zone2D({
         rx={2}
         ry={2}
         transform={rotation ? `rotate(${rotation}, ${centerX}, ${centerY})` : undefined}
-        onPointerDown={draggable ? (e) => onPointerDownZone?.(zone, e) : undefined}
-        onMouseDown={draggable ? (e) => onPointerDownZone?.(zone, e) : undefined} // fallback
-        style={{ cursor: draggable ? 'grab' : 'pointer' }}
       />
 
       {type === 'shelf' && svgWidth > 20 && svgHeight > 10 && (
@@ -137,7 +139,13 @@ function Zone2D({
 
       {type === 'dock' && (
         <g pointerEvents="none">
-          <rect x={svgX + svgWidth * 0.1} y={svgY} width={svgWidth * 0.8} height={3} fill="#15803d" />
+          <rect
+            x={svgX + svgWidth * 0.1}
+            y={svgY}
+            width={svgWidth * 0.8}
+            height={3}
+            fill="#15803d"
+          />
           <path
             d={`M ${centerX} ${svgY + 8} L ${centerX - 5} ${svgY + 15} L ${centerX + 5} ${svgY + 15} Z`}
             fill={colors.stroke}
@@ -161,10 +169,39 @@ function Zone2D({
           {label || id}
         </text>
       )}
+
+      {(isHovered || isSelected) && (
+        <g pointerEvents="none">
+          <text
+            x={centerX}
+            y={svgY - 6}
+            textAnchor="middle"
+            fontSize={9}
+            fontFamily="'JetBrains Mono', monospace"
+            fill="#374151"
+          >
+            {width.toFixed(1)}m
+          </text>
+          <text
+            x={svgX + svgWidth + 6}
+            y={centerY}
+            textAnchor="start"
+            dominantBaseline="middle"
+            fontSize={9}
+            fontFamily="'JetBrains Mono', monospace"
+            fill="#374151"
+          >
+            {height.toFixed(1)}m
+          </text>
+        </g>
+      )}
     </g>
   )
 }
 
+// ============================================================
+// COMPONENTE COTAS/DIMENSIONES
+// ============================================================
 function DimensionLines({ dimensions, scale, offset }) {
   const { length, width } = dimensions
   const svgLength = length * scale
@@ -225,6 +262,9 @@ function DimensionLines({ dimensions, scale, offset }) {
   )
 }
 
+// ============================================================
+// COMPONENTE GRID
+// ============================================================
 function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
   const { length, width } = dimensions
 
@@ -270,7 +310,9 @@ function Grid2D({ dimensions, scale, offset, gridSize = 5 }) {
   )
 }
 
-/* =================== TU processElementsToZones + helpers (sin tocar) =================== */
+// ============================================================
+// FUNCIÓN PARA PROCESAR ELEMENTOS A ZONAS (tu código intacto)
+// ============================================================
 function processElementsToZones(elements, dimensions) {
   const zones = []
   const shelves = []
@@ -282,6 +324,7 @@ function processElementsToZones(elements, dimensions) {
     const rotation = el.rotation || 0
 
     let width, height
+
     switch (type) {
       case 'shelf':
         width = el.dimensions?.length ?? 2.7
@@ -325,6 +368,7 @@ function processElementsToZones(elements, dimensions) {
     }
 
     zones.push(zoneData)
+
     if (type === 'shelf') shelves.push(zoneData)
 
     if (type === 'dock') {
@@ -359,6 +403,9 @@ function processElementsToZones(elements, dimensions) {
   return zones
 }
 
+// ============================================================
+// detectAisles + helpers (tu código intacto)
+// ============================================================
 function elementToRect(el) {
   const x = el.position?.x ?? 0
   const y = el.position?.y ?? el.position?.z ?? 0
@@ -407,9 +454,12 @@ function detectAisles(shelves, dimensions, allElements) {
       const w = el.dimensions?.width ?? 3.5
       const maneuverDepth = 4
       obstacles.push({
-        x, y: y + (el.dimensions?.depth ?? 0.5),
-        w, h: maneuverDepth,
-        x2: x + w, y2: y + (el.dimensions?.depth ?? 0.5) + maneuverDepth,
+        x,
+        y: y + (el.dimensions?.depth ?? 0.5),
+        w,
+        h: maneuverDepth,
+        x2: x + w,
+        y2: y + (el.dimensions?.depth ?? 0.5) + maneuverDepth,
         type: 'dock_maneuver'
       })
     }
@@ -423,13 +473,17 @@ function detectAisles(shelves, dimensions, allElements) {
   const sortedY = [...yPoints].sort((a, b) => a - b)
 
   const freeRects = []
+
   for (let i = 0; i < sortedY.length - 1; i++) {
     const y1 = sortedY[i]
     const y2 = sortedY[i + 1]
     const stripHeight = y2 - y1
     if (stripHeight < PRECISION) continue
 
-    const stripObstacles = obstacles.filter(obs => obs.y < y2 && obs.y2 > y1).sort((a, b) => a.x - b.x)
+    const stripObstacles = obstacles
+      .filter(obs => obs.y < y2 && obs.y2 > y1)
+      .sort((a, b) => a.x - b.x)
+
     let currentX = 0
 
     stripObstacles.forEach(obs => {
@@ -452,6 +506,7 @@ function detectAisles(shelves, dimensions, allElements) {
     if (area < 1) return
 
     let type, label
+
     if (width <= 4 && height > 6) {
       type = width >= 3 ? 'cross_aisle' : 'aisle'
       label = width >= 3 ? 'Pasillo Transversal' : 'Pasillo Operativo'
@@ -504,6 +559,7 @@ function mergeVerticalRects(rects, tolerance) {
   })
 
   const merged = []
+
   groups.forEach(group => {
     group.sort((a, b) => a.y - b.y)
     let current = { ...group[0] }
@@ -536,6 +592,7 @@ function mergeHorizontalRects(rects, tolerance) {
   })
 
   const merged = []
+
   groups.forEach(group => {
     group.sort((a, b) => a.x - b.x)
     let current = { ...group[0] }
@@ -554,8 +611,10 @@ function mergeHorizontalRects(rects, tolerance) {
 
   return merged
 }
-/* ====================================================================================== */
 
+// ============================================================
+// COMPONENTE PRINCIPAL
+// ============================================================
 export default function Warehouse2DView({
   dimensions = { length: 80, width: 40, height: 10 },
   elements = [],
@@ -568,12 +627,8 @@ export default function Warehouse2DView({
   showDimensions = true,
   zoom = 100,
   onElementMoveEnd,
-  onDraggingChange // ✅ NUEVO (lo usa el editor)
+  onDraggingChange
 }) {
-  useEffect(() => {
-    console.log('[LOAD][Warehouse2DView]', import.meta?.url || '(no import.meta.url)')
-  }, [])
-
   const containerRef = useRef(null)
   const svgRef = useRef(null)
 
@@ -584,7 +639,9 @@ export default function Warehouse2DView({
   const effectiveHover = hoveredZoneId ?? internalHover
   const effectiveSelected = selectedZoneId ?? internalSelected
 
-  const localZones = useMemo(() => processElementsToZones(elements, dimensions), [elements, dimensions])
+  const localZones = useMemo(() => {
+    return processElementsToZones(elements, dimensions)
+  }, [elements, dimensions])
 
   const zones = useMemo(() => {
     if (externalZones && externalZones.length > 0) {
@@ -599,6 +656,7 @@ export default function Warehouse2DView({
     return localZones
   }, [externalZones, localZones])
 
+  // scale = unidades SVG por metro
   const { scale, offset } = useMemo(() => {
     const padding = 80
     const availableWidth = viewBox.width - padding * 2
@@ -619,29 +677,11 @@ export default function Warehouse2DView({
           width: rect.width || 800,
           height: rect.height || 500
         })
-        log('[resize] container:', rect.width, rect.height)
       }
     }
     updateSize()
     window.addEventListener('resize', updateSize)
     return () => window.removeEventListener('resize', updateSize)
-  }, [])
-
-  // Watchdog overlay: qué elemento está encima
-  useEffect(() => {
-    const svg = svgRef.current
-    if (!svg) return
-    const handler = (e) => {
-      if (!DBG) return
-      const el = document.elementFromPoint(e.clientX, e.clientY)
-      if (!el) return
-      // solo “a veces” para no spamear
-      if (Math.random() < 0.03) {
-        log('[elementFromPoint]', el.tagName, el.getAttribute?.('class'))
-      }
-    }
-    svg.addEventListener('pointermove', handler, { passive: true })
-    return () => svg.removeEventListener('pointermove', handler)
   }, [])
 
   const handleZoneMouseEnter = useCallback((id) => {
@@ -659,7 +699,9 @@ export default function Warehouse2DView({
     onZoneSelect?.(zone)
   }, [onZoneSelect])
 
-  // ================= DRAG =================
+  // ============================================================
+  // ✅ DRAG REAL SVG (SIN MOVEABLE)
+  // ============================================================
   const dragRef = useRef(null)
 
   const clientToMeters = useCallback((clientX, clientY) => {
@@ -669,43 +711,28 @@ export default function Warehouse2DView({
     const rect = svg.getBoundingClientRect()
     const vx = (clientX - rect.left) * (viewBox.width / rect.width)
     const vy = (clientY - rect.top) * (viewBox.height / rect.height)
+
     const mx = (vx - offset.x) / scale
     const my = (vy - offset.y) / scale
     return { mx, my }
   }, [viewBox.width, viewBox.height, offset.x, offset.y, scale])
 
-  const endDragCleanup = useCallback((onMove, onUp) => {
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
-    window.removeEventListener('pointercancel', onUp)
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-  }, [])
-
   const onPointerDownZone = useCallback((zone, e) => {
-    // botón principal (en mouse). Si es pointer/touch, lo dejamos pasar.
-    if (typeof e.button === 'number' && e.button !== 0) return
+    if (e.button !== 0) return
 
     e.preventDefault()
     e.stopPropagation()
-
-    group('[DRAG][DOWN]', () => {
-      console.log('zone:', { id: zone.id, originalId: zone.originalId, type: zone.type, auto: zone.isAutoGenerated, hasElement: !!zone.element })
-      console.log('scale/offset:', { scale, offset, viewBox })
-      console.log('onElementMoveEnd exists:', typeof onElementMoveEnd === 'function')
-      console.log('onDraggingChange exists:', typeof onDraggingChange === 'function')
-    })
 
     onDraggingChange?.(true)
 
     setInternalSelected(zone.id)
     onZoneSelect?.(zone)
 
-    const target = e.currentTarget // aquí es el <rect> (MUY IMPORTANTE)
+    const g = e.currentTarget
     const { mx, my } = clientToMeters(e.clientX, e.clientY)
 
     dragRef.current = {
-      targetEl: target.parentNode, // movemos el <g> entero
+      targetEl: g,
       elementId: zone.originalId || zone.id,
       startMouseX: mx,
       startMouseY: my,
@@ -717,11 +744,11 @@ export default function Warehouse2DView({
       lastY: zone.y
     }
 
-    try { target.style.cursor = 'grabbing' } catch {}
+    try { g.style.cursor = 'grabbing' } catch {}
 
     const onMove = (ev) => {
       if (!dragRef.current) return
-      ev.preventDefault?.()
+      ev.preventDefault()
 
       const d = dragRef.current
       const p = clientToMeters(ev.clientX, ev.clientY)
@@ -740,55 +767,43 @@ export default function Warehouse2DView({
       const dxSvg = (newX - d.startX) * scale
       const dySvg = (newY - d.startY) * scale
       d.targetEl.setAttribute('transform', `translate(${dxSvg}, ${dySvg})`)
-
-      if (DBG && Math.random() < 0.05) log('[DRAG][MOVE]', { newX, newY, dxSvg, dySvg })
     }
 
     const onUp = (ev) => {
       if (!dragRef.current) return
-      ev.preventDefault?.()
+      ev.preventDefault()
 
       const d = dragRef.current
       dragRef.current = null
 
       try { d.targetEl.removeAttribute('transform') } catch {}
-      try { target.style.cursor = 'grab' } catch {}
+      try { d.targetEl.style.cursor = 'grab' } catch {}
+
+      onElementMoveEnd?.(d.elementId, d.lastX, d.lastY)
 
       onDraggingChange?.(false)
 
-      group('[DRAG][UP]', () => {
-        console.log('final:', { id: d.elementId, x: d.lastX, y: d.lastY })
-      })
-
-      if (typeof onElementMoveEnd !== 'function') {
-        console.warn('[2DView] onElementMoveEnd is not a function -> cannot commit move')
-      } else {
-        onElementMoveEnd(d.elementId, d.lastX, d.lastY)
-      }
-
-      endDragCleanup(onMove, onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
 
-    // Pointer listeners
     window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', onUp, { passive: false })
     window.addEventListener('pointercancel', onUp, { passive: false })
-    // Mouse fallback (por si React/pointer rara vez falla)
-    window.addEventListener('mousemove', onMove, { passive: false })
-    window.addEventListener('mouseup', onUp, { passive: false })
   }, [
     clientToMeters,
     dimensions.length,
     dimensions.width,
     scale,
-    offset,
-    viewBox,
     onElementMoveEnd,
     onZoneSelect,
-    onDraggingChange,
-    endDragCleanup
+    onDraggingChange
   ])
 
+  // ============================================================
+  // ✅ RETURN (cierres correctos)
+  // ============================================================
   return (
     <Box
       ref={containerRef}
@@ -818,6 +833,7 @@ export default function Warehouse2DView({
           <marker id="arrow-end" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
             <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1e40af" strokeWidth="1" />
           </marker>
+
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="2" dy="2" stdDeviation="3" floodOpacity="0.15" />
           </filter>
@@ -825,7 +841,9 @@ export default function Warehouse2DView({
 
         <rect x={0} y={0} width={viewBox.width} height={viewBox.height} fill="#fafafa" />
 
-        {showGrid && <Grid2D dimensions={dimensions} scale={scale} offset={offset} gridSize={5} />}
+        {showGrid && (
+          <Grid2D dimensions={dimensions} scale={scale} offset={offset} gridSize={5} />
+        )}
 
         <rect
           x={offset.x}
@@ -930,7 +948,23 @@ export default function Warehouse2DView({
           ))}
         </g>
 
-        {showDimensions && <DimensionLines dimensions={dimensions} scale={scale} offset={offset} />}
+        {showDimensions && (
+          <DimensionLines dimensions={dimensions} scale={scale} offset={offset} />
+        )}
+
+        <g transform={`translate(${viewBox.width - 50}, 50)`}>
+          <circle cx={0} cy={0} r={20} fill="#f1f5f9" stroke="#64748b" strokeWidth={1} />
+          <path d="M0,-15 L5,10 L0,5 L-5,10 Z" fill="#374151" />
+          <text x={0} y={-22} textAnchor="middle" fontSize={10} fontWeight={600} fill="#374151">N</text>
+        </g>
+
+        <g transform={`translate(${offset.x}, ${offset.y + dimensions.width * scale + 60})`}>
+          <rect x={0} y={0} width={10 * scale} height={6} fill="#374151" />
+          <rect x={10 * scale} y={0} width={10 * scale} height={6} fill="#94a3b8" />
+          <text x={0} y={18} fontSize={9} fill="#64748b">0</text>
+          <text x={10 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">10m</text>
+          <text x={20 * scale} y={18} fontSize={9} fill="#64748b" textAnchor="middle">20m</text>
+        </g>
 
         <text
           x={viewBox.width / 2}
@@ -944,6 +978,7 @@ export default function Warehouse2DView({
         </text>
       </svg>
 
+      {/* ✅ MUI fuera del SVG (IMPORTANTE para que no rompa JSX) */}
       <Box
         sx={{
           position: 'absolute',
@@ -959,11 +994,12 @@ export default function Warehouse2DView({
         }}
       >
         <Typography variant="caption" sx={{ fontWeight: 600, color: '#374151' }}>
-          Zonas: {zones.length} | Ocupado: {zones.occupiedArea?.toFixed(0) || 0}m² | Libre: {zones.freeArea?.toFixed(0) || 0}m²
+          Zonas: {zones.length} | Ocupado: {Number(zones.occupiedArea || 0).toFixed(0)}m² | Libre: {Number(zones.freeArea || 0).toFixed(0)}m²
         </Typography>
       </Box>
     </Box>
   )
 }
 
+// Exportar función de procesamiento para uso en leyenda
 export { processElementsToZones, ZONE_COLORS }
