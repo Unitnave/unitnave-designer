@@ -5,7 +5,7 @@
  * - SVG exacto (polígonos reales del backend, no rectángulos aproximados)
  * - DPI awareness (escala correcta en cualquier monitor)
  * - Undo/Redo con Ctrl+Z / Ctrl+Y
- * - Drag & drop inteligente (react-moveable)  ✅ FIX SVG
+ * - Drag & drop  inteligente (react-moveable)  ✅ FIX SVG
  * - Optimización automática (OR-Tools backend)
  * - Validación normativa ERP
  * - Export DXF profesional
