@@ -264,12 +264,14 @@ function box(el, type) {
 }
 
 // ============================================================
-// ✅ FUNCIÓN HÍBRIDA: ZONAS PROHIBIDAS INTELIGENTES
+// ✅ FUNCIÓN ULTRA-LIGHT: SOLO ELEMENTOS VERDADERAMENTE FIJOS
 // ============================================================
-// - Muelles, oficinas → SIEMPRE prohibidos
-// - Zonas de maniobra ≥ 4m → prohibidas (críticas)
-// - Pasillos principales (≥ 2.5m) → prohibidos
-// - Pasillos secundarios (< 2.5m) → se recalculan automáticamente
+// - Muelles → prohibidos (fijos, no se mueven)
+// - Oficinas → prohibidas (fijas, no se mueven)
+// - Zonas de maniobra ≥ 4m → prohibidas (críticas para operación)
+// 
+// ❌ PASILLOS → NO SE INCLUYEN (son "aire" que se recalcula)
+// ❌ Servicios pequeños → pueden reubicarse
 // ============================================================
 function extractForbiddenZones(elements, backendZones) {
   const forbidden = []
@@ -287,59 +289,20 @@ function extractForbiddenZones(elements, backendZones) {
   // 3. Zonas de maniobra GRANDES (≥ 4m) → críticas para operación
   elements.filter(el => {
     if (el.type !== 'operational_zone' && el.type !== 'zone') return false
-    if (el.properties?.type === 'maneuver' || el.properties?.type === 'maniobra') {
-      const w = el.dimensions?.length ?? el.dimensions?.width ?? 0
-      const h = el.dimensions?.depth ?? el.dimensions?.height ?? 0
-      return w >= 4 || h >= 4
-    }
-    return false
+    const w = el.dimensions?.length ?? el.dimensions?.width ?? 0
+    const h = el.dimensions?.depth ?? el.dimensions?.height ?? 0
+    return w >= 4 || h >= 4
   }).forEach(el => {
     forbidden.push(box(el, 'maneuver'))
   })
 
-  // 4. Pasillos PRINCIPALES (ancho ≥ 2.5m) → prohibidos
-  //    Pasillos secundarios (< 2.5m) → NO se incluyen, se recalculan
-  if (backendZones && backendZones.length > 0) {
-    backendZones
-      .filter(z => {
-        const isAisle = z.type === 'aisle' || 
-                        z.type === 'pasillo' || 
-                        z.label?.toLowerCase().includes('pasillo')
-        if (!isAisle) return false
-        
-        // Solo pasillos principales (≥ 2.5m en alguna dimensión)
-        const w = z.width ?? z.dimensions?.length ?? 0
-        const h = z.height ?? z.dimensions?.width ?? 0
-        return w >= 2.5 || h >= 2.5
-      })
-      .forEach(z => {
-        forbidden.push({
-          id: z.id,
-          type: 'main_aisle',
-          x: z.x ?? z.position?.x ?? 0,
-          y: z.y ?? z.position?.y ?? 0,
-          width: z.width ?? z.dimensions?.length ?? 3,
-          height: z.height ?? z.dimensions?.width ?? 3
-        })
-      })
-  }
+  // ❌ NO incluir pasillos - son "aire" que se recalcula automáticamente
+  // ❌ NO incluir servicios pequeños - pueden reubicarse
 
-  // 5. Salas técnicas/servicios GRANDES (> 20m²) → fijas
-  elements.filter(el => {
-    if (el.type !== 'service_room' && el.type !== 'technical_room') return false
-    const w = el.dimensions?.length ?? el.dimensions?.largo ?? 0
-    const h = el.dimensions?.width ?? el.dimensions?.ancho ?? 0
-    return (w * h) > 20  // Solo si son grandes
-  }).forEach(el => {
-    forbidden.push(box(el, 'service'))
-  })
-
-  console.log('🚫 [extractForbiddenZones] Híbrido:', forbidden.length, 'zonas prohibidas')
+  console.log('🚫 [extractForbiddenZones] Ultra-light:', forbidden.length, 'zonas prohibidas')
   console.log('   - Muelles:', forbidden.filter(z => z.type === 'dock').length)
   console.log('   - Oficinas:', forbidden.filter(z => z.type === 'office').length)
   console.log('   - Maniobra:', forbidden.filter(z => z.type === 'maneuver').length)
-  console.log('   - Pasillos principales:', forbidden.filter(z => z.type === 'main_aisle').length)
-  console.log('   - Servicios:', forbidden.filter(z => z.type === 'service').length)
   
   return forbidden
 }

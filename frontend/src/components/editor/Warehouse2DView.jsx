@@ -66,18 +66,18 @@ const toPosNumber = (v, fallback) => (isFiniteNumber(v) && v > 0 ? v : fallback)
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 const snap = (v, step = 0.5) => Math.round(v / step) * step
 
-// ✅ Qué zonas son "movibles"
+// ✅ Qué zonas son "movibles" (SOLO estanterías y salas técnicas)
+// ❌ dock, office → son FIJOS, no se pueden mover
+// ❌ operational_zone, zone → son áreas de maniobra, no se mueven
 const MOVABLE_TYPES = new Set([
-  'shelf',
-  'dock',
-  'office',
-  'service_room',
-  'technical_room',
-  'operational_zone',
-  'zone',
-  'receiving',
-  'shipping',
-  'picking'
+  'shelf',           // Estanterías - lo principal que se puede mover
+  'service_room',    // Salas de servicio - pueden reubicarse
+  'technical_room'   // Salas técnicas - pueden reubicarse
+  // ❌ 'dock'        → FIJO, no mover
+  // ❌ 'office'      → FIJO, no mover
+  // ❌ 'operational_zone' → área de maniobra, no mover
+  // ❌ 'zone'        → área genérica, no mover
+  // ❌ 'receiving', 'shipping', 'picking' → áreas operativas, no mover
 ])
 
 // ✅ Tipos que SOLO deben venir del backend (auto-generados)
