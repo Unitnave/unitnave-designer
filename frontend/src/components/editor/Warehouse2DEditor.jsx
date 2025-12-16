@@ -196,7 +196,7 @@ function useBackendZones(dimensions, elements, pause = false) {
 }
 
 // ============================================================
-// ✅ NUEVO: HOOK PARA RE-OPTIMIZACIÓN INTELIGENTE CON ZONAS PROHIBIDAS
+// ✅ HOOK PARA RE-OPTIMIZACIÓN CON OR-TOOLS v3
 // ============================================================
 function useLayoutReoptimizeSmart() {
   const [optimizing, setOptimizing] = useState(false)
@@ -210,6 +210,7 @@ function useLayoutReoptimizeSmart() {
       console.log('🧠 [2DEditor][reoptimize_smart] POST', `${API_URL}/api/layout/reoptimize_smart`)
       console.log('🧠 [2DEditor][reoptimize_smart] Moved:', movedId, movedPos)
       console.log('🧠 [2DEditor][reoptimize_smart] Forbidden zones:', forbiddenZones.length)
+      console.log('🧠 [2DEditor][reoptimize_smart] Elements:', currentElements.length)
       
       const response = await fetch(`${API_URL}/api/layout/reoptimize_smart`, {
         method: 'POST',
@@ -231,7 +232,8 @@ function useLayoutReoptimizeSmart() {
       const json = await response.json()
       console.log('✅ [2DEditor][reoptimize_smart] OK', { 
         elements: json?.elements?.length,
-        solve_time_ms: json?.solve_time_ms 
+        solve_time_ms: json?.solve_time_ms,
+        status: json?.solver_status
       })
       return json
     } catch (err) {
@@ -557,7 +559,7 @@ export default function Warehouse2DEditor({
   const [showLegend, setShowLegend] = useState(true)
   const [isDraggingElement, setIsDraggingElement] = useState(false)
 
-  // ✅ Hook de re-optimización inteligente
+  // ✅ Hook de re-optimización con OR-Tools v3
   const { optimizing, optError, reoptimize } = useLayoutReoptimizeSmart()
 
   // Backend: analyze (Shapely)
@@ -646,7 +648,7 @@ export default function Warehouse2DEditor({
   }, [])
 
   // ============================================================
-  // ✅ AL SOLTAR UN ELEMENTO -> RE-OPTIMIZAR CON ZONAS PROHIBIDAS
+  // ✅ AL SOLTAR UN ELEMENTO -> RE-OPTIMIZAR CON OR-TOOLS v3
   // ============================================================
   const handleElementMoveEnd = useCallback(async (elementId, newX, newY) => {
     console.log('🎯 [2DEditor][onElementMoveEnd] recibido:', elementId, { x: newX, y: newY })
@@ -657,6 +659,10 @@ export default function Warehouse2DEditor({
       console.warn('[2DEditor][onElementMoveEnd] elementId no encontrado:', elementId)
       return
     }
+
+    // Guardar posición original para poder revertir
+    const originalX = moved.position?.x ?? 0
+    const originalY = moved.position?.y ?? 0
 
     // Clamp
     const { w, h } = getElementWH(moved)
@@ -680,39 +686,37 @@ export default function Warehouse2DEditor({
       machinery: 'retractil'
     }
 
-    // 3) Extraer zonas prohibidas (muelles, oficinas, pasillos, zonas de maniobra)
+    // 3) Extraer zonas prohibidas (solo muelles, oficinas, zonas de maniobra)
     const forbiddenZones = extractForbiddenZones(current, backendZones)
 
     console.log('🧠 [2DEditor][onElementMoveEnd] Llamando a /api/layout/reoptimize_smart...')
     console.log('🧠 [2DEditor][onElementMoveEnd] Zonas prohibidas:', forbiddenZones.length)
 
-    // 4) Llamar al backend para re-optimizar
+    // 4) Llamar al backend para re-optimizar (OR-Tools v3)
     const result = await reoptimize(config, current, elementId, { x: safeX, y: safeY }, forbiddenZones)
 
     if (!result || result.status !== 'success') {
-      console.warn('⚠️ [2DEditor][reoptimize_smart] Sin resultado válido. Volviendo a posición original.')
+      console.warn('⚠️ [2DEditor][reoptimize_smart] No hay solución. Volviendo a posición original.')
       
       // Volver a la posición original
-      if (originalPositionRef.current && originalPositionRef.current.id === elementId) {
-        const revert = current.map(e =>
-          e.id === elementId 
-            ? { ...e, position: { ...(e.position || {}), x: originalPositionRef.current.x, y: originalPositionRef.current.y } } 
-            : e
-        )
-        skipNextPropsSyncRef.current = true
-        setLocalElements(revert)
-        console.log('↩️ [2DEditor] Elemento devuelto a posición original')
-      }
+      const revert = current.map(e =>
+        e.id === elementId 
+          ? { ...e, position: { ...(e.position || {}), x: originalX, y: originalY } } 
+          : e
+      )
+      skipNextPropsSyncRef.current = true
+      setLocalElements(revert)
+      console.log('↩️ [2DEditor] Elemento devuelto a posición original:', { x: originalX, y: originalY })
       return
     }
 
-    // 5) Aplicar resultado del backend
+    // 5) Aplicar resultado del backend (elementos re-optimizados)
     const sanitizedFromBackend = sanitizeElements(result.elements, dimensions, 'backend-reoptimize')
     
     skipNextPropsSyncRef.current = true
     setLocalElements(sanitizedFromBackend)
-    console.log('✅ [2DEditor][onElementMoveEnd] Nuevo layout aplicado:', sanitizedFromBackend.length, 'elementos')
-    console.log('⏱️ [2DEditor] Tiempo de solve:', result.solve_time_ms, 'ms')
+    console.log('✅ [2DEditor][onElementMoveEnd] Layout re-optimizado:', sanitizedFromBackend.length, 'elementos')
+    console.log('⏱️ [2DEditor] Tiempo solver:', result.solve_time_ms, 'ms')
 
     onElementsChange?.(sanitizedFromBackend)
   }, [dimensions, reoptimize, onElementsChange, originalConfig, backendZones])
