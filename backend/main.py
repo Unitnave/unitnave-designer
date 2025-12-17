@@ -1,12 +1,13 @@
 """
-UNITNAVE API v6.3.1 - Motor CAD Profesional
+UNITNAVE API v6.4 - Optimizador Inteligente
 Backend con Optimizador Unificado + Geometría Exacta (Shapely) + DXF + WebSocket
 
-CAMBIOS v6.3.1:
-- ✅ Optimizer unificado con ConfigResolver (usa machinery del usuario)
-- ✅ /api/layout/reoptimize_smart pasa machinery al optimizer
-- ✅ /api/layout/full pasa machinery al optimizer
-- ✅ FullLayoutRequest incluye campo machinery
+CAMBIOS v6.4:
+- ✅ Optimizador inteligente que RE-CALCULA todo el layout
+- ✅ Soporte para eliminar estanterías (deleted_element_id)
+- ✅ Respuesta incluye removed_shelves y animation_data
+- ✅ Nuevo endpoint /api/layout/delete_shelf
+- ✅ Filas óptimas según maquinaria del usuario
 
 ARCHIVO: backend/main.py
 """
@@ -62,11 +63,11 @@ except ImportError as e:
     analyze_layout = None
     logger.warning(f"⚠️ Servicio de geometría no disponible: {e}")
 
-# Importar Optimizer Unificado (antes OR-Tools, ahora con Quantum Brain)
+# Importar Optimizer Inteligente
 try:
     from optimizer_ortools import optimize_layout as ortools_optimize, LayoutOptimizer, AISLE_WIDTHS
     ORTOOLS_AVAILABLE = True
-    logger.info("✅ Optimizador Unificado cargado (Quantum Brain)")
+    logger.info("✅ Optimizador Inteligente cargado (v6.4)")
 except ImportError as e:
     ORTOOLS_AVAILABLE = False
     ortools_optimize = None
@@ -92,8 +93,8 @@ layout_engines = {}
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="UNITNAVE Designer API",
-    description="API para diseño y optimización de naves industriales - Motor CAD Profesional",
-    version="6.3.1",
+    description="API para diseño y optimización de naves industriales - Optimizador Inteligente",
+    version="6.4",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -363,6 +364,10 @@ class OptimizeLayoutRequest(BaseModel):
         None,
         description="Tipo de maquinaria para calcular pasillo"
     )
+    deleted_element_id: Optional[str] = Field(
+        None,
+        description="ID del elemento a eliminar"
+    )
 
 
 class ExportDXFRequest(BaseModel):
@@ -400,7 +405,8 @@ class FullLayoutRequest(BaseModel):
     moved_element_id: Optional[str] = None
     moved_position: Optional[Dict[str, float]] = None
     optimize: bool = True
-    machinery: Optional[str] = None  # ✅ AÑADIDO: machinery del usuario
+    machinery: Optional[str] = None
+    deleted_element_id: Optional[str] = None  # ✅ AÑADIDO v6.4
 
 
 # ==================== BASE DE DATOS (Memoria) ====================
@@ -478,14 +484,16 @@ async def root():
     logger.info("🏠 Root endpoint llamado")
     return {
         "name": "UNITNAVE Designer API",
-        "version": "6.3.1",
+        "version": "6.4",
         "status": "running",
         "features": {
             "multi_scenario": True,
             "fitness_evaluation": True,
             "detailed_report": True,
             "geometry_exact": GEOMETRY_AVAILABLE,
-            "quantum_brain_optimizer": ORTOOLS_AVAILABLE,
+            "intelligent_optimizer": ORTOOLS_AVAILABLE,
+            "auto_relayout": True,
+            "delete_shelves": True,
             "dxf_export": DXF_AVAILABLE,
             "ga_optimizer": GA_AVAILABLE,
             "websocket_interactive": WEBSOCKET_AVAILABLE,
@@ -503,6 +511,7 @@ async def root():
             "layout_export_dxf": "/api/layout/export/dxf",
             "layout_full": "/api/layout/full",
             "reoptimize_smart": "/api/layout/reoptimize_smart",
+            "delete_shelf": "/api/layout/delete_shelf",
             "websocket": "/ws/layout/{session_id}",
             "debug": "/debug/websocket-diagnosis",
             "docs": "/api/docs"
@@ -516,10 +525,10 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "6.3.1",
+        "version": "6.4",
         "services": {
             "geometry": GEOMETRY_AVAILABLE,
-            "quantum_brain": ORTOOLS_AVAILABLE,
+            "intelligent_optimizer": ORTOOLS_AVAILABLE,
             "dxf": DXF_AVAILABLE,
             "ga": GA_AVAILABLE,
             "websocket": WEBSOCKET_AVAILABLE
@@ -974,14 +983,13 @@ async def optimize_layout_ortools(request: OptimizeLayoutRequest):
         logger.info(f"🧮 Optimizando layout: {len(request.elements)} elementos")
         logger.info(f"    Maquinaria: {request.machinery or 'no especificada'}")
         
-        # ✅ PASAR MACHINERY AL OPTIMIZER
         result = ortools_optimize(
             dimensions=request.dimensions,
             elements=request.elements,
             moved_element_id=request.moved_element_id,
             moved_position=request.moved_position,
-            fixed_elements=request.fixed_elements,
-            machinery=request.machinery  # ✅ AÑADIDO
+            deleted_element_id=request.deleted_element_id,
+            machinery=request.machinery
         )
         
         logger.info(f"✅ Optimización completada: {result['solver_status']}")
@@ -1045,32 +1053,34 @@ async def full_layout_analysis(request: FullLayoutRequest):
         result_elements = request.elements
         optimization_result = None
         
-        # 1. Optimizar si hay movimiento
-        if request.optimize and request.moved_element_id and ORTOOLS_AVAILABLE:
-            logger.info(f"🧮 Optimizando por movimiento de {request.moved_element_id}")
-            
-            # ✅ PASAR MACHINERY AL OPTIMIZER
-            opt_result = ortools_optimize(
-                dimensions=request.dimensions,
-                elements=request.elements,
-                moved_element_id=request.moved_element_id,
-                moved_position=request.moved_position,
-                machinery=request.machinery  # ✅ AÑADIDO
-            )
-            
-            if opt_result['success']:
-                result_elements = opt_result.get('elements', request.elements)
+        # 1. Optimizar si hay movimiento O eliminación
+        if request.optimize and ORTOOLS_AVAILABLE:
+            if request.moved_element_id or request.deleted_element_id:
+                logger.info(f"🧮 Optimizando por movimiento/eliminación")
                 
-                optimization_result = {
-                    'success': True,
-                    'solver_status': opt_result['solver_status'],
-                    'solve_time_ms': opt_result['solve_time_ms'],
-                    'messages': opt_result['messages'],
-                    'affected_shelves': opt_result.get('affected_shelves', []),
-                    'animation_data': opt_result.get('animation_data', []),
-                    'metrics': opt_result.get('metrics', {}),
-                    'config': opt_result.get('config', {})
-                }
+                opt_result = ortools_optimize(
+                    dimensions=request.dimensions,
+                    elements=request.elements,
+                    moved_element_id=request.moved_element_id,
+                    moved_position=request.moved_position,
+                    deleted_element_id=request.deleted_element_id,
+                    machinery=request.machinery
+                )
+                
+                if opt_result['success']:
+                    result_elements = opt_result.get('elements', request.elements)
+                    
+                    optimization_result = {
+                        'success': True,
+                        'solver_status': opt_result['solver_status'],
+                        'solve_time_ms': opt_result['solve_time_ms'],
+                        'messages': opt_result['messages'],
+                        'affected_shelves': opt_result.get('affected_shelves', []),
+                        'removed_shelves': opt_result.get('removed_shelves', []),
+                        'animation_data': opt_result.get('animation_data', []),
+                        'metrics': opt_result.get('metrics', {}),
+                        'config': opt_result.get('config', {})
+                    }
         
         # 2. Analizar geometría
         if GEOMETRY_AVAILABLE:
@@ -1113,12 +1123,13 @@ except ImportError as e:
     logger.warning(f"⚠️ Endpoint reoptimize no disponible: {e}")
 
 
-# ==================== REOPTIMIZE SMART (CON ZONAS PROHIBIDAS) ====================
+# ==================== REOPTIMIZE SMART (CON OPTIMIZADOR INTELIGENTE v6.4) ====================
 
 class ReoptimizeSmartRequest(BaseModel):
-    """Request para re-optimización inteligente con zonas prohibidas"""
-    moved_element_id: str = Field(..., description="ID del elemento movido")
-    moved_position: Dict[str, float] = Field(..., description="Nueva posición {x, y}")
+    """Request para re-optimización inteligente v6.4"""
+    moved_element_id: Optional[str] = Field(None, description="ID del elemento movido")
+    moved_position: Optional[Dict[str, float]] = Field(None, description="Nueva posición {x, y}")
+    deleted_element_id: Optional[str] = Field(None, description="ID del elemento a eliminar")  # ✅ v6.4
     originalConfig: Dict[str, Any] = Field(..., description="Configuración original del wizard")
     currentElements: List[Dict[str, Any]] = Field(..., description="Elementos actuales")
     forbiddenZones: List[Dict[str, Any]] = Field(default=[], description="Zonas prohibidas")
@@ -1127,12 +1138,13 @@ class ReoptimizeSmartRequest(BaseModel):
 @app.post("/api/layout/reoptimize_smart")
 async def reoptimize_smart(req: ReoptimizeSmartRequest):
     """
-    🧠 Re-optimiza el layout usando el Quantum Brain.
+    🧠 Re-optimiza el layout de forma INTELIGENTE (v6.4).
     
-    - Usa la MAQUINARIA del usuario para calcular pasillos
-    - Detecta filas automáticamente
-    - Desplaza estanterías vecinas si hay colisión
-    - Hace snap a filas existentes
+    - Cuando el usuario mueve una estantería → Re-calcula TODO el layout
+    - Cuando el usuario elimina una estantería → Re-optimiza el espacio
+    - Puede ELIMINAR estanterías si no caben
+    - Puede AÑADIR estanterías si hay espacio
+    - Retorna removed_shelves y animation_data para el frontend
     """
     if not ORTOOLS_AVAILABLE or not LayoutOptimizer:
         raise HTTPException(
@@ -1142,25 +1154,26 @@ async def reoptimize_smart(req: ReoptimizeSmartRequest):
     
     try:
         logger.info("=" * 60)
-        logger.info("🧠 /api/layout/reoptimize_smart LLAMADO")
+        logger.info("🧠 /api/layout/reoptimize_smart v6.4 LLAMADO")
         logger.info(f"   Elemento movido: {req.moved_element_id}")
         logger.info(f"   Nueva posición: {req.moved_position}")
+        logger.info(f"   Elemento a eliminar: {req.deleted_element_id}")
         logger.info(f"   Elementos actuales: {len(req.currentElements)}")
         logger.info(f"   Zonas prohibidas: {len(req.forbiddenZones)}")
         
         # Obtener dimensiones y MAQUINARIA de la config
         length = req.originalConfig.get('length', 80)
         width = req.originalConfig.get('width', 40)
-        machinery = req.originalConfig.get('machinery', 'retractil')  # ✅ OBTENER MACHINERY
+        machinery = req.originalConfig.get('machinery', 'retractil')
         
         logger.info(f"   Maquinaria: {machinery}")
         logger.info("=" * 60)
         
-        # ✅ CREAR OPTIMIZER CON MACHINERY DEL USUARIO
+        # Crear optimizer con machinery del usuario
         optimizer = LayoutOptimizer(
             length=length, 
             width=width, 
-            machinery=machinery  # ✅ PASAR MACHINERY
+            machinery=machinery
         )
         
         # Ejecutar optimización
@@ -1168,18 +1181,20 @@ async def reoptimize_smart(req: ReoptimizeSmartRequest):
             elements=req.currentElements,
             moved_element_id=req.moved_element_id,
             moved_position=req.moved_position,
-            max_time_seconds=5.0
+            deleted_element_id=req.deleted_element_id  # ✅ v6.4
         )
         
         if not result.get('success'):
-            logger.warning(f"⚠️ No se encontró solución: {result.get('messages')}")
+            logger.warning(f"⚠️ Optimización fallida: {result.get('messages')}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"No cabe en esa posición: {result.get('messages', ['Sin solución'])}"
+                detail=f"Error en optimización: {result.get('messages', ['Sin solución'])}"
             )
         
         logger.info(f"✅ Re-optimización exitosa en {result.get('solve_time_ms', 0):.0f}ms")
-        logger.info(f"   Config usada: {result.get('config', {})}")
+        logger.info(f"   Estanterías finales: {result.get('metrics', {}).get('total_shelves', 0)}")
+        logger.info(f"   Eliminadas: {len(result.get('removed_shelves', []))}")
+        logger.info(f"   Movidas: {len(result.get('affected_shelves', []))}")
         
         return {
             "status": "success",
@@ -1187,9 +1202,11 @@ async def reoptimize_smart(req: ReoptimizeSmartRequest):
             "solver_status": result.get('solver_status'),
             "solve_time_ms": result.get('solve_time_ms'),
             "affected_shelves": result.get('affected_shelves', []),
-            "animation_data": result.get('animation_data', []),
+            "removed_shelves": result.get('removed_shelves', []),  # ✅ v6.4
+            "animation_data": result.get('animation_data', []),    # ✅ v6.4
             "metrics": result.get('metrics', {}),
             "config": result.get('config', {}),
+            "messages": result.get('messages', []),
             "moved_element": req.moved_element_id,
             "moved_position": req.moved_position
         }
@@ -1206,20 +1223,83 @@ REOPTIMIZE_SMART_AVAILABLE = True
 logger.info("✅ Endpoint /api/layout/reoptimize_smart cargado")
 
 
+# ==================== DELETE SHELF ENDPOINT (NUEVO v6.4) ====================
+
+class DeleteShelfRequest(BaseModel):
+    """Request para eliminar una estantería"""
+    shelf_id: str = Field(..., description="ID de la estantería a eliminar")
+    originalConfig: Dict[str, Any] = Field(..., description="Configuración original del wizard")
+    currentElements: List[Dict[str, Any]] = Field(..., description="Elementos actuales")
+
+
+@app.post("/api/layout/delete_shelf")
+async def delete_shelf(req: DeleteShelfRequest):
+    """
+    🗑️ Elimina una estantería y re-optimiza el layout (v6.4).
+    
+    - Elimina la estantería especificada
+    - Re-optimiza todo el layout para usar el espacio liberado
+    - Retorna el nuevo layout optimizado
+    """
+    if not ORTOOLS_AVAILABLE or not LayoutOptimizer:
+        raise HTTPException(
+            status_code=503,
+            detail="Optimizador no disponible."
+        )
+    
+    try:
+        logger.info(f"🗑️ /api/layout/delete_shelf: Eliminando {req.shelf_id}")
+        
+        length = req.originalConfig.get('length', 80)
+        width = req.originalConfig.get('width', 40)
+        machinery = req.originalConfig.get('machinery', 'retractil')
+        
+        optimizer = LayoutOptimizer(length=length, width=width, machinery=machinery)
+        
+        result = optimizer.optimize(
+            elements=req.currentElements,
+            deleted_element_id=req.shelf_id
+        )
+        
+        if not result.get('success'):
+            raise HTTPException(status_code=400, detail="Error al eliminar estantería")
+        
+        logger.info(f"✅ Estantería eliminada, layout re-optimizado")
+        
+        return {
+            "status": "success",
+            "elements": result.get('elements', []),
+            "removed_shelves": [req.shelf_id] + result.get('removed_shelves', []),
+            "animation_data": result.get('animation_data', []),
+            "metrics": result.get('metrics', {}),
+            "config": result.get('config', {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error en delete_shelf: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+logger.info("✅ Endpoint /api/layout/delete_shelf cargado (v6.4)")
+
+
 # ==================== STARTUP ====================
 
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 80)
-    logger.info("🏭 UNITNAVE Designer API v6.3.1 - Quantum Brain Edition")
-    logger.info("🧠 Optimizador con detección de filas + machinery del usuario")
+    logger.info("🏭 UNITNAVE Designer API v6.4 - Optimizador Inteligente")
+    logger.info("🧠 Re-layout automático cuando el usuario mueve/elimina estanterías")
     logger.info("=" * 80)
     logger.info(f"📍 CORS: {ALLOWED_ORIGINS_LIST}")
     logger.info(f"🎯 Multi-Escenario: Activo")
     logger.info(f"📊 Fitness Evaluation: Activo")
     logger.info(f"🧬 GA disponible: {GA_AVAILABLE}")
     logger.info(f"📐 Geometría exacta (Shapely): {GEOMETRY_AVAILABLE}")
-    logger.info(f"🧠 Quantum Brain Optimizer: {ORTOOLS_AVAILABLE}")
+    logger.info(f"🧠 Optimizador Inteligente: {ORTOOLS_AVAILABLE}")
     logger.info(f"📄 Export DXF: {DXF_AVAILABLE}")
     logger.info(f"🔌 WebSocket: {WEBSOCKET_AVAILABLE}")
     logger.info(f"🔄 Reoptimize Smart: {REOPTIMIZE_SMART_AVAILABLE}")
